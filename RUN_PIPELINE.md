@@ -62,7 +62,7 @@ CineCam_04
 ### 1.2 在 Unreal Editor Python 控制台运行
 
 ```python
-py "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/23_ue_setup_8_players.py"
+py "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/futsalmot/scripts/ue_setup_8_players.py"
 ```
 
 脚本会：
@@ -88,7 +88,7 @@ Content/FutsalMOT/code/_agent_test_outputs/ue_setup_8_players_report.json
 
 ```powershell
 cd D:\projects\FustalMOT_UEDataset\Content\FutsalMOT\code
-py .\00_run_pipeline.py --seed 1 --template 1
+py .\01_generate_trajectories.py --seed 1 --template 1
 ```
 
 模板：
@@ -102,12 +102,12 @@ py .\00_run_pipeline.py --seed 1 --template 1
 Windows 主链路：
 
 ```text
-11_generate_random_episode.py
-→ 10_validate_episode.py
-→ 12_compile_trajectory.py
-→ 13_enhance_trajectory.py
-→ 14_validate_trajectory.py
-→ 31_generate_event_annotations.py
+futsalmot/scripts/generate_random_episode.py
+→ futsalmot/scripts/validate_episode.py
+→ futsalmot/scripts/compile_trajectory.py
+→ futsalmot/scripts/enhance_trajectory.py
+→ futsalmot/scripts/validate_trajectory.py
+→ futsalmot/scripts/generate_event_annotations.py
 ```
 
 成功后应看到：
@@ -184,13 +184,15 @@ Team B：
 
 ---
 
-## 4. UE Preflight
+## 4. UE Preflight + 构建 Sequencer 与导出 bbox
 
 在 Unreal Editor Python 控制台运行：
 
 ```python
-py "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/21_preflight.py"
+py "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/02_run_unreal.py"
 ```
+
+`02_run_unreal.py` 会先执行 read-only preflight，再构建 Sequencer 并导出 bbox 标注。
 
 必须检查：
 
@@ -205,14 +207,6 @@ CineCam_01–CineCam_04 全部存在
 ```
 
 首次构建前 Level Sequence 不存在可显示 WARNING，但 Actor 缺失属于 ERROR。
-
----
-
-## 5. UE 构建 Sequencer 与导出 bbox
-
-```python
-py "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/20_build_sequences.py"
-```
 
 预期：
 
@@ -231,7 +225,7 @@ Expected records: 1200
 
 ---
 
-## 6. MRQ 渲染
+## 5. MRQ 渲染
 
 每个相机渲染 300 帧：
 
@@ -256,10 +250,10 @@ Saved/FutsalMOT/images_clean/<seq_id>/cam_04/000000.png ... 000299.png
 
 ---
 
-## 7. 后处理 YOLO / MOT / Overlay
+## 6. 后处理 YOLO / MOT / Overlay
 
 ```powershell
-py .\30_convert_and_check.py --annotation "D:/projects/FustalMOT_UEDataset/Saved/FutsalMOT/annotations/objects_bbox_2d_clean_<seq_id>.json"
+py .\03_check_labels.py --annotation "D:/projects/FustalMOT_UEDataset/Saved/FutsalMOT/annotations/objects_bbox_2d_clean_<seq_id>.json"
 ```
 
 预期核心结果：
@@ -282,7 +276,7 @@ ALL DONE
 
 ---
 
-## 8. 回滚
+## 7. 回滚
 
 安装器会创建：
 
@@ -292,11 +286,11 @@ Content/FutsalMOT/code/_backup_8player_pipeline_<timestamp>/
 
 需要回滚时，将该目录中的文件复制回 `code/`。
 
-`23_ue_setup_8_players.py` 不自动保存关卡。如果尚未手动保存，只需关闭关卡并放弃修改；如果已经保存，需要手动删除 `Player_05`–`Player_08` 或恢复关卡备份。
+`futsalmot/scripts/ue_setup_8_players.py` 不自动保存关卡。如果尚未手动保存，只需关闭关卡并放弃修改；如果已经保存，需要手动删除 `Player_05`–`Player_08` 或恢复关卡备份。
 
 ---
 
-## 9. 当前验证范围
+## 8. 当前验证范围
 
 已完成：
 
@@ -309,7 +303,6 @@ Content/FutsalMOT/code/_backup_8player_pipeline_<timestamp>/
 
 仍需用户在项目内完成：
 
-- `23_ue_setup_8_players.py` 的首次 UE 运行；
-- `21_preflight.py` 的 8 人现场检查；
-- `20_build_sequences.py` 的 8 人 Sequencer/bbox 验证；
+- `futsalmot/scripts/ue_setup_8_players.py` 的首次 UE 运行；
+- `02_run_unreal.py` 的 8 人现场检查和 Sequencer/bbox 验证；
 - MRQ 1200 图像和 9-object overlay 验收。

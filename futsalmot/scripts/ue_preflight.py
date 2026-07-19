@@ -8,7 +8,7 @@
 # 不创建、不修改、不保存任何 UE 资产。
 #
 # 运行方式（在 UE Python 控制台中）：
-#   py "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/21_preflight.py"
+#   py "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/02_run_unreal.py"
 #
 # 输出：
 #   Content/FutsalMOT/code/_agent_test_outputs/preflight_<seq_id>.json
@@ -24,7 +24,7 @@ import sys
 
 SCRIPT_VERSION = "A3_3B_UE_PREFLIGHT_READ_ONLY_8P_V5"
 DEFAULT_PROJECT_ROOT = "D:/projects/FustalMOT_UEDataset"
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+SCRIPT_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 CODE_DIR = SCRIPT_DIR
 AGENT_TEST_OUTPUTS = os.path.join(CODE_DIR, "_agent_test_outputs")
 CURRENT_RUN_POINTER = os.path.join(CODE_DIR, "configs", "pipeline_current.json")

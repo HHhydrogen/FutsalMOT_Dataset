@@ -21,7 +21,7 @@ import traceback
 import unreal
 
 SCRIPT_VERSION = "UE_SETUP_4V4_OUTFIELD_V1"
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+SCRIPT_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 OUTPUT_DIR = os.path.join(SCRIPT_DIR, "_agent_test_outputs")
 OUTPUT_PATH = os.path.join(OUTPUT_DIR, "ue_setup_8_players_report.json")
 

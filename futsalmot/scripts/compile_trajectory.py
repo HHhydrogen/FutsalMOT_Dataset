@@ -63,12 +63,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
+CODE_ROOT = Path(__file__).resolve().parents[2]
+if str(CODE_ROOT) not in sys.path:
+    sys.path.insert(0, str(CODE_ROOT))
+
+from futsalmot.core.paths import CODE_DIR, CONFIG_DIR
+
 
 SCRIPT_VERSION = "A3_2_EVENT_TO_DENSE_TRAJECTORY_8P_MOVEMENT_V3"
 
 DEFAULT_EVENT_CONFIG = (
-    Path(__file__).resolve().parent
-    / "configs"
+    CONFIG_DIR
     / "events"
     / "episode_test_0001.json"
 )
@@ -1741,16 +1746,16 @@ def main() -> int:
         if args.decimals < 0 or args.decimals > 12:
             raise CompileError("--decimals 必须位于 0..12")
 
-        script_dir = Path(__file__).resolve().parent
+        script_dir = CODE_DIR
         episode_validator = (
             args.episode_validator.expanduser().resolve()
             if args.episode_validator is not None
-            else script_dir / "10_validate_episode.py"
+            else script_dir / "futsalmot" / "scripts" / "validate_episode.py"
         )
         trajectory_validator = (
             args.trajectory_validator.expanduser().resolve()
             if args.trajectory_validator is not None
-            else script_dir / "14_validate_trajectory.py"
+            else script_dir / "futsalmot" / "scripts" / "validate_trajectory.py"
         )
 
         if not args.skip_episode_validation:

@@ -8,17 +8,17 @@ TEMPLATE_NAMES = {
 }
 
 WINDOWS_PIPELINE_SCRIPTS = {
-    "generate_episode": "11_generate_random_episode.py",
-    "validate_episode": "10_validate_episode.py",
-    "compile_trajectory": "12_compile_trajectory.py",
-    "enhance_trajectory": "13_enhance_trajectory.py",
-    "validate_trajectory": "14_validate_trajectory.py",
-    "event_annotations": "31_generate_event_annotations.py",
+    "generate_episode": "futsalmot/scripts/generate_random_episode.py",
+    "validate_episode": "futsalmot/scripts/validate_episode.py",
+    "compile_trajectory": "futsalmot/scripts/compile_trajectory.py",
+    "enhance_trajectory": "futsalmot/scripts/enhance_trajectory.py",
+    "validate_trajectory": "futsalmot/scripts/validate_trajectory.py",
+    "event_annotations": "futsalmot/scripts/generate_event_annotations.py",
 }
 
 UE_PIPELINE_SCRIPTS = {
-    "setup_8_players": "23_ue_setup_8_players.py",
-    "preflight": "21_preflight.py",
-    "build_sequences": "20_build_sequences.py",
-    "scan_animations": "22_scan_animations.py",
+    "setup_8_players": "futsalmot/scripts/ue_setup_8_players.py",
+    "preflight": "futsalmot/scripts/ue_preflight.py",
+    "build_sequences": "futsalmot/scripts/ue_build_sequences.py",
+    "scan_animations": "futsalmot/scripts/ue_scan_animations.py",
 }

@@ -52,12 +52,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+CODE_ROOT = Path(__file__).resolve().parents[2]
+if str(CODE_ROOT) not in sys.path:
+    sys.path.insert(0, str(CODE_ROOT))
+
+from futsalmot.core.paths import CONFIG_DIR
+
 
 SCRIPT_VERSION = "A2_5A_TRAJECTORY_VALIDATOR_8P_MOVEMENT_V2"
 
 DEFAULT_CONFIG_PATH = (
-    Path(__file__).resolve().parent
-    / "configs"
+    CONFIG_DIR
     / "seq_test_0004.json"
 )
 

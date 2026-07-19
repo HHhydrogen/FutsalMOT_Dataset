@@ -30,11 +30,16 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+CODE_ROOT = Path(__file__).resolve().parents[2]
+if str(CODE_ROOT) not in sys.path:
+    sys.path.insert(0, str(CODE_ROOT))
+
+from futsalmot.core.paths import AGENT_OUTPUT_DIR, CONFIG_DIR
+
 SCRIPT_VERSION = "A3_3C_EVENT_ANNOTATIONS_8P_V3"
-SCRIPT_DIR = Path(__file__).resolve().parent
-DEFAULT_EVENT_CONFIG = SCRIPT_DIR / "configs" / "events" / "episode_test_0001.json"
-DEFAULT_A3_CONFIG = SCRIPT_DIR / "configs" / "generated" / "episode_test_0001_A3_3.json"
-DEFAULT_OUTPUT_DIR = SCRIPT_DIR / "_agent_test_outputs" / "A3_3C_episode_test_0001"
+DEFAULT_EVENT_CONFIG = CONFIG_DIR / "events" / "episode_test_0001.json"
+DEFAULT_A3_CONFIG = CONFIG_DIR / "generated" / "episode_test_0001_A3_3.json"
+DEFAULT_OUTPUT_DIR = AGENT_OUTPUT_DIR / "A3_3C_episode_test_0001"
 SUPPORTED_EVENT_TYPES = {
     "hold",
     "move",

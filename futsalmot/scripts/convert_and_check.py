@@ -31,6 +31,10 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from PIL import Image, ImageDraw, ImageFont, UnidentifiedImageError
 
+CODE_ROOT = Path(__file__).resolve().parents[2]
+if str(CODE_ROOT) not in sys.path:
+    sys.path.insert(0, str(CODE_ROOT))
+
 from futsalmot.core.io import read_json, write_json_atomic, write_text_atomic
 from futsalmot.core.paths import CODE_DIR, CURRENT_RUN_POINTER, PROJECT_ROOT
 

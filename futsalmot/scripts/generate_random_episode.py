@@ -33,9 +33,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
 
+CODE_ROOT = Path(__file__).resolve().parents[2]
+if str(CODE_ROOT) not in sys.path:
+    sys.path.insert(0, str(CODE_ROOT))
+
+from futsalmot.core.paths import CODE_DIR, GENERATED_EVENT_DIR, PROJECT_ROOT
+
 SCRIPT_VERSION = "A3_4_RANDOM_EPISODE_8P_V2"
-SCRIPT_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = (SCRIPT_DIR / ".." / ".." / "..").resolve()
+SCRIPT_DIR = CODE_DIR
 
 COURT_X_MIN, COURT_X_MAX = -1950.0, 1950.0
 COURT_Y_MIN, COURT_Y_MAX = -950.0, 950.0
@@ -849,7 +854,7 @@ def build_episode_config(
 def validate_episode(config_path: Path, output_dir: Path | None = None) -> Dict[str, Any]:
     command: List[str] = [
         sys.executable,
-        str(SCRIPT_DIR / "10_validate_episode.py"),
+        str(SCRIPT_DIR / "futsalmot" / "scripts" / "validate_episode.py"),
         "--config",
         str(config_path),
     ]
@@ -901,7 +906,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     output_dir = Path(
-        args.output_dir or SCRIPT_DIR / "configs" / "events" / "generated"
+        args.output_dir or GENERATED_EVENT_DIR
     )
     if not output_dir.is_absolute():
         output_dir = (SCRIPT_DIR / output_dir).resolve()

@@ -53,12 +53,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+CODE_ROOT = Path(__file__).resolve().parents[2]
+if str(CODE_ROOT) not in sys.path:
+    sys.path.insert(0, str(CODE_ROOT))
+
+from futsalmot.core.paths import CODE_DIR, CONFIG_DIR
+
 
 SCRIPT_VERSION = "A2_5B_PCHIP_DENSE_TRAJECTORY_V1"
 
 DEFAULT_CONFIG_PATH = (
-    Path(__file__).resolve().parent
-    / "configs"
+    CONFIG_DIR
     / "seq_test_0004.json"
 )
 
@@ -1235,8 +1240,10 @@ def main() -> int:
             args.validator.expanduser().resolve()
             if args.validator is not None
             else (
-                Path(__file__).resolve().parent
-                / "14_validate_trajectory.py"
+                CODE_DIR
+                / "futsalmot"
+                / "scripts"
+                / "validate_trajectory.py"
             )
         )
 

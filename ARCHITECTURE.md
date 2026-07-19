@@ -1,21 +1,16 @@
 # Code Architecture
 
-The code directory is organized around stable numbered entry scripts plus a shared `futsalmot` package.
+The code directory is organized around three public root entry scripts plus a shared `futsalmot` package.
 
-## Stable Entry Scripts
+## Public Entry Scripts
 
-- `00_run_pipeline.py`: Windows-side single seed/template orchestration.
-- `10_validate_episode.py`: validates event semantics and possession rules.
-- `11_generate_random_episode.py`: generates 4v4 outfield random episodes.
-- `12_compile_trajectory.py`: compiles event configs into dense trajectories.
-- `13_enhance_trajectory.py`: adds yaw, actions, ball state, and contact metadata.
-- `14_validate_trajectory.py`: validates dense trajectory safety.
-- `20_build_sequences.py`: Unreal-side Sequencer and annotation export.
-- `21_preflight.py`: Unreal-side read-only preflight.
-- `22_scan_animations.py`: Unreal-side animation asset scan.
-- `23_ue_setup_8_players.py`: Unreal-side one-time 8-player scene setup.
-- `30_convert_and_check.py`: postprocess, YOLO/MOT conversion, overlay, integrity check.
-- `31_generate_event_annotations.py`: event and frame-state annotation export.
+- `01_generate_trajectories.py`: Windows-side generation and validation of trajectory configs.
+- `02_run_unreal.py`: Unreal-side preflight plus Sequencer/annotation export.
+- `03_check_labels.py`: Windows-side image/annotation integrity check and YOLO/MOT export.
+
+## Internal Script Implementations
+
+Implementation scripts live under `futsalmot/scripts/`. They are not the public API, but they remain directly executable for debugging.
 
 ## Shared Package
 
@@ -28,7 +23,7 @@ The code directory is organized around stable numbered entry scripts plus a shar
 
 ## Refactor Rules
 
-- Keep numbered files as public entry points unless all docs and UE console commands are updated together.
+- Keep only the three public root entry scripts in the code root.
 - Move pure-Python shared logic into `futsalmot/` when it has at least two callers or clarifies a stable boundary.
 - Avoid moving Unreal runtime logic aggressively; import behavior inside Unreal Editor must be validated before relying on package modules there.
 - Generated data belongs under `configs/events/generated/`, `Saved/FutsalMOT/`, or `_agent_test_outputs/`, not inside shared modules.

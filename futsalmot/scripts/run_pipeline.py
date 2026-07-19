@@ -33,6 +33,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
+CODE_ROOT = Path(__file__).resolve().parents[2]
+if str(CODE_ROOT) not in sys.path:
+    sys.path.insert(0, str(CODE_ROOT))
+
 from futsalmot.core.hashing import sha256_file
 from futsalmot.core.io import read_json, write_json_atomic
 from futsalmot.core.paths import (
@@ -437,11 +441,10 @@ def main() -> int:
         if trajectory_validation_passed and not diagnostic_only:
             print("Current-run pointer: {}".format(CURRENT_RUN_POINTER))
             print("\nNext in Unreal Editor:")
-            print('  py "{}"'.format((SCRIPT_DIR / "21_preflight.py").resolve().as_posix()))
-            print('  py "{}"'.format((SCRIPT_DIR / "20_build_sequences.py").resolve().as_posix()))
+            print('  py "{}"'.format((SCRIPT_DIR / "02_run_unreal.py").resolve().as_posix()))
             print("\nAfter MRQ render, run:")
             print(
-                '  py 30_convert_and_check.py --annotation "{}"'.format(
+                '  py 03_check_labels.py --annotation "{}"'.format(
                     annotation_json.as_posix()
                 )
             )

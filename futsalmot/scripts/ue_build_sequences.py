@@ -20,7 +20,7 @@ DEFAULT_PROJECT_ROOT = "D:/projects/FustalMOT_UEDataset"
 # 在 UE 的“执行 Python 脚本”方式下，通常可以取得 __file__。
 # 如果某些 UE 版本没有提供 __file__，则回退到当前项目的 code 目录。
 try:
-    SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+    SCRIPT_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 except Exception:
     SCRIPT_DIR = os.path.join(
         DEFAULT_PROJECT_ROOT,
@@ -3057,5 +3057,5 @@ unreal.log("下一步：MRQ 渲染 frame {}..{} 到 images_clean/{}/cam_XX。".f
     FRAME_END,
     SEQ_ID
 ))
-unreal.log("然后运行 30_convert_and_check.py，并指定本序列 annotation JSON。")
+unreal.log("然后运行 03_check_labels.py，并指定本序列 annotation JSON。")
 unreal.log("===================================")

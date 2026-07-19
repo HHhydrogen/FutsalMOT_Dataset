@@ -40,11 +40,11 @@ if str(CODE_ROOT) not in sys.path:
 from futsalmot.core.hashing import sha256_file
 from futsalmot.core.io import read_json, write_json_atomic
 from futsalmot.core.paths import (
-    AGENT_OUTPUT_DIR,
     CODE_DIR,
     CURRENT_RUN_POINTER,
-    GENERATED_EVENT_DIR,
+    PIPELINE_CONFIG_PATH,
     PROJECT_ROOT,
+    RUNS_DIR,
 )
 from futsalmot.core.process import run_logged_step
 from futsalmot.pipeline.constants import TEMPLATE_NAMES, WINDOWS_PIPELINE_SCRIPTS
@@ -66,13 +66,65 @@ def require_file(path: Path, label: str) -> None:
         raise PipelineError("{} 未生成或为空：{}".format(label, path))
 
 
-def resolve_output_dir(raw: Optional[str], episode_id: str) -> Path:
+def resolve_output_dir(raw: Optional[str], run_dir: Path) -> Path:
     if raw:
         path = Path(raw).expanduser()
         if not path.is_absolute():
             path = SCRIPT_DIR / path
         return path.resolve()
-    return (AGENT_OUTPUT_DIR / "pipeline_{}".format(episode_id)).resolve()
+    return run_dir.resolve()
+
+
+def load_pipeline_config(path: Path) -> Dict[str, Any]:
+    if not path.is_file():
+        raise PipelineError("找不到总配置文件：{}".format(path))
+    data = read_json(path)
+    if not isinstance(data, dict):
+        raise PipelineError("总配置文件顶层必须是 JSON object：{}".format(path))
+    return data
+
+
+def config_int(config: Dict[str, Any], key: str, default: int) -> int:
+    value = config.get(key, default)
+    if isinstance(value, bool):
+        raise PipelineError("总配置字段 {} 必须是整数".format(key))
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise PipelineError("总配置字段 {} 必须是整数，当前={!r}".format(key, value)) from exc
+
+
+def config_bool(config: Dict[str, Any], key: str, default: bool) -> bool:
+    value = config.get(key, default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    raise PipelineError("总配置字段 {} 必须是布尔值，当前={!r}".format(key, value))
+
+
+def make_run_id(prefix: str, seed: int, template: int) -> str:
+    safe_prefix = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in prefix).strip("_")
+    if not safe_prefix:
+        safe_prefix = "run"
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    return "{}_{}_seed{:04d}_t{}".format(safe_prefix, stamp, seed, template)
+
+
+def unique_run_dir(run_id: str) -> Path:
+    RUNS_DIR.mkdir(parents=True, exist_ok=True)
+    candidate = RUNS_DIR / run_id
+    if not candidate.exists():
+        return candidate
+    for index in range(2, 1000):
+        suffixed = RUNS_DIR / "{}_{:02d}".format(run_id, index)
+        if not suffixed.exists():
+            return suffixed
+    raise PipelineError("无法创建唯一 run 目录：{}".format(run_id))
 
 
 def snapshot_artifacts(debug_dir: Path, paths: Sequence[Path]) -> None:
@@ -93,13 +145,25 @@ def remove_artifacts(paths: Sequence[Path]) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="FutsalMOT 单 Seed 数据集管线")
-    parser.add_argument("--seed", type=int, required=True, help="非负随机种子")
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=PIPELINE_CONFIG_PATH,
+        help="总配置 JSON；默认 configs/pipeline_config.json",
+    )
+    parser.add_argument("--seed", type=int, default=None, help="覆盖总配置中的随机种子")
     parser.add_argument(
         "--template",
         type=int,
-        default=1,
+        default=None,
         choices=sorted(TEMPLATE_NAMES),
-        help="模板 ID",
+        help="覆盖总配置中的模板 ID",
+    )
+    parser.add_argument(
+        "--run-id",
+        type=str,
+        default=None,
+        help="覆盖自动生成的唯一 run 目录名",
     )
     parser.add_argument(
         "--output-dir",
@@ -127,32 +191,79 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--timeout",
         type=int,
-        default=300,
-        help="每个 Windows 子步骤超时秒数",
+        default=None,
+        help="覆盖总配置中的每个 Windows 子步骤超时秒数",
     )
     parser.add_argument(
         "--max-attempts",
         type=int,
-        default=10,
-        help="完整候选管线的确定性最大尝试次数",
+        default=None,
+        help="覆盖总配置中的确定性最大尝试次数",
+    )
+    parser.add_argument(
+        "--no-update-current-pointer",
+        action="store_true",
+        help="即使验证通过，也不更新 configs/pipeline_current.json",
     )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    if args.seed < 0 or args.timeout <= 0 or args.max_attempts <= 0:
-        print("[ERROR] seed 必须非负，timeout/max-attempts 必须大于 0", file=sys.stderr)
+    try:
+        config_path = args.config.expanduser()
+        if not config_path.is_absolute():
+            config_path = SCRIPT_DIR / config_path
+        pipeline_config = load_pipeline_config(config_path.resolve())
+        seed = args.seed if args.seed is not None else config_int(pipeline_config, "seed", 1)
+        template = (
+            args.template
+            if args.template is not None
+            else config_int(pipeline_config, "template_id", 1)
+        )
+        timeout = (
+            args.timeout
+            if args.timeout is not None
+            else config_int(pipeline_config, "timeout_sec", 300)
+        )
+        max_attempts = (
+            args.max_attempts
+            if args.max_attempts is not None
+            else config_int(pipeline_config, "max_attempts", 10)
+        )
+        strict_warnings = args.strict_warnings or config_bool(
+            pipeline_config, "strict_warnings", False
+        )
+        skip_trajectory_validation = args.skip_trajectory_validation or config_bool(
+            pipeline_config, "skip_trajectory_validation", False
+        )
+        allow_trajectory_errors = args.allow_trajectory_errors or config_bool(
+            pipeline_config, "allow_trajectory_errors", False
+        )
+        update_current_pointer = (
+            config_bool(pipeline_config, "update_current_pointer", True)
+            and not args.no_update_current_pointer
+        )
+        run_id_prefix = str(pipeline_config.get("run_id_prefix", "run"))
+    except PipelineError as exc:
+        print("[ERROR] {}".format(exc), file=sys.stderr)
         return 2
 
-    seed = args.seed
-    template = args.template
+    if seed < 0 or timeout <= 0 or max_attempts <= 0:
+        print("[ERROR] seed 必须非负，timeout/max-attempts 必须大于 0", file=sys.stderr)
+        return 2
+    if template not in TEMPLATE_NAMES:
+        print("[ERROR] template 必须是 {} 中之一".format(sorted(TEMPLATE_NAMES)), file=sys.stderr)
+        return 2
+
     template_name = TEMPLATE_NAMES[template]
     episode_id = "episode_random_{:04d}_t{:d}".format(seed, template)
-    output_dir = resolve_output_dir(args.output_dir, episode_id)
+    run_id = args.run_id or make_run_id(run_id_prefix, seed, template)
+    run_dir = unique_run_dir(run_id)
+    output_dir = resolve_output_dir(args.output_dir, run_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    generated_dir = GENERATED_EVENT_DIR
+    generated_dir = run_dir
     generated_dir.mkdir(parents=True, exist_ok=True)
     event_config = generated_dir / "{}.json".format(episode_id)
     a32_config = generated_dir / "{}_a32.json".format(episode_id)
@@ -161,8 +272,11 @@ def main() -> int:
 
     print("=" * 76)
     print("FutsalMOT Pipeline {}".format(SCRIPT_VERSION))
+    print("config={}".format(config_path.resolve()))
+    print("run_id={}".format(run_dir.name))
+    print("run_dir={}".format(run_dir))
     print("seed={} template={} ({}) players=8 format=4v4_no_goalkeepers".format(seed, template, template_name))
-    print("episode_id={} max_attempts={}".format(episode_id, args.max_attempts))
+    print("episode_id={} max_attempts={}".format(episode_id, max_attempts))
     print("output_dir={}".format(output_dir))
     print("=" * 76)
 
@@ -172,9 +286,9 @@ def main() -> int:
     diagnostic_only = False
 
     try:
-        for attempt_index in range(1, args.max_attempts + 1):
+        for attempt_index in range(1, max_attempts + 1):
             print("\n" + "#" * 76)
-            print("[CANDIDATE] attempt {}/{}".format(attempt_index, args.max_attempts))
+            print("[CANDIDATE] attempt {}/{}".format(attempt_index, max_attempts))
             print("#" * 76)
             attempt_dir = output_dir / "attempt_{:02d}".format(attempt_index)
             logs_dir = attempt_dir / "logs"
@@ -189,7 +303,7 @@ def main() -> int:
 
             def step(label: str, cmd: Sequence[object]) -> int:
                 result = run_logged_step(
-                    label, cmd, timeout=args.timeout, log_dir=logs_dir
+                    label, cmd, timeout=timeout, log_dir=logs_dir
                 )
                 attempt_steps.append(
                     {
@@ -212,6 +326,8 @@ def main() -> int:
                     seed,
                     "--template",
                     template,
+                    "--output-dir",
+                    generated_dir,
                     "--attempt-index",
                     attempt_index,
                     "--max-attempts",
@@ -234,7 +350,7 @@ def main() -> int:
                 "--output-dir",
                 reports_dir / "episode",
             ]
-            if args.strict_warnings:
+            if strict_warnings:
                 event_cmd.append("--strict-warnings")
             rc = step("02_A3_1_validate_episode", event_cmd)
             if rc != 0:
@@ -286,7 +402,7 @@ def main() -> int:
                 raise PipelineError("A3.3 增强失败，rc={}".format(rc))
             require_file(a33_config, "A3.3 增强轨迹配置")
 
-            if args.skip_trajectory_validation:
+            if skip_trajectory_validation:
                 diagnostic_only = True
                 attempt_record["status"] = "accepted_diagnostic_validation_skipped"
                 accepted_attempt = attempt_index
@@ -300,7 +416,7 @@ def main() -> int:
                 "--output-dir",
                 reports_dir / "trajectory",
             ]
-            if args.strict_warnings:
+            if strict_warnings:
                 trajectory_cmd.append("--strict-warnings")
             rc = step("05_A2_5_validate_trajectory", trajectory_cmd)
             if rc == 0:
@@ -311,7 +427,7 @@ def main() -> int:
             if rc >= 2:
                 snapshot_artifacts(attempt_dir / "failed_artifacts", artifacts)
                 raise PipelineError("轨迹验证器发生致命错误，rc={}".format(rc))
-            if args.allow_trajectory_errors:
+            if allow_trajectory_errors:
                 diagnostic_only = True
                 accepted_attempt = attempt_index
                 attempt_record["status"] = "accepted_diagnostic_with_trajectory_errors"
@@ -324,7 +440,7 @@ def main() -> int:
         if accepted_attempt is None:
             raise PipelineError(
                 "{} 次确定性候选均未通过完整验证；查看各 attempt 的报告。".format(
-                    args.max_attempts
+                    max_attempts
                 )
             )
 
@@ -347,7 +463,7 @@ def main() -> int:
                 event_annotations_dir,
                 "--overwrite",
             ],
-            timeout=args.timeout,
+            timeout=timeout,
             log_dir=annotation_logs,
         )
         final_step = {
@@ -381,6 +497,10 @@ def main() -> int:
             "schema_version": "1.0",
             "pipeline_version": SCRIPT_VERSION,
             "generated_at_utc": utc_now(),
+            "pipeline_config_path": config_path.resolve().as_posix(),
+            "pipeline_config": pipeline_config,
+            "run_id": run_dir.name,
+            "run_dir": run_dir.resolve().as_posix(),
             "seed": seed,
             "template_id": template,
             "template_name": template_name,
@@ -415,11 +535,11 @@ def main() -> int:
             "final_step": final_step,
         }
         write_json_atomic(output_dir / "pipeline_run_report.json", run_state)
-        if trajectory_validation_passed and not diagnostic_only:
+        if trajectory_validation_passed and not diagnostic_only and update_current_pointer:
             write_json_atomic(CURRENT_RUN_POINTER, run_state)
         else:
             print(
-                "[WARNING] 诊断输出未更新 configs/pipeline_current.json。",
+                "[WARNING] 本次运行未更新 configs/pipeline_current.json。",
                 file=sys.stderr,
             )
 
@@ -438,7 +558,7 @@ def main() -> int:
         print("Event config: {}".format(event_config))
         print("A3.3 config: {}".format(a33_config))
         print("Event annotations: {}".format(event_annotations_dir))
-        if trajectory_validation_passed and not diagnostic_only:
+        if trajectory_validation_passed and not diagnostic_only and update_current_pointer:
             print("Current-run pointer: {}".format(CURRENT_RUN_POINTER))
             print("\nNext in Unreal Editor:")
             print('  py "{}"'.format((SCRIPT_DIR / "02_run_unreal.py").resolve().as_posix()))
@@ -459,6 +579,9 @@ def main() -> int:
             "schema_version": "1.0",
             "pipeline_version": SCRIPT_VERSION,
             "generated_at_utc": utc_now(),
+            "pipeline_config_path": config_path.resolve().as_posix(),
+            "run_id": run_dir.name,
+            "run_dir": run_dir.resolve().as_posix(),
             "seed": seed,
             "template_id": template,
             "template_name": template_name,

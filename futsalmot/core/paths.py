@@ -9,6 +9,8 @@ CONTENT_DIR = CONTENT_FUTSALMOT_DIR.parent
 PROJECT_ROOT = CONTENT_DIR.parent
 CONFIG_DIR = CODE_DIR / "configs"
 GENERATED_EVENT_DIR = CONFIG_DIR / "events" / "generated"
+RUNS_DIR = CONFIG_DIR / "runs"
+PIPELINE_CONFIG_PATH = CONFIG_DIR / "pipeline_config.json"
 CURRENT_RUN_POINTER = CONFIG_DIR / "pipeline_current.json"
 AGENT_OUTPUT_DIR = CODE_DIR / "_agent_test_outputs"
 

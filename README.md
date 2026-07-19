@@ -36,7 +36,35 @@ All implementation scripts live under `futsalmot/scripts/` and are considered in
 
 ## Step 1: Generate Trajectories On Windows
 
+Edit the top-level generation config first:
+
+```text
+configs/pipeline_config.json
+```
+
+The config intentionally exposes only the most important controls:
+
+```json
+{
+  "seed": 1,
+  "template_id": 1,
+  "max_attempts": 10,
+  "timeout_sec": 300,
+  "strict_warnings": false,
+  "skip_trajectory_validation": false,
+  "allow_trajectory_errors": false,
+  "update_current_pointer": true,
+  "run_id_prefix": "run"
+}
+```
+
 Run from this `code` directory:
+
+```powershell
+py .\01_generate_trajectories.py
+```
+
+Command-line overrides are still supported for quick experiments:
 
 ```powershell
 py .\01_generate_trajectories.py --seed 1 --template 1
@@ -65,12 +93,21 @@ generate random episode
 Key outputs:
 
 ```text
-configs/events/generated/<seq_id>.json
-configs/events/generated/<seq_id>_a32.json
-configs/events/generated/<seq_id>_a33.json
+configs/runs/<run_id>/<seq_id>.json
+configs/runs/<run_id>/<seq_id>_a32.json
+configs/runs/<run_id>/<seq_id>_a33.json
+configs/runs/<run_id>/event_annotations/
+configs/runs/<run_id>/pipeline_run_report.json
 configs/pipeline_current.json
-_agent_test_outputs/pipeline_<seq_id>/
 ```
+
+`run_id` is generated automatically from UTC time, seed, and template, for example:
+
+```text
+configs/runs/run_20260719_120102_seed0001_t1/
+```
+
+`configs/pipeline_current.json` points Unreal scripts to the latest validated run when `update_current_pointer` is true.
 
 ## Step 2: Run In Unreal Editor
 
@@ -161,6 +198,9 @@ code/
 ├─ 02_run_unreal.py
 ├─ 03_check_labels.py
 ├─ configs/
+│  ├─ pipeline_config.json
+│  ├─ pipeline_current.json
+│  └─ runs/
 ├─ futsalmot/
 │  ├─ core/
 │  ├─ pipeline/

@@ -1,0 +1,13 @@
+{
+  "schema_version": "1.0",
+  "description": "Top-level controls for one FutsalMOT Windows trajectory-generation run.",
+  "seed": 1,
+  "template_id": 1,
+  "max_attempts": 10,
+  "timeout_sec": 300,
+  "strict_warnings": false,
+  "skip_trajectory_validation": false,
+  "allow_trajectory_errors": false,
+  "update_current_pointer": true,
+  "run_id_prefix": "run"
+}

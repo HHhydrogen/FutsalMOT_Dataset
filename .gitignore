@@ -2,4 +2,5 @@ __pycache__/
 *.py[cod]
 _agent_test_outputs/
 _backup_*/
+configs/runs/
 *.tmp.*

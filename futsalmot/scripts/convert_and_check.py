@@ -1,22 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-FutsalMOT RGB/bbox post-processing and integrity check.
+FutsalMOT 布局检查 + 后处理.
 
-Version:
-    A1_5_POSTPROCESS_V2
+执行流程：
+- 读取 objects_bbox_2d_clean_<seq_id>.json
+- 按 --step 间隔绘制布局检查图（bbox + 球员关键点 + 场地关键点 + 边界线）
+- 写入 YOLO / MOT 标签
 
-Reads one objects_bbox_2d_clean_<seq_id>.json file, then:
-- resolves the exact RGB file for every camera/frame record;
-- validates image dimensions, object identities, and visible bboxes;
-- writes bbox overlays;
-- writes one YOLO label file per image;
-- writes one MOTChallenge gt.txt per camera;
-- writes a manifest;
-- performs a final count/integrity check.
-
-The record-level ``rgb_path`` is authoritative when present. Legacy filename
-fallbacks are used only when the explicit path is absent or missing.
+布局检查图输出到：
+    Saved/FutsalMOT/layout_check/<seq_id>/
 """
 
 from __future__ import annotations
@@ -108,6 +101,24 @@ def parse_args() -> argparse.Namespace:
         "--draw-keypoints",
         action="store_true",
         help="Draw player keypoints_2d on overlay PNGs when present.",
+    )
+    parser.add_argument(
+        "--step",
+        type=int,
+        default=1,
+        help="每隔 N 帧绘制一张布局检查图（默认 1，建议 5）",
+    )
+    parser.add_argument(
+        "--field-keypoints",
+        type=Path,
+        default=None,
+        help="场地关键点 JSON 文件路径；默认根据 annotation 自动推导",
+    )
+    parser.add_argument(
+        "--layout-dir",
+        type=Path,
+        default=None,
+        help="布局检查图输出目录；默认自动推导到 Saved/FutsalMOT/layout_check/<seq_id>",
     )
     return parser.parse_args()
 
@@ -319,6 +330,92 @@ def draw_object_keypoints(draw: ImageDraw.ImageDraw, obj: Dict[str, Any]) -> Non
             fill=(255, 230, 40),
             outline=(0, 0, 0),
         )
+
+
+def resolve_field_keypoints_path(annotation_path: Path) -> Path:
+    """从 bbox 标注路径推导同序列的场地关键点文件路径。"""
+    stem = annotation_path.stem
+    project_root = annotation_path.parents[3]
+    seq_id = stem
+    prefix = "objects_bbox_2d_clean_"
+    if seq_id.startswith(prefix):
+        seq_id = seq_id[len(prefix):]
+    candidates = [
+        project_root / "Saved" / "FutsalMOT" / "annotations" / "field_keypoints_2d_clean_frame000000.json",
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return candidates[0]
+
+
+def load_field_keypoints(path: Path) -> Dict[str, Dict[int, List[Dict[str, Any]]]]:
+    """加载场地关键点，返回 kp_by_camera_frame[camera_id][frame_id] = [kps]。"""
+    result: Dict[str, Dict[int, List[Dict[str, Any]]]] = {}
+    if not path.is_file():
+        return result
+    data = read_json(path)
+    records = data.get("records") if isinstance(data, dict) else data
+    if not isinstance(records, list):
+        return result
+    for rec in records:
+        cam = str(rec.get("camera_id", ""))
+        fid = int(rec.get("frame_id", 0))
+        kps = rec.get("field_keypoints", [])
+        if cam not in result:
+            result[cam] = {}
+        result[cam][fid] = kps
+    return result
+
+
+def draw_field_keypoints(draw: ImageDraw.ImageDraw, kps: List[Dict[str, Any]]) -> None:
+    """在 draw 上绘制场地关键点。"""
+    for kp in kps:
+        if not kp.get("in_image", False):
+            continue
+        uv = kp.get("clean_uv")
+        if not isinstance(uv, (list, tuple)) or len(uv) < 2:
+            continue
+        x, y = float(uv[0]), float(uv[1])
+        radius = 4.0
+        draw.ellipse(
+            [x - radius, y - radius, x + radius, y + radius],
+            fill=(255, 100, 100),
+            outline=(200, 50, 50),
+        )
+        name = str(kp.get("name", ""))
+        if name:
+            draw.text((x + 5, y - 8), name, fill=(255, 200, 200), font=load_font(10))
+
+
+COURT_BOUNDARY_SEGMENTS = [
+    ("KP01", "KP02"), ("KP02", "KP03"), ("KP03", "KP04"), ("KP04", "KP01"),
+    ("KP05", "KP06"), ("KP06", "KP07"), ("KP07", "KP08"), ("KP08", "KP05"),
+    ("KP09", "KP10"), ("KP10", "KP11"), ("KP11", "KP12"), ("KP12", "KP09"),
+    ("KP13", "KP17"), ("KP17", "KP14"), ("KP14", "KP18"), ("KP18", "KP13"),
+    ("KP15", "KP16"),
+]
+
+
+def build_kp_name_map(kps: List[Dict[str, Any]]) -> Dict[str, List[float]]:
+    m: Dict[str, List[float]] = {}
+    for kp in kps:
+        name = str(kp.get("name", ""))
+        uv = kp.get("clean_uv")
+        if name and isinstance(uv, (list, tuple)) and len(uv) >= 2 and kp.get("in_image", False):
+            m[name] = [float(uv[0]), float(uv[1])]
+    return m
+
+
+def draw_court_boundaries(draw: ImageDraw.ImageDraw, kps: List[Dict[str, Any]]) -> None:
+    name_map = build_kp_name_map(kps)
+    for a, b in COURT_BOUNDARY_SEGMENTS:
+        if a in name_map and b in name_map:
+            draw.line(
+                [name_map[a][0], name_map[a][1], name_map[b][0], name_map[b][1]],
+                fill=(150, 200, 255),
+                width=2,
+            )
 
 
 def yolo_line(obj: Dict[str, Any], width: int, height: int) -> Optional[str]:
@@ -588,10 +685,20 @@ def main() -> int:
             return 1
 
         saved_root = project_root / "Saved" / "FutsalMOT"
+        step = max(1, int(args.step))
         overlay_root = saved_root / "overlay_objects_bbox_{}".format(seq_id)
+        layout_root = saved_root / "layout_check" / seq_id
         yolo_root = saved_root / "labels_yolo_clean" / seq_id
         mot_root = saved_root / "labels_mot_clean" / seq_id
         manifest_path = saved_root / "annotations" / "manifest_{}.json".format(seq_id)
+
+        field_kp_path = (
+            args.field_keypoints.expanduser().resolve()
+            if args.field_keypoints is not None
+            else resolve_field_keypoints_path(annotation_path)
+        )
+        field_kp_data = load_field_keypoints(field_kp_path)
+        has_field_kp = bool(field_kp_data)
 
         if not args.no_clean:
             for path in (overlay_root, yolo_root, mot_root):
@@ -599,19 +706,21 @@ def main() -> int:
                     shutil.rmtree(path)
         if not args.skip_overlay:
             overlay_root.mkdir(parents=True, exist_ok=True)
+        layout_root.mkdir(parents=True, exist_ok=True)
         yolo_root.mkdir(parents=True, exist_ok=True)
         mot_root.mkdir(parents=True, exist_ok=True)
 
         font = load_font(18)
-        overlay_count = 0
         yolo_file_count = 0
         yolo_line_count = 0
         mot_stats: Dict[str, int] = {}
         manifest_records: List[Dict[str, Any]] = []
+        layout_count = 0
 
         for camera_id in camera_ids:
             if not args.skip_overlay:
                 (overlay_root / camera_id).mkdir(parents=True, exist_ok=True)
+            (layout_root / camera_id).mkdir(parents=True, exist_ok=True)
             (yolo_root / camera_id).mkdir(parents=True, exist_ok=True)
             mot_lines: List[str] = []
 
@@ -643,11 +752,22 @@ def main() -> int:
                 yolo_file_count += 1
                 yolo_line_count += len(yolo_lines)
 
+                do_layout = (frame_id - frame_start) % step == 0 or frame_id == frame_end
+
                 overlay_path: Optional[Path] = None
-                if not args.skip_overlay:
+                if not args.skip_overlay and do_layout:
                     with Image.open(image_path) as source:
                         image = source.convert("RGB")
                     draw = ImageDraw.Draw(image)
+
+                    # Draw field keypoints + court boundaries
+                    cam_kp = field_kp_data.get(camera_id, {})
+                    frame_kps = cam_kp.get(frame_id, cam_kp.get(0, []))
+                    if frame_kps:
+                        draw_court_boundaries(draw, frame_kps)
+                        draw_field_keypoints(draw, frame_kps)
+
+                    # Draw objects
                     for obj in objects:
                         if not obj.get("visible", False):
                             continue
@@ -663,9 +783,10 @@ def main() -> int:
                         draw.text((tx + 4, ty + 2), label, fill=color, font=font)
                         if args.draw_keypoints:
                             draw_object_keypoints(draw, obj)
-                    overlay_path = overlay_root / camera_id / "{:06d}.png".format(frame_id)
+
+                    overlay_path = layout_root / camera_id / "{:06d}.png".format(frame_id)
                     image.save(overlay_path)
-                    overlay_count += 1
+                    layout_count += 1
 
                 manifest_records.append(
                     {
@@ -707,8 +828,6 @@ def main() -> int:
         actual_yolo = sum(1 for _ in yolo_root.rglob("*.txt"))
         if actual_yolo != expected_yolo:
             final_errors.append("YOLO files={} expected={}".format(actual_yolo, expected_yolo))
-        if not args.skip_overlay and overlay_count != expected_records:
-            final_errors.append("overlay images={} expected={}".format(overlay_count, expected_records))
         for camera_id in camera_ids:
             gt_path = mot_root / camera_id / "gt" / "gt.txt"
             if not gt_path.is_file():
@@ -718,10 +837,20 @@ def main() -> int:
         print("[CHECK] records={} expected={}".format(len(records), expected_records))
         print("[CHECK] yolo_files={} expected={}".format(actual_yolo, expected_yolo))
         print("[CHECK] yolo_total_lines={}".format(yolo_line_count))
-        print("[CHECK] overlay_images={}".format(overlay_count))
+        print("[CHECK] layout_check_images={} (间隔 N={})".format(layout_count, step))
         for camera_id in camera_ids:
             print("[CHECK] {} MOT lines={}".format(camera_id, mot_stats[camera_id]))
-        print("[CHECK] manifest={}".format(manifest_path))
+        print("")
+        print("=" * 72)
+        print("布局检查图输出目录:")
+        print("  {}".format(layout_root.resolve().as_posix()))
+        print("")
+        print("包含内容：")
+        print("  - 所有目标的 bbox")
+        print("  - 球员骨骼关键点" + (" (已启用)" if args.draw_keypoints else ""))
+        print("  - 场地关键点" + (" (已加载)" if has_field_kp else " (未找到场地关键点文件)"))
+        print("  - 场地边界线" + (" (已绘制)" if has_field_kp else ""))
+        print("=" * 72)
 
         if final_errors:
             print("CHECK FAILED", file=sys.stderr)

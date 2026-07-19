@@ -557,27 +557,37 @@ def main() -> int:
         print("Accepted attempt: {}".format(accepted_attempt))
         print("Event config: {}".format(event_config))
         print("A3.3 config: {}".format(a33_config))
-        print("Event annotations: {}".format(event_annotations_dir))
-        print(
-            "MRQ output dir: {}".format(
-                (PROJECT_ROOT / "Saved" / "FutsalMOT" / "images_clean" / episode_id).resolve()
-            )
+        print("事件标注: {}".format(event_annotations_dir))
+        print("")
+        print("=" * 76)
+        print("【第 2 步】在 Unreal Editor 中运行")
+        print("=" * 76)
+        print("在 UE Python 控制台执行：")
+        print('  py "{}"'.format((SCRIPT_DIR / "02_run_unreal.py").resolve().as_posix()))
+        print("")
+        print("然后打开 Movie Render Queue，设置：")
+        print("  Output Directory:")
+        print("    {}".format(
+            (PROJECT_ROOT / "Saved" / "FutsalMOT" / "images_clean" / episode_id).resolve().as_posix()
+        ))
+        print("  File Name Format: {frame_number}")
+        print("  Image Format: PNG")
+        print("  Resolution: 1920 x 1080")
+        print("")
+        print("渲染完成后进入第 3 步。")
+        print("")
+        print("=" * 76)
+        print("【第 3 步】Windows 布局检查")
+        print("=" * 76)
+        check_cmd = '"{}" --annotation "{}" --step 5 --draw-keypoints'.format(
+            (SCRIPT_DIR / "03_check_labels.py").resolve().as_posix(),
+            annotation_json.as_posix()
         )
-        print("MRQ image pattern: <MRQ output dir>/cam_XX/000000.png .. 000299.png")
+        print("在任意终端执行：")
+        print('  py {}'.format(check_cmd))
+        print("")
         if trajectory_validation_passed and not diagnostic_only and update_current_pointer:
-            print("Current-run pointer: {}".format(CURRENT_RUN_POINTER))
-            print("\nNext in Unreal Editor:")
-            print('  py "{}"'.format((SCRIPT_DIR / "02_run_unreal.py").resolve().as_posix()))
-            print("\nAfter MRQ render, run:")
-            print(
-                '  py "{}" --annotation "{}"'.format(
-                    (SCRIPT_DIR / "03_check_labels.py").resolve().as_posix(),
-                    annotation_json.as_posix()
-                )
-            )
-        else:
-            print("Current-run pointer: NOT UPDATED")
-            print("Do not treat this diagnostic output as a validated UE dataset.")
+            print("当前运行指针: {}".format(CURRENT_RUN_POINTER))
         print("=" * 76)
         return 0
 

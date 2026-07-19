@@ -34,189 +34,46 @@ Content/FutsalMOT/code
 
 真正的实现脚本都在 `futsalmot/scripts/` 下，属于内部实现。
 
-## 第 1 步：Windows 生成轨迹
+## 工作流
 
-先修改总配置文件：
+### 第 1 步 — Windows 生成轨迹
 
-```text
-configs/pipeline_config.json
-```
-
-这个总配置只保留少量关键参数：
-
-```json
-{
-  "seed": 1,
-  "template_id": 1,
-  "max_attempts": 10,
-  "timeout_sec": 300,
-  "strict_warnings": false,
-  "skip_trajectory_validation": false,
-  "allow_trajectory_errors": false,
-  "update_current_pointer": true,
-  "run_id_prefix": "run"
-}
-```
-
-默认运行：
+修改 `configs/pipeline_config.json` 中的 `seed` 等参数，然后运行：
 
 ```powershell
+cd D:\projects\FustalMOT_UEDataset\Content\FutsalMOT\code
 py .\01_generate_trajectories.py
 ```
 
-如果需要临时覆盖，也可以传命令行参数：
+运行完成后会打印：
+- **MRQ Output Directory**：UE 渲染时要填的路径
+- **File Name Format**：`{frame_number}`
+- **第 2 步 UE 命令**：需要在 UE Python 控制台完整粘贴运行
+- **第 3 步 Windows 命令**：渲染完成后在终端运行
 
-```powershell
-py .\01_generate_trajectories.py --seed 1 --template 1
-```
+所有生成的 JSON 都会存入 `configs/runs/<唯一run_id>/`。
 
-可用模板：
+### 第 2 步 — UE 渲染
 
-| ID | 内容 |
-|---:|---|
-| 1 | 4v4 单人带球射门，其他队员进行宽度支援、锚点保护和盯防 |
-| 2 | 4v4 带球-传球-接球，包含接应跑位和防守跟随 |
-| 3 | 4v4 传球-接球-带球-射门，包含弱侧支援和纵深保护 |
+1. 在 UE Python 控制台运行第 1 步打印的 UE 命令
+2. 打开 Movie Render Queue，按第 1 步打印的信息设置：
+   - **Output Directory** = 第 1 步打印的路径
+   - **File Name Format** = `{frame_number}`
+   - **Image Format** = PNG
+   - **Resolution** = 1920 × 1080
+3. 渲染
 
-这一阶段会依次执行：
+### 第 3 步 — Windows 布局检查
 
-```text
-生成事件回合
-→ 验证事件
-→ 编译密集轨迹
-→ 增强 yaw / action / ball state / contact 信息
-→ 验证密集轨迹
-→ 生成事件与逐帧状态标注
-```
+渲染完成后，在终端运行第 1 步打印的第 3 步命令（已包含 `--step 5 --draw-keypoints`）。
 
-输出会进入唯一 run 目录：
+输出到 `Saved/FutsalMOT/layout_check/<seq_id>/`，每 5 帧绘制 1 帧。
 
-```text
-configs/runs/<run_id>/
-```
-
-示例：
-
-```text
-configs/runs/run_20260719_120102_seed0001_t1/
-```
-
-其中会保存：
-
-```text
-<seq_id>.json
-<seq_id>_a32.json
-<seq_id>_a33.json
-event_annotations/
-pipeline_run_report.json
-```
-
-如果后续进入第 2 步，MRQ 的图片会保存到：
-
-```text
-Saved/FutsalMOT/images_clean/<seq_id>/cam_01/
-Saved/FutsalMOT/images_clean/<seq_id>/cam_02/
-Saved/FutsalMOT/images_clean/<seq_id>/cam_03/
-Saved/FutsalMOT/images_clean/<seq_id>/cam_04/
-```
-
-图片命名格式为 6 位补零帧号：
-
-```text
-Saved/FutsalMOT/images_clean/<seq_id>/cam_01/000000.png
-Saved/FutsalMOT/images_clean/<seq_id>/cam_01/000001.png
-...
-Saved/FutsalMOT/images_clean/<seq_id>/cam_01/000299.png
-```
-
-其他相机同理：`cam_02/000000.png` 到 `cam_02/000299.png`，`cam_03/000000.png` 到 `cam_03/000299.png`，`cam_04/000000.png` 到 `cam_04/000299.png`。
-
-也就是从第 1 步生成出来的同一个 `seq_id` 目录去接第 2 步渲染结果。
-
-如果 `update_current_pointer=true`，还会更新：
-
-```text
-configs/pipeline_current.json
-```
-
-## 第 2 步：在 Unreal Editor 中运行
-
-在 Unreal Editor 的 Python 控制台中执行：
-
-```python
-py "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/02_run_unreal.py"
-```
-
-这个步骤会先做只读 preflight，再构建 Sequencer 并导出标注。
-
-核心输出：
-
-```text
-Saved/FutsalMOT/annotations/objects_bbox_2d_clean_<seq_id>.json
-Saved/FutsalMOT/annotations/objects_bbox_2d_clean_<seq_id>.jsonl
-```
-
-对每个球员对象，标注中会包含：
-
-```text
-bbox_2d_clean
-bbox_xyxy_clean
-keypoints_2d
-keypoints_2d_yolo
-```
-
-`keypoints_2d_yolo` 采用 YOLO pose 风格的扁平格式：
-
-```text
-x_norm, y_norm, visibility, x_norm, y_norm, visibility, ...
-```
-
-visibility 定义：
-
-```text
-0 = 缺失或在相机后方
-1 = 在相机前方但不在图像内
-2 = 在图像内
-```
-
-## 第 3 步：Windows 检查标注
-
-MRQ 渲染完成后，执行：
-
-```powershell
-py .\03_check_labels.py --annotation "D:/projects/FustalMOT_UEDataset/Saved/FutsalMOT/annotations/objects_bbox_2d_clean_<seq_id>.json"
-```
-
-如果当前 PowerShell 位于 UE 项目根目录 `D:\projects\FustalMOT_UEDataset`，请使用完整脚本路径：
-
-```powershell
-py "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/03_check_labels.py" --annotation "D:/projects/FustalMOT_UEDataset/Saved/FutsalMOT/annotations/objects_bbox_2d_clean_<seq_id>.json"
-```
-
-如果要在 overlay 上画出关键点：
-
-```powershell
-py .\03_check_labels.py --draw-keypoints
-```
-
-预期输出：
-
-```text
-Saved/FutsalMOT/overlay_objects_bbox_<seq_id>/
-Saved/FutsalMOT/labels_yolo_clean/<seq_id>/
-Saved/FutsalMOT/labels_mot_clean/<seq_id>/
-Saved/FutsalMOT/annotations/manifest_<seq_id>.json
-```
-
-预期检查结果：
-
-```text
-records = 1200
-yolo_files = 1200
-expected_objects_per_record = 9
-CHECK PASSED
-ALL DONE
-```
+每张布局检查图包含：
+- 所有目标的 bounding box
+- 球员骨骼关键点（黄色圆点）
+- 场地 41 个关键点（红色圆点 + 名称）
+- 场地边界线（蓝色线条）
 
 ## 8 人场景初始化
 
@@ -241,6 +98,15 @@ code/
 │  ├─ pipeline_current.json
 │  └─ runs/
 ├─ futsalmot/
+│  ├─ core/
+│  │  ├─ paths.py
+│  │  ├─ io.py
+│  │  ├─ hashing.py
+│  │  └─ process.py
+│  ├─ pipeline/
+│  │  └─ constants.py
+│  ├─ scripts/          (内部实现)
+│  └─ ue/
 │  ├─ core/
 │  ├─ pipeline/
 │  ├─ scripts/

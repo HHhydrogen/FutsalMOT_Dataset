@@ -111,6 +111,17 @@ event_annotations/
 pipeline_run_report.json
 ```
 
+如果后续进入第 2 步，MRQ 的图片会保存到：
+
+```text
+Saved/FutsalMOT/images_clean/<seq_id>/cam_01/
+Saved/FutsalMOT/images_clean/<seq_id>/cam_02/
+Saved/FutsalMOT/images_clean/<seq_id>/cam_03/
+Saved/FutsalMOT/images_clean/<seq_id>/cam_04/
+```
+
+也就是从第 1 步生成出来的同一个 `seq_id` 目录去接第 2 步渲染结果。
+
 如果 `update_current_pointer=true`，还会更新：
 
 ```text

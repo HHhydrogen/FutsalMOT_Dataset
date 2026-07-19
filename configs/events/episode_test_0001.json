@@ -1,0 +1,245 @@
+{
+  "schema_version": "1.0",
+  "project_root": "D:/projects/FustalMOT_UEDataset",
+  "episode_id": "episode_test_0001",
+  "output_seq_id": "episode_test_0001",
+  "description": "10-second rule-driven futsal attack: dribble, support run, pass, receive, second dribble, defensive following, and shot.",
+  "paths": {
+    "base_render_config": "../seq_test_0005.json",
+    "output_trajectory_config": "../generated/episode_test_0001.json"
+  },
+  "timeline": {
+    "fps": 30,
+    "duration_sec": 10.0,
+    "frame_start": 0,
+    "frame_end": 299,
+    "time_to_frame_rule": "round",
+    "interval_semantics": "[start_t, end_t)"
+  },
+  "court": {
+    "x_min_cm": -1950.0,
+    "x_max_cm": 1950.0,
+    "y_min_cm": -950.0,
+    "y_max_cm": 950.0,
+    "player_z_cm": 90.0,
+    "ball_z_cm": 11.0
+  },
+  "compiler_defaults": {
+    "player_interpolation": "shape_preserving_cubic_hermite_pchip",
+    "dense_keyframe_interval_frames": 1,
+    "player_max_speed_cm_s": 750.0,
+    "ball_max_speed_cm_s": 3000.0,
+    "dribble_ball_ahead_cm": 45.0,
+    "pass_arc_height_cm": 20.0,
+    "shot_arc_height_cm": 55.0,
+    "defender_default_follow_distance_cm": 180.0,
+    "defender_default_side_offset_cm": -80.0
+  },
+  "players": {
+    "Player_01": {
+      "team": "A",
+      "role": "ball_carrier",
+      "track_id": 1,
+      "class_id": 0,
+      "start_loc": [
+        -600.0,
+        -180.0,
+        90.0
+      ],
+      "max_speed_cm_s": 750.0
+    },
+    "Player_02": {
+      "team": "A",
+      "role": "support",
+      "track_id": 2,
+      "class_id": 0,
+      "start_loc": [
+        -350.0,
+        220.0,
+        90.0
+      ],
+      "max_speed_cm_s": 750.0
+    },
+    "Player_03": {
+      "team": "B",
+      "role": "defender",
+      "track_id": 3,
+      "class_id": 0,
+      "start_loc": [
+        -180.0,
+        -60.0,
+        90.0
+      ],
+      "max_speed_cm_s": 750.0
+    },
+    "Player_04": {
+      "team": "B",
+      "role": "defender",
+      "track_id": 4,
+      "class_id": 0,
+      "start_loc": [
+        250.0,
+        260.0,
+        90.0
+      ],
+      "max_speed_cm_s": 750.0
+    }
+  },
+  "ball": {
+    "object_id": "Ball_01",
+    "track_id": 101,
+    "class_id": 1,
+    "initial_owner": "Player_01",
+    "initial_loc": [
+      -555.0,
+      -180.0,
+      11.0
+    ],
+    "height_cm": 11.0,
+    "dribble_ahead_cm": 45.0
+  },
+  "event_rules": {
+    "supported_types": [
+      "hold",
+      "move",
+      "dribble",
+      "pass",
+      "receive",
+      "defend_follow",
+      "shot"
+    ],
+    "require_pass_receive_pair": true,
+    "pass_receive_time_tolerance_sec": 0.0001,
+    "allow_same_actor_boundary_touch": true,
+    "require_possession_for_dribble": true,
+    "require_possession_for_pass": true,
+    "require_possession_for_shot": true
+  },
+  "events": [
+    {
+      "event_id": "event_001",
+      "type": "dribble",
+      "actor": "Player_01",
+      "start_t": 0.0,
+      "end_t": 2.5,
+      "target_loc": [
+        -100.0,
+        -80.0,
+        90.0
+      ],
+      "ball_ahead_cm": 45.0
+    },
+    {
+      "event_id": "event_002",
+      "type": "pass",
+      "from": "Player_01",
+      "to": "Player_02",
+      "start_t": 2.5,
+      "end_t": 3.2,
+      "arc_height_cm": 20.0
+    },
+    {
+      "event_id": "event_003",
+      "type": "receive",
+      "actor": "Player_02",
+      "time": 3.2,
+      "source_event": "event_002"
+    },
+    {
+      "event_id": "event_004",
+      "type": "dribble",
+      "actor": "Player_02",
+      "start_t": 3.2,
+      "end_t": 5.5,
+      "target_loc": [
+        650.0,
+        80.0,
+        90.0
+      ],
+      "ball_ahead_cm": 45.0
+    },
+    {
+      "event_id": "event_005",
+      "type": "shot",
+      "actor": "Player_02",
+      "start_t": 5.5,
+      "end_t": 6.2,
+      "target_loc": [
+        1950.0,
+        0.0,
+        45.0
+      ],
+      "arc_height_cm": 55.0
+    },
+    {
+      "event_id": "event_006",
+      "type": "move",
+      "actor": "Player_02",
+      "start_t": 0.0,
+      "end_t": 3.2,
+      "target_loc": [
+        150.0,
+        160.0,
+        90.0
+      ]
+    },
+    {
+      "event_id": "event_007",
+      "type": "move",
+      "actor": "Player_01",
+      "start_t": 3.2,
+      "end_t": 10.0,
+      "target_loc": [
+        350.0,
+        -220.0,
+        90.0
+      ]
+    },
+    {
+      "event_id": "event_008",
+      "type": "defend_follow",
+      "actor": "Player_03",
+      "target": "possession_owner",
+      "start_t": 0.0,
+      "end_t": 5.5,
+      "follow_distance_cm": 180.0,
+      "side_offset_cm": -80.0
+    },
+    {
+      "event_id": "event_009",
+      "type": "move",
+      "actor": "Player_03",
+      "start_t": 5.5,
+      "end_t": 10.0,
+      "target_loc": [
+        700.0,
+        -70.0,
+        90.0
+      ]
+    },
+    {
+      "event_id": "event_010",
+      "type": "move",
+      "actor": "Player_04",
+      "start_t": 0.0,
+      "end_t": 10.0,
+      "target_loc": [
+        450.0,
+        300.0,
+        90.0
+      ]
+    },
+    {
+      "event_id": "event_011",
+      "type": "move",
+      "actor": "Player_02",
+      "start_t": 6.2,
+      "end_t": 10.0,
+      "target_loc": [
+        800.0,
+        120.0,
+        90.0
+      ]
+    }
+  ]
+}

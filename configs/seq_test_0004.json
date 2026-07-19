@@ -1,0 +1,371 @@
+{
+  "schema_version": "2.1",
+  "project_root": "D:/projects/FustalMOT_UEDataset",
+  "seq_id": "seq_test_0004",
+  "image": {
+    "width": 1920,
+    "height": 1080
+  },
+  "timeline": {
+    "frame_start": 0,
+    "frame_end": 149,
+    "display_rate": 30
+  },
+  "sequences": [
+    "LS_Cam_01_Frame000000",
+    "LS_Cam_02_Frame000000",
+    "LS_Cam_03_Frame000000",
+    "LS_Cam_04_Frame000000"
+  ],
+  "cameras": {
+    "cam_01": "CineCam_01",
+    "cam_02": "CineCam_02",
+    "cam_03": "CineCam_03",
+    "cam_04": "CineCam_04"
+  },
+  "animation": {
+    "jog_asset": "/Game/Characters/Mannequins/Anims/Unarmed/Jog/MF_Unarmed_Jog_Fwd",
+    "play_rate": 1.0
+  },
+  "player": {
+    "forward_correction_deg": 0.0,
+    "ground_z_cm": 90.0,
+    "bbox_center_z_offset_cm": 0.0,
+    "bbox_extent_cm": [
+      38.0,
+      38.0,
+      92.0
+    ],
+    "bbox_padding_px": 2.0,
+    "bbox_adaptive_padding_ratio": 0.015,
+    "bbox_bone_radius_scale": 1.0,
+    "bbox_default_bone_radius_cm": 7.0,
+    "bbox_evaluate_sequence_pose": true
+  },
+  "ball": {
+    "radius_cm": 11.0
+  },
+  "class_id_map": {
+    "player": 0,
+    "ball": 1
+  },
+  "track_id_map": {
+    "Player_01": 1,
+    "Player_02": 2,
+    "Player_03": 3,
+    "Player_04": 4,
+    "Ball_01": 101
+  },
+  "objects": {
+    "Ball_01": {
+      "category": "ball",
+      "class_id": 1,
+      "track_id": 101,
+      "scale": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "use_animation": false,
+      "interpolation": "linear",
+      "keyframes": [
+        {
+          "frame": 0,
+          "loc": [
+            0.0,
+            0.0,
+            11.0
+          ]
+        },
+        {
+          "frame": 30,
+          "loc": [
+            160.0,
+            -70.0,
+            11.0
+          ]
+        },
+        {
+          "frame": 60,
+          "loc": [
+            340.0,
+            -20.0,
+            11.0
+          ]
+        },
+        {
+          "frame": 90,
+          "loc": [
+            520.0,
+            120.0,
+            11.0
+          ]
+        },
+        {
+          "frame": 120,
+          "loc": [
+            720.0,
+            40.0,
+            11.0
+          ]
+        },
+        {
+          "frame": 149,
+          "loc": [
+            900.0,
+            130.0,
+            11.0
+          ]
+        }
+      ]
+    },
+    "Player_01": {
+      "category": "player",
+      "class_id": 0,
+      "track_id": 1,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "use_animation": true,
+      "interpolation": "linear",
+      "keyframes": [
+        {
+          "frame": 0,
+          "loc": [
+            -80.0,
+            -80.0,
+            90.0
+          ]
+        },
+        {
+          "frame": 30,
+          "loc": [
+            80.0,
+            -130.0,
+            90.0
+          ]
+        },
+        {
+          "frame": 60,
+          "loc": [
+            260.0,
+            -70.0,
+            90.0
+          ]
+        },
+        {
+          "frame": 90,
+          "loc": [
+            430.0,
+            80.0,
+            90.0
+          ]
+        },
+        {
+          "frame": 120,
+          "loc": [
+            610.0,
+            0.0,
+            90.0
+          ]
+        },
+        {
+          "frame": 149,
+          "loc": [
+            780.0,
+            100.0,
+            90.0
+          ]
+        }
+      ]
+    },
+    "Player_02": {
+      "category": "player",
+      "class_id": 0,
+      "track_id": 2,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "use_animation": true,
+      "interpolation": "linear",
+      "keyframes": [
+        {
+          "frame": 0,
+          "loc": [
+            -420.0,
+            300.0,
+            90.0
+          ]
+        },
+        {
+          "frame": 30,
+          "loc": [
+            -260.0,
+            210.0,
+            90.0
+          ]
+        },
+        {
+          "frame": 60,
+          "loc": [
+            -60.0,
+            280.0,
+            90.0
+          ]
+        },
+        {
+          "frame": 90,
+          "loc": [
+            170.0,
+            230.0,
+            90.0
+          ]
+        },
+        {
+          "frame": 120,
+          "loc": [
+            410.0,
+            300.0,
+            90.0
+          ]
+        },
+        {
+          "frame": 149,
+          "loc": [
+            650.0,
+            220.0,
+            90.0
+          ]
+        }
+      ]
+    },
+    "Player_03": {
+      "category": "player",
+      "class_id": 0,
+      "track_id": 3,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "use_animation": true,
+      "interpolation": "linear",
+      "keyframes": [
+        {
+          "frame": 0,
+          "loc": [
+            180.0,
+            350.0,
+            90.0
+          ]
+        },
+        {
+          "frame": 30,
+          "loc": [
+            260.0,
+            260.0,
+            90.0
+          ]
+        },
+        {
+          "frame": 60,
+          "loc": [
+            390.0,
+            190.0,
+            90.0
+          ]
+        },
+        {
+          "frame": 90,
+          "loc": [
+            520.0,
+            210.0,
+            90.0
+          ]
+        },
+        {
+          "frame": 120,
+          "loc": [
+            650.0,
+            120.0,
+            90.0
+          ]
+        },
+        {
+          "frame": 149,
+          "loc": [
+            820.0,
+            170.0,
+            90.0
+          ]
+        }
+      ]
+    },
+    "Player_04": {
+      "category": "player",
+      "class_id": 0,
+      "track_id": 4,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "use_animation": true,
+      "interpolation": "linear",
+      "keyframes": [
+        {
+          "frame": 0,
+          "loc": [
+            280.0,
+            -360.0,
+            90.0
+          ]
+        },
+        {
+          "frame": 30,
+          "loc": [
+            360.0,
+            -260.0,
+            90.0
+          ]
+        },
+        {
+          "frame": 60,
+          "loc": [
+            450.0,
+            -170.0,
+            90.0
+          ]
+        },
+        {
+          "frame": 90,
+          "loc": [
+            590.0,
+            -120.0,
+            90.0
+          ]
+        },
+        {
+          "frame": 120,
+          "loc": [
+            720.0,
+            -40.0,
+            90.0
+          ]
+        },
+        {
+          "frame": 149,
+          "loc": [
+            860.0,
+            20.0,
+            90.0
+          ]
+        }
+      ]
+    }
+  }
+}

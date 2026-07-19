@@ -1,0 +1,162 @@
+{
+  "schema_version": "1.0",
+  "project_root": "D:/projects/FustalMOT_UEDataset",
+  "seq_id": "seq_test_0003",
+  "image": {
+    "width": 1920,
+    "height": 1080
+  },
+  "timeline": {
+    "frame_start": 0,
+    "frame_end": 9,
+    "display_rate": 30
+  },
+  "sequences": [
+    "LS_Cam_01_Frame000000",
+    "LS_Cam_02_Frame000000",
+    "LS_Cam_03_Frame000000",
+    "LS_Cam_04_Frame000000"
+  ],
+  "cameras": {
+    "cam_01": "CineCam_01",
+    "cam_02": "CineCam_02",
+    "cam_03": "CineCam_03",
+    "cam_04": "CineCam_04"
+  },
+  "animation": {
+    "jog_asset": "/Game/Characters/Mannequins/Anims/Unarmed/Jog/MF_Unarmed_Jog_Fwd",
+    "play_rate": 3.0
+  },
+  "player": {
+    "forward_correction_deg": 0.0,
+    "ground_z_cm": 90.0,
+    "bbox_center_z_offset_cm": 0.0,
+    "bbox_extent_cm": [
+      38.0,
+      38.0,
+      92.0
+    ],
+    "bbox_padding_px": 3.0
+  },
+  "ball": {
+    "radius_cm": 11.0
+  },
+  "class_id_map": {
+    "player": 0,
+    "ball": 1
+  },
+  "track_id_map": {
+    "Player_01": 1,
+    "Player_02": 2,
+    "Player_03": 3,
+    "Player_04": 4,
+    "Ball_01": 101
+  },
+  "objects": {
+    "Ball_01": {
+      "category": "ball",
+      "class_id": 1,
+      "track_id": 101,
+      "start": [
+        0.0,
+        0.0,
+        11.0
+      ],
+      "end": [
+        300.0,
+        120.0,
+        11.0
+      ],
+      "scale": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "use_animation": false
+    },
+    "Player_01": {
+      "category": "player",
+      "class_id": 0,
+      "track_id": 1,
+      "start": [
+        0.0,
+        -150.0,
+        90.0
+      ],
+      "end": [
+        180.0,
+        -60.0,
+        90.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "use_animation": true
+    },
+    "Player_02": {
+      "category": "player",
+      "class_id": 0,
+      "track_id": 2,
+      "start": [
+        -250.0,
+        100.0,
+        90.0
+      ],
+      "end": [
+        -100.0,
+        220.0,
+        90.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "use_animation": true
+    },
+    "Player_03": {
+      "category": "player",
+      "class_id": 0,
+      "track_id": 3,
+      "start": [
+        150.0,
+        220.0,
+        90.0
+      ],
+      "end": [
+        300.0,
+        40.0,
+        90.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "use_animation": true
+    },
+    "Player_04": {
+      "category": "player",
+      "class_id": 0,
+      "track_id": 4,
+      "start": [
+        -100.0,
+        -300.0,
+        90.0
+      ],
+      "end": [
+        80.0,
+        -220.0,
+        90.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "use_animation": true
+    }
+  }
+}

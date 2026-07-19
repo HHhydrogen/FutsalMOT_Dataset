@@ -1,0 +1,371 @@
+{
+  "schema_version": "1.1",
+  "project_root": "D:/projects/FustalMOT_UEDataset",
+  "episode_id": "episode_random_0001_t1",
+  "output_seq_id": "episode_random_0001_t1",
+  "description": "A3.4 4v4 outfield: 4v4 单人带球射门 (seed=1, template=1)",
+  "generator": {
+    "version": "A3_4_RANDOM_EPISODE_8P_V2",
+    "seed": 1,
+    "requested_seed": 1,
+    "template_id": 1,
+    "template_name": "solo_dribble_shot_4v4",
+    "generation_attempt": 1,
+    "rng_seed": 1,
+    "generated_at_utc": "2026-07-17T09:30:06.651807+00:00"
+  },
+  "roster": {
+    "format": "4v4_outfield_no_goalkeepers",
+    "player_count": 8,
+    "team_size_outfield": 4,
+    "goalkeepers": [],
+    "teams": {
+      "A": [
+        "Player_01",
+        "Player_02",
+        "Player_03",
+        "Player_04"
+      ],
+      "B": [
+        "Player_05",
+        "Player_06",
+        "Player_07",
+        "Player_08"
+      ]
+    },
+    "attack_direction": {
+      "A": "+x",
+      "B": "-x"
+    }
+  },
+  "paths": {
+    "base_render_config": "../../seq_test_0005.json",
+    "output_trajectory_config": "./episode_random_0001_t1_a32.json"
+  },
+  "timeline": {
+    "fps": 30,
+    "duration_sec": 10.0,
+    "frame_start": 0,
+    "frame_end": 299,
+    "time_to_frame_rule": "round",
+    "interval_semantics": "[start_t, end_t)"
+  },
+  "court": {
+    "x_min_cm": -1950.0,
+    "x_max_cm": 1950.0,
+    "y_min_cm": -950.0,
+    "y_max_cm": 950.0,
+    "player_z_cm": 90.0,
+    "ball_z_cm": 11.0
+  },
+  "compiler_defaults": {
+    "player_interpolation": "smoothstep_dense",
+    "dense_keyframe_interval_frames": 1,
+    "player_max_speed_cm_s": 750.0,
+    "ball_max_speed_cm_s": 3000.0,
+    "dribble_ball_ahead_cm": 45.0,
+    "pass_arc_height_cm": 20.0,
+    "shot_arc_height_cm": 55.0,
+    "defender_default_follow_distance_cm": 180.0,
+    "defender_default_side_offset_cm": 0.0,
+    "defender_follow_speed_cm_s": 500.0,
+    "defender_response_alpha": 0.22,
+    "defender_response_time_sec": 0.38,
+    "defender_max_acceleration_cm_s2": 850.0,
+    "defender_lookahead_frames": 5,
+    "defender_avoidance_radius_cm": 140.0,
+    "defender_avoidance_weight": 0.7,
+    "court_player_margin_cm": 35.0
+  },
+  "movement_optimization": {
+    "version": "ROLE_BASED_4V4_MOVEMENT_V2",
+    "attack_direction": "+x",
+    "minimum_start_spacing_cm": 175.0,
+    "defender_model": "goal_side_predictive_acceleration_limited_pursuit_v2",
+    "off_ball_model": "lane_support_and_anchor_v1"
+  },
+  "players": {
+    "Player_01": {
+      "team": "A",
+      "role": "ball_carrier",
+      "track_id": 1,
+      "class_id": 0,
+      "start_loc": [
+        -996.3,
+        62.5,
+        90.0
+      ],
+      "max_speed_cm_s": 750.0
+    },
+    "Player_02": {
+      "team": "A",
+      "role": "receiver_support",
+      "track_id": 2,
+      "class_id": 0,
+      "start_loc": [
+        -734.1,
+        541.0,
+        90.0
+      ],
+      "max_speed_cm_s": 750.0
+    },
+    "Player_03": {
+      "team": "A",
+      "role": "wide_support",
+      "track_id": 3,
+      "class_id": 0,
+      "start_loc": [
+        -777.0,
+        -452.9,
+        90.0
+      ],
+      "max_speed_cm_s": 750.0
+    },
+    "Player_04": {
+      "team": "A",
+      "role": "anchor",
+      "track_id": 4,
+      "class_id": 0,
+      "start_loc": [
+        -1367.0,
+        149.2,
+        90.0
+      ],
+      "max_speed_cm_s": 750.0
+    },
+    "Player_05": {
+      "team": "B",
+      "role": "primary_marker",
+      "track_id": 5,
+      "class_id": 0,
+      "start_loc": [
+        -798.3,
+        -13.0,
+        90.0
+      ],
+      "max_speed_cm_s": 750.0
+    },
+    "Player_06": {
+      "team": "B",
+      "role": "receiver_marker",
+      "track_id": 6,
+      "class_id": 0,
+      "start_loc": [
+        -453.9,
+        656.3,
+        90.0
+      ],
+      "max_speed_cm_s": 750.0
+    },
+    "Player_07": {
+      "team": "B",
+      "role": "wide_marker",
+      "track_id": 7,
+      "class_id": 0,
+      "start_loc": [
+        -489.6,
+        -538.0,
+        90.0
+      ],
+      "max_speed_cm_s": 750.0
+    },
+    "Player_08": {
+      "team": "B",
+      "role": "cover_defender",
+      "track_id": 8,
+      "class_id": 0,
+      "start_loc": [
+        -467.8,
+        326.3,
+        90.0
+      ],
+      "max_speed_cm_s": 750.0
+    }
+  },
+  "ball": {
+    "object_id": "Ball_01",
+    "track_id": 101,
+    "class_id": 1,
+    "initial_owner": "Player_01",
+    "initial_loc": [
+      -951.3,
+      62.5,
+      11.0
+    ],
+    "height_cm": 11.0,
+    "dribble_ahead_cm": 45.0
+  },
+  "event_rules": {
+    "supported_types": [
+      "hold",
+      "move",
+      "dribble",
+      "pass",
+      "receive",
+      "defend_follow",
+      "shot"
+    ],
+    "require_pass_receive_pair": true,
+    "pass_receive_time_tolerance_sec": 0.0001,
+    "allow_same_actor_boundary_touch": true,
+    "require_possession_for_dribble": true,
+    "require_possession_for_pass": true,
+    "require_possession_for_shot": true,
+    "expected_player_count": 8,
+    "expected_team_size": 4,
+    "minimum_initial_player_distance_cm": 175.0
+  },
+  "events": [
+    {
+      "event_id": "event_001",
+      "type": "dribble",
+      "actor": "Player_01",
+      "start_t": 0.0,
+      "end_t": 3.3,
+      "target_loc": [
+        373.7,
+        231.5,
+        90.0
+      ],
+      "ball_ahead_cm": 45.0,
+      "tactical_role": "central_progression"
+    },
+    {
+      "event_id": "event_004",
+      "type": "move",
+      "actor": "Player_02",
+      "start_t": 0.0,
+      "end_t": 10.0,
+      "target_loc": [
+        280.4,
+        505.3,
+        90.0
+      ],
+      "tactical_role": "right_width_support"
+    },
+    {
+      "event_id": "event_005",
+      "type": "move",
+      "actor": "Player_03",
+      "start_t": 0.0,
+      "end_t": 10.0,
+      "target_loc": [
+        392.8,
+        -697.2,
+        90.0
+      ],
+      "tactical_role": "left_width_support"
+    },
+    {
+      "event_id": "event_006",
+      "type": "move",
+      "actor": "Player_04",
+      "start_t": 0.0,
+      "end_t": 10.0,
+      "target_loc": [
+        8.9,
+        -79.4,
+        90.0
+      ],
+      "tactical_role": "rest_defence_anchor"
+    },
+    {
+      "event_id": "event_007",
+      "type": "defend_follow",
+      "actor": "Player_05",
+      "start_t": 0.0,
+      "end_t": 10.0,
+      "target": "Player_01",
+      "positioning": "goal_side",
+      "follow_distance_cm": 178.3,
+      "side_offset_cm": -9.3,
+      "max_speed_cm_s": 489.6,
+      "max_acceleration_cm_s2": 758.3,
+      "lookahead_frames": 4,
+      "response_time_sec": 0.422,
+      "avoidance_radius_cm": 147.8,
+      "avoidance_weight": 0.807,
+      "tactical_role": "primary_press"
+    },
+    {
+      "event_id": "event_008",
+      "type": "defend_follow",
+      "actor": "Player_06",
+      "start_t": 0.0,
+      "end_t": 10.0,
+      "target": "Player_02",
+      "positioning": "goal_side",
+      "follow_distance_cm": 240.2,
+      "side_offset_cm": 102.9,
+      "max_speed_cm_s": 531.6,
+      "max_acceleration_cm_s2": 930.5,
+      "lookahead_frames": 3,
+      "response_time_sec": 0.333,
+      "avoidance_radius_cm": 154.8,
+      "avoidance_weight": 0.782,
+      "tactical_role": "receiver_mark"
+    },
+    {
+      "event_id": "event_009",
+      "type": "defend_follow",
+      "actor": "Player_07",
+      "start_t": 0.0,
+      "end_t": 10.0,
+      "target": "Player_03",
+      "positioning": "goal_side",
+      "follow_distance_cm": 198.5,
+      "side_offset_cm": -116.7,
+      "max_speed_cm_s": 512.1,
+      "max_acceleration_cm_s2": 877.8,
+      "lookahead_frames": 6,
+      "response_time_sec": 0.391,
+      "avoidance_radius_cm": 152.3,
+      "avoidance_weight": 0.601,
+      "tactical_role": "wide_mark"
+    },
+    {
+      "event_id": "event_010",
+      "type": "defend_follow",
+      "actor": "Player_08",
+      "start_t": 0.0,
+      "end_t": 10.0,
+      "target": "possession_owner",
+      "positioning": "goal_side",
+      "follow_distance_cm": 408.4,
+      "side_offset_cm": 218.0,
+      "max_speed_cm_s": 439.9,
+      "max_acceleration_cm_s2": 807.0,
+      "lookahead_frames": 7,
+      "response_time_sec": 0.406,
+      "avoidance_radius_cm": 126.0,
+      "avoidance_weight": 0.616,
+      "tactical_role": "cover_defender"
+    },
+    {
+      "event_id": "event_002",
+      "type": "shot",
+      "actor": "Player_01",
+      "start_t": 3.3,
+      "end_t": 4.2,
+      "target_loc": [
+        1900.0,
+        256.9,
+        90.0
+      ],
+      "arc_height_cm": 55.0
+    },
+    {
+      "event_id": "event_003",
+      "type": "move",
+      "actor": "Player_01",
+      "start_t": 4.2,
+      "end_t": 10.0,
+      "target_loc": [
+        1850.0,
+        256.9,
+        90.0
+      ],
+      "tactical_role": "shot_follow_through"
+    }
+  ]
+}

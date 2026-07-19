@@ -1,0 +1,25 @@
+{
+  "animation": {
+    "strict_action_assets": false,
+    "fallback_action": "jog",
+    "play_rate": 1.0,
+    "action_assets": {
+      "idle": "/Game/Characters/Mannequins/Anims/Unarmed/MM_Idle",
+      "jog": "/Game/Characters/Mannequins/Anims/Unarmed/Jog/MF_Unarmed_Jog_Fwd",
+      "dribble": null,
+      "pass": null,
+      "receive": null,
+      "shot": null,
+      "defend": null
+    },
+    "action_play_rates": {
+      "idle": 1.0,
+      "jog": 1.0,
+      "dribble": 1.0,
+      "pass": 1.0,
+      "receive": 1.0,
+      "shot": 1.0,
+      "defend": 1.0
+    }
+  }
+}

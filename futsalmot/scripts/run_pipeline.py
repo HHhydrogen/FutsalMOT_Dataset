@@ -563,6 +563,7 @@ def main() -> int:
                 (PROJECT_ROOT / "Saved" / "FutsalMOT" / "images_clean" / episode_id).resolve()
             )
         )
+        print("MRQ image pattern: <MRQ output dir>/cam_XX/000000.png .. 000299.png")
         if trajectory_validation_passed and not diagnostic_only and update_current_pointer:
             print("Current-run pointer: {}".format(CURRENT_RUN_POINTER))
             print("\nNext in Unreal Editor:")

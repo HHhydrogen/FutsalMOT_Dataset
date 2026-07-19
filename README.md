@@ -120,6 +120,17 @@ Saved/FutsalMOT/images_clean/<seq_id>/cam_03/
 Saved/FutsalMOT/images_clean/<seq_id>/cam_04/
 ```
 
+图片命名格式为 6 位补零帧号：
+
+```text
+Saved/FutsalMOT/images_clean/<seq_id>/cam_01/000000.png
+Saved/FutsalMOT/images_clean/<seq_id>/cam_01/000001.png
+...
+Saved/FutsalMOT/images_clean/<seq_id>/cam_01/000299.png
+```
+
+其他相机同理：`cam_02/000000.png` 到 `cam_02/000299.png`，`cam_03/000000.png` 到 `cam_03/000299.png`，`cam_04/000000.png` 到 `cam_04/000299.png`。
+
 也就是从第 1 步生成出来的同一个 `seq_id` 目录去接第 2 步渲染结果。
 
 如果 `update_current_pointer=true`，还会更新：

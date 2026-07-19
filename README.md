@@ -1,30 +1,30 @@
-# FutsalMOT Dataset Code
+# FutsalMOT 数据集代码
 
-This repository contains the Python code for the FutsalMOT Unreal Engine synthetic dataset pipeline. It is intended to live under an Unreal project at:
+这是 FutsalMOT Unreal Engine 合成数据集管线的代码仓库，存放位置约定为：
 
 ```text
 Content/FutsalMOT/code
 ```
 
-The full Unreal project assets, rendered images, and generated dataset outputs are not part of this code repository.
+仓库只包含 Python 代码和少量配置，不包含完整 UE 工程资产、渲染图片或最终数据集产物。
 
-## Current Scope
+## 当前范围
 
-The current pipeline generates short 4v4 outfield futsal episodes with no goalkeepers:
+当前管线生成的是 4v4 无守门员五人制足球回合：
 
-- Team A: `Player_01` to `Player_04`
-- Team B: `Player_05` to `Player_08`
-- Ball: `Ball_01`
-- Objects per frame: 9
-- Cameras: 4 fixed CineCameras
-- Timeline: 10 seconds, 30 FPS, 300 frames
-- Expected annotation records: `4 cameras * 300 frames = 1200`
+- A 队：`Player_01` 到 `Player_04`
+- B 队：`Player_05` 到 `Player_08`
+- 足球：`Ball_01`
+- 每帧对象数：9
+- 相机数：4 个固定 CineCamera
+- 时间轴：10 秒，30 FPS，300 帧
+- 预期标注记录数：`4 * 300 = 1200`
 
-The pipeline exports synchronized RGB metadata, tight player/ball bbox annotations, player actions, event/frame state annotations, possession metadata, and player skeleton 2D keypoints for pose-style training data.
+管线会导出同步的 RGB 元数据、tight bbox、动作时间轴、事件/帧状态标注、球权信息，以及球员骨骼 2D 关键点。
 
-## Public Entry Points
+## 公开入口
 
-Only three Python files in the repository root are public entry points:
+根目录只保留三个公开 `.py` 文件：
 
 ```text
 01_generate_trajectories.py
@@ -32,17 +32,17 @@ Only three Python files in the repository root are public entry points:
 03_check_labels.py
 ```
 
-All implementation scripts live under `futsalmot/scripts/` and are considered internal.
+真正的实现脚本都在 `futsalmot/scripts/` 下，属于内部实现。
 
-## Step 1: Generate Trajectories On Windows
+## 第 1 步：Windows 生成轨迹
 
-Edit the top-level generation config first:
+先修改总配置文件：
 
 ```text
 configs/pipeline_config.json
 ```
 
-The config intentionally exposes only the most important controls:
+这个总配置只保留少量关键参数：
 
 ```json
 {
@@ -58,110 +58,120 @@ The config intentionally exposes only the most important controls:
 }
 ```
 
-Run from this `code` directory:
+默认运行：
 
 ```powershell
 py .\01_generate_trajectories.py
 ```
 
-Command-line overrides are still supported for quick experiments:
+如果需要临时覆盖，也可以传命令行参数：
 
 ```powershell
 py .\01_generate_trajectories.py --seed 1 --template 1
 ```
 
-Available templates:
+可用模板：
 
-| ID | Description |
+| ID | 内容 |
 |---:|---|
-| 1 | 4v4 solo dribble and shot, with support, anchor, and marking movement |
-| 2 | 4v4 dribble, pass, receive, with support run and defensive follow |
-| 3 | 4v4 pass, receive, dribble, shot, with weak-side support and cover |
+| 1 | 4v4 单人带球射门，其他队员进行宽度支援、锚点保护和盯防 |
+| 2 | 4v4 带球-传球-接球，包含接应跑位和防守跟随 |
+| 3 | 4v4 传球-接球-带球-射门，包含弱侧支援和纵深保护 |
 
-This step runs the Windows-side pipeline:
-
-```text
-generate random episode
--> validate episode
--> compile dense trajectory
--> enhance yaw/action/ball state/contact metadata
--> validate dense trajectory
--> generate event/frame-state annotations
--> update configs/pipeline_current.json
-```
-
-Key outputs:
+这一阶段会依次执行：
 
 ```text
-configs/runs/<run_id>/<seq_id>.json
-configs/runs/<run_id>/<seq_id>_a32.json
-configs/runs/<run_id>/<seq_id>_a33.json
-configs/runs/<run_id>/event_annotations/
-configs/runs/<run_id>/pipeline_run_report.json
-configs/pipeline_current.json
+生成事件回合
+→ 验证事件
+→ 编译密集轨迹
+→ 增强 yaw / action / ball state / contact 信息
+→ 验证密集轨迹
+→ 生成事件与逐帧状态标注
 ```
 
-`run_id` is generated automatically from UTC time, seed, and template, for example:
+输出会进入唯一 run 目录：
+
+```text
+configs/runs/<run_id>/
+```
+
+示例：
 
 ```text
 configs/runs/run_20260719_120102_seed0001_t1/
 ```
 
-`configs/pipeline_current.json` points Unreal scripts to the latest validated run when `update_current_pointer` is true.
+其中会保存：
 
-## Step 2: Run In Unreal Editor
+```text
+<seq_id>.json
+<seq_id>_a32.json
+<seq_id>_a33.json
+event_annotations/
+pipeline_run_report.json
+```
 
-Run from the Unreal Editor Python console:
+如果 `update_current_pointer=true`，还会更新：
+
+```text
+configs/pipeline_current.json
+```
+
+## 第 2 步：在 Unreal Editor 中运行
+
+在 Unreal Editor 的 Python 控制台中执行：
 
 ```python
 py "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/02_run_unreal.py"
 ```
 
-This step runs read-only preflight checks first, then builds/updates the Level Sequence and exports bbox/keypoint annotations.
+这个步骤会先做只读 preflight，再构建 Sequencer 并导出标注。
 
-Expected core output:
+核心输出：
 
 ```text
 Saved/FutsalMOT/annotations/objects_bbox_2d_clean_<seq_id>.json
 Saved/FutsalMOT/annotations/objects_bbox_2d_clean_<seq_id>.jsonl
 ```
 
-For each player object, annotation records include:
+对每个球员对象，标注中会包含：
 
 ```text
 bbox_2d_clean
 bbox_xyxy_clean
+keypoints_2d
+keypoints_2d_yolo
 ```
 
-`keypoints_2d_yolo` uses the YOLO pose-style flat format:
+`keypoints_2d_yolo` 采用 YOLO pose 风格的扁平格式：
 
 ```text
 x_norm, y_norm, visibility, x_norm, y_norm, visibility, ...
 ```
 
-Visibility values:
+visibility 定义：
 
 ```text
-0 = missing or behind camera
-1 = in front of camera but outside image
-2 = inside image
+0 = 缺失或在相机后方
+1 = 在相机前方但不在图像内
+2 = 在图像内
 ```
 
-## Step 3: Check Labels On Windows
+## 第 3 步：Windows 检查标注
 
-After MRQ renders images to `Saved/FutsalMOT/images_clean/<seq_id>/`, run:
+MRQ 渲染完成后，执行：
 
 ```powershell
 py .\03_check_labels.py --annotation "D:/projects/FustalMOT_UEDataset/Saved/FutsalMOT/annotations/objects_bbox_2d_clean_<seq_id>.json"
 ```
 
-To draw keypoints on overlay images:
+如果要在 overlay 上画出关键点：
 
 ```powershell
 py .\03_check_labels.py --draw-keypoints
 ```
 
-Expected outputs:
+预期输出：
 
 ```text
 Saved/FutsalMOT/overlay_objects_bbox_<seq_id>/
@@ -170,7 +180,7 @@ Saved/FutsalMOT/labels_mot_clean/<seq_id>/
 Saved/FutsalMOT/annotations/manifest_<seq_id>.json
 ```
 
-Expected checks:
+预期检查结果：
 
 ```text
 records = 1200
@@ -180,23 +190,24 @@ CHECK PASSED
 ALL DONE
 ```
 
-## One-Time 8 Player Scene Setup
+## 8 人场景初始化
 
-If the UE level still contains only `Player_01` to `Player_04`, run this once from the Unreal Editor Python console:
+如果 UE 场景里还只有 `Player_01` 到 `Player_04`，可以在 Unreal Editor Python 控制台中运行一次：
 
 ```python
 py "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/futsalmot/scripts/ue_setup_8_players.py"
 ```
 
-The script creates missing `Player_05` to `Player_08` from existing player templates. It does not auto-save the level; inspect the result and save manually.
+它会从已有球员模板补齐 `Player_05` 到 `Player_08`，不会自动保存关卡。
 
-## Repository Layout
+## 目录结构
 
 ```text
 code/
 ├─ 01_generate_trajectories.py
 ├─ 02_run_unreal.py
 ├─ 03_check_labels.py
+├─ README.md
 ├─ configs/
 │  ├─ pipeline_config.json
 │  ├─ pipeline_current.json
@@ -206,27 +217,27 @@ code/
 │  ├─ pipeline/
 │  ├─ scripts/
 │  └─ ue/
-├─ pyproject.toml
-└─ README.md
+└─ pyproject.toml
 ```
 
-Important modules:
+## 主要模块
 
-- `futsalmot/core/paths.py`: canonical code, config, project, and output paths.
-- `futsalmot/core/io.py`: atomic JSON/text writes and JSON reading.
-- `futsalmot/core/process.py`: subprocess execution with log capture.
-- `futsalmot/pipeline/constants.py`: template names and internal script paths.
-- `futsalmot/scripts/`: internal implementations behind the three public entry points.
+- `futsalmot/core/paths.py`：统一代码、配置、项目和输出路径。
+- `futsalmot/core/io.py`：原子 JSON / 文本读写。
+- `futsalmot/core/process.py`：带日志的子进程执行工具。
+- `futsalmot/pipeline/constants.py`：模板名和内部脚本路径。
+- `futsalmot/scripts/`：三个公开入口背后的内部实现。
 
-## Validation Status
+## 当前验证状态
 
-Current smoke checks pass at the code level:
+代码层面的 smoke check 已通过：
 
 ```text
 compileall: PASS
+episode validation: PASS, warnings=0, errors=0
 trajectory validation: WARNING, warnings=60, errors=0
 ```
 
-The trajectory warnings are expected for the current seed/template baseline and are not validation errors.
+这些轨迹 warning 是当前基线的一部分，不是错误。
 
-UE runtime validation must be performed inside Unreal Editor because the `unreal` Python module is not available in normal Windows Python.
+UE 运行结果必须在 Unreal Editor 中实际验证，因为普通 Windows Python 不提供 `unreal` 模块。

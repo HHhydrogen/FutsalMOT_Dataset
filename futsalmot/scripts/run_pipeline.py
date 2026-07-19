@@ -570,7 +570,8 @@ def main() -> int:
             print('  py "{}"'.format((SCRIPT_DIR / "02_run_unreal.py").resolve().as_posix()))
             print("\nAfter MRQ render, run:")
             print(
-                '  py 03_check_labels.py --annotation "{}"'.format(
+                '  py "{}" --annotation "{}"'.format(
+                    (SCRIPT_DIR / "03_check_labels.py").resolve().as_posix(),
                     annotation_json.as_posix()
                 )
             )

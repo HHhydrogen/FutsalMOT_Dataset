@@ -187,6 +187,12 @@ MRQ 渲染完成后，执行：
 py .\03_check_labels.py --annotation "D:/projects/FustalMOT_UEDataset/Saved/FutsalMOT/annotations/objects_bbox_2d_clean_<seq_id>.json"
 ```
 
+如果当前 PowerShell 位于 UE 项目根目录 `D:\projects\FustalMOT_UEDataset`，请使用完整脚本路径：
+
+```powershell
+py "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/03_check_labels.py" --annotation "D:/projects/FustalMOT_UEDataset/Saved/FutsalMOT/annotations/objects_bbox_2d_clean_<seq_id>.json"
+```
+
 如果要在 overlay 上画出关键点：
 
 ```powershell

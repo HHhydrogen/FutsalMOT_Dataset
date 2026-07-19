@@ -24,7 +24,6 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import os
 import shutil
 import sys
 from pathlib import Path
@@ -32,10 +31,12 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from PIL import Image, ImageDraw, ImageFont, UnidentifiedImageError
 
+from futsalmot.core.io import read_json, write_json_atomic, write_text_atomic
+from futsalmot.core.paths import CODE_DIR, CURRENT_RUN_POINTER, PROJECT_ROOT
+
 SCRIPT_VERSION = "A1_5_POSTPROCESS_V2"
-SCRIPT_DIR = Path(__file__).resolve().parent
-DEFAULT_PROJECT_ROOT = SCRIPT_DIR.parents[2]
-CURRENT_RUN_POINTER = SCRIPT_DIR / "configs" / "pipeline_current.json"
+SCRIPT_DIR = CODE_DIR
+DEFAULT_PROJECT_ROOT = PROJECT_ROOT
 
 
 class PostprocessError(RuntimeError):
@@ -46,33 +47,10 @@ def normalize_path_text(path: Path) -> str:
     return path.resolve().as_posix()
 
 
-def atomic_write_text(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp.{}".format(os.getpid()))
-    try:
-        with tmp.open("w", encoding="utf-8", newline="\n") as f:
-            f.write(text)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(str(tmp), str(path))
-    finally:
-        if tmp.exists():
-            try:
-                tmp.unlink()
-            except OSError:
-                pass
-
-
-def atomic_write_json(path: Path, data: Any) -> None:
-    raw = json.dumps(data, ensure_ascii=False, indent=2, allow_nan=False)
-    atomic_write_text(path, raw + "\n")
-
-
 def default_annotation_path(project_root: Path) -> Path:
     if CURRENT_RUN_POINTER.is_file():
         try:
-            with CURRENT_RUN_POINTER.open("r", encoding="utf-8-sig") as f:
-                pointer = json.load(f)
+            pointer = read_json(CURRENT_RUN_POINTER)
             seq_id = str(pointer.get("seq_id", pointer.get("episode_id", ""))).strip()
             if seq_id:
                 return (
@@ -146,8 +124,7 @@ def load_annotation_file(path: Path) -> Tuple[Dict[str, Any], List[Dict[str, Any
     if not path.is_file():
         raise PostprocessError("找不到标注文件：{}".format(path))
     try:
-        with path.open("r", encoding="utf-8-sig") as f:
-            data = json.load(f)
+        data = read_json(path)
     except json.JSONDecodeError as exc:
         raise PostprocessError(
             "标注 JSON 解析失败：{} line={} column={}".format(
@@ -655,7 +632,7 @@ def main() -> int:
                         mot_lines.append(mot)
 
                 yolo_path = yolo_root / camera_id / "{:06d}.txt".format(frame_id)
-                atomic_write_text(
+                write_text_atomic(
                     yolo_path,
                     ("\n".join(yolo_lines) + "\n") if yolo_lines else "",
                 )
@@ -697,7 +674,7 @@ def main() -> int:
                 )
 
             gt_path = mot_root / camera_id / "gt" / "gt.txt"
-            atomic_write_text(gt_path, ("\n".join(mot_lines) + "\n") if mot_lines else "")
+            write_text_atomic(gt_path, ("\n".join(mot_lines) + "\n") if mot_lines else "")
             mot_stats[camera_id] = len(mot_lines)
 
         manifest = {
@@ -718,7 +695,7 @@ def main() -> int:
             "expected_records": expected_records,
             "records": manifest_records,
         }
-        atomic_write_json(manifest_path, manifest)
+        write_json_atomic(manifest_path, manifest)
 
         # Final output counts.
         final_errors: List[str] = []

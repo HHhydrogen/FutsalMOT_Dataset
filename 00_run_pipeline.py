@@ -27,25 +27,26 @@ No trajectory-validation ERROR is silently accepted by default.
 from __future__ import annotations
 
 import argparse
-import hashlib
-import json
-import os
 import shutil
-import subprocess
 import sys
-import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence
+
+from futsalmot.core.hashing import sha256_file
+from futsalmot.core.io import read_json, write_json_atomic
+from futsalmot.core.paths import (
+    AGENT_OUTPUT_DIR,
+    CODE_DIR,
+    CURRENT_RUN_POINTER,
+    GENERATED_EVENT_DIR,
+    PROJECT_ROOT,
+)
+from futsalmot.core.process import run_logged_step
+from futsalmot.pipeline.constants import TEMPLATE_NAMES, WINDOWS_PIPELINE_SCRIPTS
 
 SCRIPT_VERSION = "RUN_SEED_8P_V4"
-SCRIPT_DIR = Path(__file__).resolve().parent
-CURRENT_RUN_POINTER = SCRIPT_DIR / "configs" / "pipeline_current.json"
-TEMPLATE_NAMES = {
-    1: "solo_dribble_shot_4v4",
-    2: "dribble_pass_receive_4v4",
-    3: "pass_receive_dribble_shot_4v4",
-}
+SCRIPT_DIR = CODE_DIR
 
 
 class PipelineError(RuntimeError):
@@ -56,106 +57,9 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def sha256_file(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as f:
-        for chunk in iter(lambda: f.read(1024 * 1024), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
-def atomic_write_json(path: Path, data: Dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp.{}".format(os.getpid()))
-    try:
-        with tmp.open("w", encoding="utf-8", newline="\n") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2, allow_nan=False)
-            f.write("\n")
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(str(tmp), str(path))
-    finally:
-        if tmp.exists():
-            try:
-                tmp.unlink()
-            except OSError:
-                pass
-
-
 def require_file(path: Path, label: str) -> None:
     if not path.is_file() or path.stat().st_size <= 0:
         raise PipelineError("{} 未生成或为空：{}".format(label, path))
-
-
-def format_command(cmd: Sequence[object]) -> str:
-    parts: List[str] = []
-    for value in cmd:
-        text = str(value)
-        if any(ch.isspace() for ch in text) or '"' in text:
-            text = '"{}"'.format(text.replace('"', '\\"'))
-        parts.append(text)
-    return " ".join(parts)
-
-
-def tail_lines(text: str, count: int = 20) -> List[str]:
-    return [line.rstrip() for line in text.splitlines() if line.strip()][-count:]
-
-
-def run_step(
-    label: str,
-    cmd: Sequence[object],
-    *,
-    timeout: int,
-    log_dir: Path,
-) -> Tuple[int, str, str, float]:
-    print("\n[RUN] {}".format(label))
-    print("  {}".format(format_command(cmd)))
-    start = time.time()
-    try:
-        completed = subprocess.run(
-            [str(item) for item in cmd],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-            check=False,
-        )
-        rc = int(completed.returncode)
-        stdout = completed.stdout or ""
-        stderr = completed.stderr or ""
-    except subprocess.TimeoutExpired as exc:
-        rc = 124
-        stdout = exc.stdout or ""
-        stderr = exc.stderr or ""
-        if isinstance(stdout, bytes):
-            stdout = stdout.decode("utf-8", errors="replace")
-        if isinstance(stderr, bytes):
-            stderr = stderr.decode("utf-8", errors="replace")
-    except OSError as exc:
-        rc = 127
-        stdout = ""
-        stderr = str(exc)
-
-    elapsed = time.time() - start
-    log_dir.mkdir(parents=True, exist_ok=True)
-    safe = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in label)
-    (log_dir / "{}_stdout.log".format(safe)).write_text(stdout, encoding="utf-8")
-    (log_dir / "{}_stderr.log".format(safe)).write_text(stderr, encoding="utf-8")
-
-    if rc == 0:
-        print("  OK ({:.1f}s)".format(elapsed))
-    else:
-        print("  FAILED (rc={}, {:.1f}s)".format(rc, elapsed))
-        if stdout.strip():
-            print("  --- stdout tail ---")
-            for line in tail_lines(stdout):
-                print("    {}".format(line))
-        if stderr.strip():
-            print("  --- stderr tail ---", file=sys.stderr)
-            for line in tail_lines(stderr):
-                print("    {}".format(line), file=sys.stderr)
-    return rc, stdout, stderr, elapsed
 
 
 def resolve_output_dir(raw: Optional[str], episode_id: str) -> Path:
@@ -164,7 +68,7 @@ def resolve_output_dir(raw: Optional[str], episode_id: str) -> Path:
         if not path.is_absolute():
             path = SCRIPT_DIR / path
         return path.resolve()
-    return (SCRIPT_DIR / "_agent_test_outputs" / "pipeline_{}".format(episode_id)).resolve()
+    return (AGENT_OUTPUT_DIR / "pipeline_{}".format(episode_id)).resolve()
 
 
 def snapshot_artifacts(debug_dir: Path, paths: Sequence[Path]) -> None:
@@ -244,7 +148,7 @@ def main() -> int:
     output_dir = resolve_output_dir(args.output_dir, episode_id)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    generated_dir = SCRIPT_DIR / "configs" / "events" / "generated"
+    generated_dir = GENERATED_EVENT_DIR
     generated_dir.mkdir(parents=True, exist_ok=True)
     event_config = generated_dir / "{}.json".format(episode_id)
     a32_config = generated_dir / "{}_a32.json".format(episode_id)
@@ -280,18 +184,18 @@ def main() -> int:
             attempts.append(attempt_record)
 
             def step(label: str, cmd: Sequence[object]) -> int:
-                rc, _, _, elapsed = run_step(
+                result = run_logged_step(
                     label, cmd, timeout=args.timeout, log_dir=logs_dir
                 )
                 attempt_steps.append(
                     {
                         "label": label,
                         "command": [str(item) for item in cmd],
-                        "returncode": rc,
-                        "elapsed_seconds": round(elapsed, 3),
+                        "returncode": result.returncode,
+                        "elapsed_seconds": round(result.elapsed_seconds, 3),
                     }
                 )
-                return rc
+                return result.returncode
 
             remove_artifacts(artifacts)
 
@@ -299,7 +203,7 @@ def main() -> int:
                 "01_A3_4_generate",
                 [
                     sys.executable,
-                    SCRIPT_DIR / "11_generate_random_episode.py",
+                    SCRIPT_DIR / WINDOWS_PIPELINE_SCRIPTS["generate_episode"],
                     "--seed",
                     seed,
                     "--template",
@@ -320,7 +224,7 @@ def main() -> int:
 
             event_cmd: List[object] = [
                 sys.executable,
-                SCRIPT_DIR / "10_validate_episode.py",
+                SCRIPT_DIR / WINDOWS_PIPELINE_SCRIPTS["validate_episode"],
                 "--config",
                 event_config,
                 "--output-dir",
@@ -341,7 +245,7 @@ def main() -> int:
                 "03_A3_2_compile",
                 [
                     sys.executable,
-                    SCRIPT_DIR / "12_compile_trajectory.py",
+                    SCRIPT_DIR / WINDOWS_PIPELINE_SCRIPTS["compile_trajectory"],
                     "--config",
                     event_config,
                     "--output",
@@ -360,7 +264,7 @@ def main() -> int:
                 "04_A3_3_enhance",
                 [
                     sys.executable,
-                    SCRIPT_DIR / "13_enhance_trajectory.py",
+                    SCRIPT_DIR / WINDOWS_PIPELINE_SCRIPTS["enhance_trajectory"],
                     "--config",
                     event_config,
                     "--compiled-config",
@@ -386,7 +290,7 @@ def main() -> int:
 
             trajectory_cmd: List[object] = [
                 sys.executable,
-                SCRIPT_DIR / "14_validate_trajectory.py",
+                SCRIPT_DIR / WINDOWS_PIPELINE_SCRIPTS["validate_trajectory"],
                 "--config",
                 a33_config,
                 "--output-dir",
@@ -426,11 +330,11 @@ def main() -> int:
 
         event_annotations_dir = output_dir / "event_annotations"
         annotation_logs = output_dir / "final_logs"
-        rc, _, _, elapsed = run_step(
+        annotation_result = run_logged_step(
             "06_A3_3C_event_annotations",
             [
                 sys.executable,
-                SCRIPT_DIR / "31_generate_event_annotations.py",
+                SCRIPT_DIR / WINDOWS_PIPELINE_SCRIPTS["event_annotations"],
                 "--episode-config",
                 event_config,
                 "--a3-config",
@@ -444,11 +348,11 @@ def main() -> int:
         )
         final_step = {
             "label": "06_A3_3C_event_annotations",
-            "returncode": rc,
-            "elapsed_seconds": round(elapsed, 3),
+            "returncode": annotation_result.returncode,
+            "elapsed_seconds": round(annotation_result.elapsed_seconds, 3),
         }
-        if rc != 0:
-            raise PipelineError("A3.3c 事件标注失败，rc={}".format(rc))
+        if annotation_result.returncode != 0:
+            raise PipelineError("A3.3c 事件标注失败，rc={}".format(annotation_result.returncode))
 
         expected_events = event_annotations_dir / "events_{}.json".format(episode_id)
         expected_states = event_annotations_dir / "frame_states_{}.jsonl".format(episode_id)
@@ -460,8 +364,7 @@ def main() -> int:
         ):
             require_file(path, label)
 
-        with event_config.open("r", encoding="utf-8-sig") as f:
-            event_data = json.load(f)
+        event_data = read_json(event_config)
         generator_meta = event_data.get("generator", {})
         players_meta = event_data.get("players", {})
         team_counts: Dict[str, int] = {}
@@ -507,18 +410,17 @@ def main() -> int:
             "attempts": attempts,
             "final_step": final_step,
         }
-        atomic_write_json(output_dir / "pipeline_run_report.json", run_state)
+        write_json_atomic(output_dir / "pipeline_run_report.json", run_state)
         if trajectory_validation_passed and not diagnostic_only:
-            atomic_write_json(CURRENT_RUN_POINTER, run_state)
+            write_json_atomic(CURRENT_RUN_POINTER, run_state)
         else:
             print(
                 "[WARNING] 诊断输出未更新 configs/pipeline_current.json。",
                 file=sys.stderr,
             )
 
-        project_root = SCRIPT_DIR.parents[2]
         annotation_json = (
-            project_root
+            PROJECT_ROOT
             / "Saved"
             / "FutsalMOT"
             / "annotations"
@@ -562,7 +464,7 @@ def main() -> int:
             "error": str(exc),
             "attempts": attempts,
         }
-        atomic_write_json(output_dir / "pipeline_run_report.json", failure)
+        write_json_atomic(output_dir / "pipeline_run_report.json", failure)
         print("\n" + "=" * 76, file=sys.stderr)
         print("PIPELINE FAILED", file=sys.stderr)
         print("[ERROR] {}".format(exc), file=sys.stderr)

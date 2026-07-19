@@ -558,6 +558,11 @@ def main() -> int:
         print("Event config: {}".format(event_config))
         print("A3.3 config: {}".format(a33_config))
         print("Event annotations: {}".format(event_annotations_dir))
+        print(
+            "MRQ output dir: {}".format(
+                (PROJECT_ROOT / "Saved" / "FutsalMOT" / "images_clean" / episode_id).resolve()
+            )
+        )
         if trajectory_validation_passed and not diagnostic_only and update_current_pointer:
             print("Current-run pointer: {}".format(CURRENT_RUN_POINTER))
             print("\nNext in Unreal Editor:")

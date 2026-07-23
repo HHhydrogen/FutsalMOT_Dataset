@@ -122,6 +122,12 @@ class PPOTrainer:
         # ── Video callback ───────────────────────────────────────
         self.video_callback: Callable | None = None
 
+        # ── Rollout state (avoids resetting mid-episode) ────────
+        self._current_obs: np.ndarray | None = None
+        self._current_episode_reward: float = 0.0
+        self._current_episode_length: int = 0
+        self._rollout_started: bool = False
+
     def set_video_callback(self, callback: Callable) -> None:
         """Set a callback for recording evaluation videos."""
         self.video_callback = callback
@@ -158,17 +164,33 @@ class PPOTrainer:
     def collect_rollout(
         self, n_steps: int
     ) -> dict[str, torch.Tensor]:
-        """Collect a rollout of n_steps from the environment."""
+        """Collect a rollout of n_steps from the environment.
+
+        Maintains rollout state across calls so episodes are not
+        artificially truncated at rollout boundaries. Only resets when:
+        - The trainer first starts collecting
+        - The previous step ended with terminated=True
+        - The previous step ended with truncated=True
+        """
         obs_list: list[np.ndarray] = []
         actions_list: list[np.ndarray] = []
         rewards_list: list[float] = []
-        dones_list: list[bool] = []
+        terminated_list: list[bool] = []
+        truncated_list: list[bool] = []
         values_list: list[float] = []
         log_probs_list: list[float] = []
+        next_obs_list: list[np.ndarray] = []
 
-        obs, info = self.env.reset()
         episode_rewards: list[float] = []
-        current_episode_reward = 0.0
+
+        # Reset only if needed
+        if not self._rollout_started or self._current_obs is None:
+            self._current_obs, info = self.env.reset()
+            self._current_episode_reward = 0.0
+            self._current_episode_length = 0
+            self._rollout_started = True
+
+        obs = self._current_obs
 
         for step in range(n_steps):
             obs_tensor = torch.from_numpy(obs).float().unsqueeze(0).to(self.device)
@@ -187,36 +209,47 @@ class PPOTrainer:
                 action.squeeze(0).cpu().numpy()
             )
             rewards_list.append(float(reward))
-            dones_list.append(terminated or truncated)
-            current_episode_reward += float(reward)
+            terminated_list.append(bool(terminated))
+            truncated_list.append(bool(truncated))
+            next_obs_list.append(next_obs)
 
-            if dones_list[-1]:
-                episode_rewards.append(current_episode_reward)
-                current_episode_reward = 0.0
+            self._current_episode_reward += float(reward)
+            self._current_episode_length += 1
 
-            obs = next_obs if not dones_list[-1] else self.env.reset()[0]
+            if terminated or truncated:
+                episode_rewards.append(self._current_episode_reward)
+                self._current_episode_reward = 0.0
+                self._current_episode_length = 0
+                obs, _ = self.env.reset()
+            else:
+                obs = next_obs
 
-        # Save last observation and termination state for correct GAE bootstrap
-        last_obs = obs.copy()  # obs is already next_obs from the last step
-        last_terminated = bool(dones_list[-1]) if dones_list else False
+        # Save state for next rollout call
+        self._current_obs = obs
 
         # Convert to tensors
+        obs_arr = np.array(obs_list)
+        next_obs_arr = np.array(next_obs_list)
+
         data = {
-            "obs": torch.FloatTensor(np.array(obs_list)).to(self.device),
+            "obs": torch.FloatTensor(obs_arr).to(self.device),
             "actions": torch.FloatTensor(np.array(actions_list)).to(self.device),
             "rewards": torch.FloatTensor(rewards_list).to(self.device),
-            "dones": torch.BoolTensor(dones_list).to(self.device),
+            "terminated": torch.BoolTensor(terminated_list).to(self.device),
+            "truncated": torch.BoolTensor(truncated_list).to(self.device),
+            "dones": torch.BoolTensor(
+                [t or tr for t, tr in zip(terminated_list, truncated_list)]
+            ).to(self.device),
             "values": torch.FloatTensor(values_list).to(self.device),
             "log_probs": torch.FloatTensor(log_probs_list).to(self.device),
-            "last_obs": torch.FloatTensor(last_obs).to(self.device),
-            "last_terminated": last_terminated,
         }
 
-        # Compute raw advantages with GAE (no normalization inside)
+        # Compute raw advantages with GAE — uses separated terminated/truncated
         raw_advantages = self._compute_gae(
-            data["rewards"], data["values"], data["dones"],
-            last_obs_tensor=torch.FloatTensor(last_obs).to(self.device),
-            last_terminated=last_terminated,
+            data["rewards"], data["values"],
+            data["terminated"], data["truncated"],
+            last_obs_tensor=torch.FloatTensor(obs).to(self.device),
+            last_terminated=terminated_list[-1] if terminated_list else False,
         )
         data["raw_advantages"] = raw_advantages
         data["returns"] = raw_advantages + data["values"]
@@ -227,20 +260,23 @@ class PPOTrainer:
         self,
         rewards: torch.Tensor,
         values: torch.Tensor,
-        dones: torch.Tensor,
+        terminated: torch.Tensor,
+        truncated: torch.Tensor,
         last_obs_tensor: torch.Tensor,
         last_terminated: bool,
     ) -> torch.Tensor:
         """Compute GAE — delegates to standalone compute_gae().
 
-        Builds next_values tensor using the bootstrap value, then calls
-        the pure-function compute_gae() which never accesses env.
+        Uses separate terminated and truncated:
+        - terminated=True → bootstrap_mask=0 (no bootstrap)
+        - truncated=True or rollout boundary → uses critic bootstrap
+        - episode_ended = terminated OR truncated → stops GAE accumulation
         """
         gamma = self.cfg["gamma"]
         lam = self.cfg["gae_lambda"]
         n = len(rewards)
 
-        # Bootstrap value: if terminated, value is 0; otherwise use critic
+        # Bootstrap value for the last step
         with torch.no_grad():
             if last_terminated:
                 final_value = 0.0
@@ -249,17 +285,19 @@ class PPOTrainer:
                     last_obs_tensor.unsqueeze(0)
                 ).squeeze(0).item()
 
-        # next_values[t] = V(s_{t+1}) from value[t+1] or bootstrap final_value
         next_values = torch.cat(
             [values[1:], torch.tensor([final_value], device=self.device)]
         )
+
+        # episode_ended = terminated OR truncated (stops GAE accumulation)
+        episode_ended = terminated | truncated
 
         return compute_gae(
             rewards=rewards,
             values=values,
             next_values=next_values,
-            terminated=dones,
-            episode_ended=dones,
+            terminated=terminated,
+            episode_ended=episode_ended,
             gamma=gamma,
             gae_lambda=lam,
         )

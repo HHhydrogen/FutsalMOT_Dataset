@@ -24,10 +24,12 @@ def run(args: argparse.Namespace, paths: ProjectPaths) -> int:
 
     if args.train_cmd == "bc":
         import rl_02_train_bc  # type: ignore[import-untyped]
+
         return rl_02_train_bc.main()
     elif args.train_cmd == "ppo":
         import rl_04_train_ppo  # type: ignore[import-untyped]
+
         return rl_04_train_ppo.main()
 
-    print("Unknown train command: {}".format(args.train_cmd))
+    print(f"Unknown train command: {args.train_cmd}")
     return 1

@@ -91,6 +91,7 @@ def run_ablation_ppo_scratch(
     src_curve = log_dir / "reward_curve.png"
     if src_curve.is_file():
         import shutil
+
         shutil.copy2(str(src_curve), str(output_dir / "ppo_scratch_reward_curve.png"))
 
     # Evaluate
@@ -226,7 +227,9 @@ def _write_ablation_report(
     env.close()
     scratch_pos = np.array(scratch_pos_list, dtype=np.float32)
     results["ppo_from_scratch"] = compute_policy_metrics(
-        scratch_pos, target_pos, all_player_positions=other_pos,
+        scratch_pos,
+        target_pos,
+        all_player_positions=other_pos,
     )
 
     # BC-init
@@ -247,7 +250,9 @@ def _write_ablation_report(
     env.close()
     bc_init_pos = np.array(bc_pos_list, dtype=np.float32)
     results["ppo_bc_init"] = compute_policy_metrics(
-        bc_init_pos, target_pos, all_player_positions=other_pos,
+        bc_init_pos,
+        target_pos,
+        all_player_positions=other_pos,
     )
 
     # Generate Markdown
@@ -286,8 +291,12 @@ def _write_ablation_report(
     bc_init_mark = results.get("ppo_bc_init", {}).get("mean_marking_distance_cm", 0)
 
     lines.append(f"- PPO from scratch OOB: {scratch_oob} vs BC-init OOB: {bc_init_oob}")
-    lines.append(f"- PPO from scratch collisions: {scratch_coll} vs BC-init collisions: {bc_init_coll}")
-    lines.append(f"- PPO from scratch marking: {scratch_mark:.1f}cm vs BC-init marking: {bc_init_mark:.1f}cm")
+    lines.append(
+        f"- PPO from scratch collisions: {scratch_coll} vs BC-init collisions: {bc_init_coll}"
+    )
+    lines.append(
+        f"- PPO from scratch marking: {scratch_mark:.1f}cm vs BC-init marking: {bc_init_mark:.1f}cm"
+    )
 
     if bc_init_oob <= scratch_oob and bc_init_coll <= scratch_coll:
         lines.append("- **BC initialization improves training stability.**")

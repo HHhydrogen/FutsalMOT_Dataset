@@ -68,8 +68,10 @@ def _compute_trajectory_metrics(
 
         # Turn angle
         if i > 1:
-            v1 = (positions[i - 1][0] - positions[i - 2][0],
-                  positions[i - 1][1] - positions[i - 2][1])
+            v1 = (
+                positions[i - 1][0] - positions[i - 2][0],
+                positions[i - 1][1] - positions[i - 2][1],
+            )
             v2 = (x - positions[i - 1][0], y - positions[i - 1][1])
             dot = v1[0] * v2[0] + v1[1] * v2[1]
             cross = v1[0] * v2[1] - v1[1] * v2[0]
@@ -80,7 +82,9 @@ def _compute_trajectory_metrics(
     return {
         "out_of_bounds_count": out_of_bounds,
         "collision_count": collisions,
-        "minimum_player_distance_cm": float(min_player_dist) if min_player_dist != float("inf") else None,
+        "minimum_player_distance_cm": float(min_player_dist)
+        if min_player_dist != float("inf")
+        else None,
         "total_distance_cm": total_dist,
         "max_speed_cm_s": max_speed,
         "speed_warning_count": speed_warnings,

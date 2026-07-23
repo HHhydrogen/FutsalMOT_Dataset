@@ -32,9 +32,7 @@ def rollout_episode(
     # Storage — capture initial position from frame 0
     agent_id = env.agent_id
     init_pos = info.get("all_positions", {}).get(agent_id, (0.0, 0.0))
-    agent_positions: list[tuple[float, float]] = [
-        (float(init_pos[0]), float(init_pos[1]))
-    ]
+    agent_positions: list[tuple[float, float]] = [(float(init_pos[0]), float(init_pos[1]))]
     agent_velocities: list[tuple[float, float]] = [(0.0, 0.0)]
     rewards: list[float] = []
     actions_list: list[np.ndarray] = []
@@ -48,8 +46,10 @@ def rollout_episode(
         next_obs, reward, terminated, truncated, info = env.step(action)
 
         agent_positions.append(
-            (float(info.get("all_positions", {}).get(agent_id, (0, 0))[0]),
-             float(info.get("all_positions", {}).get(agent_id, (0, 0))[1]))
+            (
+                float(info.get("all_positions", {}).get(agent_id, (0, 0))[0]),
+                float(info.get("all_positions", {}).get(agent_id, (0, 0))[1]),
+            )
         )
         agent_velocities.append(info.get("agent_velocity", (0.0, 0.0)))
         rewards.append(float(reward))

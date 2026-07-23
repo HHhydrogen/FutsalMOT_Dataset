@@ -1,4 +1,5 @@
 """FutsalMOT-RL exceptions hierarchy."""
+
 from __future__ import annotations
 
 

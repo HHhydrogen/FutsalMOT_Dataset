@@ -54,9 +54,7 @@ def export_demo_from_a33(
     # Get velocities
     all_positions_3d = {pid: [(x, y, 0.0) for x, y in pts] for pid, pts in all_positions_2d.items()}
     all_velocities = get_player_velocities(all_positions_3d, FPS)
-    ball_velocities = get_ball_velocities(
-        [(x, y, 0.0) for x, y in ball_positions_2d], FPS
-    )
+    ball_velocities = get_ball_velocities([(x, y, 0.0) for x, y in ball_positions_2d], FPS)
 
     agent_velocities = all_velocities.get(agent_id, [(0.0, 0.0)] * (len(agent_positions) - 1))
     target_velocities = all_velocities.get(target_id, [(0.0, 0.0)] * (len(target_positions) - 1))
@@ -187,12 +185,14 @@ def build_demo_index(
     }
 
     for entry in demo_entries:
-        index["demos"].append({
-            "seq_id": entry["seq_id"],
-            "path": entry["demo_path"],
-            "frames": entry["transitions"],
-            "source_run": entry["source_config"],
-        })
+        index["demos"].append(
+            {
+                "seq_id": entry["seq_id"],
+                "path": entry["demo_path"],
+                "frames": entry["transitions"],
+                "source_run": entry["source_config"],
+            }
+        )
 
     index["total_episodes"] = len(demo_entries)
     index["total_transitions"] = sum(d["frames"] for d in index["demos"])

@@ -76,8 +76,10 @@ def compute_policy_metrics(
     margin = 10.0
     for i in range(T):
         x, y = positions[i]
-        if not (COURT_X_MIN + margin <= x <= COURT_X_MAX - margin
-                and COURT_Y_MIN + margin <= y <= COURT_Y_MAX - margin):
+        if not (
+            COURT_X_MIN + margin <= x <= COURT_X_MAX - margin
+            and COURT_Y_MIN + margin <= y <= COURT_Y_MAX - margin
+        ):
             oob_count += 1
 
     # ── Collisions ─────────────────────────────────────────────

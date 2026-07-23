@@ -50,9 +50,7 @@ class MLPPolicy(nn.Module):
         """Forward pass, returns RAW unbounded mean."""
         return self.net(obs)
 
-    def get_action(
-        self, obs: torch.Tensor | np.ndarray, deterministic: bool = True
-    ) -> np.ndarray:
+    def get_action(self, obs: torch.Tensor | np.ndarray, deterministic: bool = True) -> np.ndarray:
         """Get action for inference. Applies tanh-squash.
 
         Args:
@@ -169,8 +167,8 @@ class MLPActorCritic(nn.Module):
 
         if action is None:
             # Sample raw Gaussian → tanh-squash
-            raw_sample = dist.rsample()       # u ~ N(raw_mean, std)
-            action = torch.tanh(raw_sample)   # a = tanh(u) — single squash
+            raw_sample = dist.rsample()  # u ~ N(raw_mean, std)
+            action = torch.tanh(raw_sample)  # a = tanh(u) — single squash
         else:
             # Action is tanh-squashed — invert to get raw sample for log-prob
             raw_sample = torch.clamp(action, -0.999, 0.999)

@@ -180,25 +180,32 @@ def train_bc(
             best_model_path = Path(model_out).with_name(
                 Path(model_out).stem + "_best" + Path(model_out).suffix
             )
-            save_policy(policy, best_model_path, config=cfg, metrics={
-                "epoch": epoch,
-                "val_loss": avg_val_loss,
-                "train_loss": avg_train_loss,
-                "best_val_loss": best_val_loss,
-            })
+            save_policy(
+                policy,
+                best_model_path,
+                config=cfg,
+                metrics={
+                    "epoch": epoch,
+                    "val_loss": avg_val_loss,
+                    "train_loss": avg_train_loss,
+                    "best_val_loss": best_val_loss,
+                },
+            )
 
         # Print progress
         if epoch % 5 == 0 or epoch == 1 or epoch == cfg["epochs"]:
-            print("  Epoch {}/{}: train_loss={:.6f} val_loss={:.6f} {}".format(
-                epoch, cfg["epochs"], avg_train_loss, avg_val_loss,
-                "(best)" if epoch == best_epoch else "",
-            ))
+            print(
+                "  Epoch {}/{}: train_loss={:.6f} val_loss={:.6f} {}".format(
+                    epoch,
+                    cfg["epochs"],
+                    avg_train_loss,
+                    avg_val_loss,
+                    "(best)" if epoch == best_epoch else "",
+                )
+            )
 
         # Video callback
-        if (
-            video_callback is not None
-            and epoch % cfg["eval_interval_epochs"] == 0
-        ):
+        if video_callback is not None and epoch % cfg["eval_interval_epochs"] == 0:
             try:
                 video_callback(policy, epoch, VIDEOS_DIR / "bc")
             except Exception as exc:
@@ -235,6 +242,7 @@ def train_bc(
 def _plot_loss_curve(log_path: Path, output_path: Path) -> None:
     """Plot training and validation loss curves."""
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 

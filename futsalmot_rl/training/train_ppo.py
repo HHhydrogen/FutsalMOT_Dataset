@@ -54,11 +54,7 @@ def compute_gae(
         bootstrap_mask = 1.0 - terminated[t].float()
         continuation_mask = 1.0 - episode_ended[t].float()
 
-        delta = (
-            rewards[t]
-            + gamma * next_values[t] * bootstrap_mask
-            - values[t]
-        )
+        delta = rewards[t] + gamma * next_values[t] * bootstrap_mask - values[t]
         last_gae = delta + gamma * gae_lambda * continuation_mask * last_gae
         advantages[t] = last_gae
 
@@ -138,9 +134,7 @@ class PPOTrainer:
         Transfers weights from an MLPPolicy (BC) to the actor part of the
         MLPActorCritic (PPO). The critic is initialized from scratch.
         """
-        checkpoint = torch.load(
-            str(model_path), map_location=self.device, weights_only=True
-        )
+        checkpoint = torch.load(str(model_path), map_location=self.device, weights_only=True)
         state_dict = checkpoint["model_state_dict"]
 
         # MLPPolicy stores weights under "net.K.weight" — map to "actor.net.K.weight"
@@ -154,23 +148,28 @@ class PPOTrainer:
         # Load only matching keys (actor part); skip critic
         missing, unexpected = self.policy.load_state_dict(actor_state, strict=False)
         if missing:
-            print("  Critic layers initialized from scratch: {}".format(
-                [k for k in missing if k.startswith("critic.")]
-            ))
+            print(
+                "  Critic layers initialized from scratch: {}".format(
+                    [k for k in missing if k.startswith("critic.")]
+                )
+            )
         if unexpected:
             print(f"  Unexpected keys (ignored): {unexpected}")
         print(f"  Loaded BC pretrained weights from {model_path}")
 
-    def collect_rollout(
-        self, n_steps: int
-    ) -> dict[str, torch.Tensor]:
+    def collect_rollout(self, n_steps: int) -> dict[str, torch.Tensor]:
         """Collect a rollout of n_steps from the environment.
 
+        Each transition stores:
+          obs, action, reward, value, log_prob, terminated, truncated,
+          next_obs, next_value
+
+        next_value is computed by the critic from the *real* next_obs
+        before any env.reset() call, ensuring truncation bootstrap uses
+        the correct state.
+
         Maintains rollout state across calls so episodes are not
-        artificially truncated at rollout boundaries. Only resets when:
-        - The trainer first starts collecting
-        - The previous step ended with terminated=True
-        - The previous step ended with truncated=True
+        artificially truncated at rollout boundaries.
         """
         obs_list: list[np.ndarray] = []
         actions_list: list[np.ndarray] = []
@@ -180,6 +179,7 @@ class PPOTrainer:
         values_list: list[float] = []
         log_probs_list: list[float] = []
         next_obs_list: list[np.ndarray] = []
+        next_values_list: list[float] = []
 
         episode_rewards: list[float] = []
 
@@ -196,9 +196,7 @@ class PPOTrainer:
             obs_tensor = torch.from_numpy(obs).float().unsqueeze(0).to(self.device)
 
             with torch.no_grad():
-                action, log_prob, _, value = self.policy.get_action_and_value(
-                    obs_tensor
-                )
+                action, log_prob, _, value = self.policy.get_action_and_value(obs_tensor)
 
             obs_list.append(obs)
             actions_list.append(action.squeeze(0).cpu().numpy())
@@ -211,7 +209,14 @@ class PPOTrainer:
             rewards_list.append(float(reward))
             terminated_list.append(bool(terminated))
             truncated_list.append(bool(truncated))
+
+            # Compute next_value from the REAL next_observation
+            # before any env.reset() — critical for truncation bootstrap
+            next_obs_tensor = torch.from_numpy(next_obs).float().unsqueeze(0).to(self.device)
+            with torch.no_grad():
+                next_value = self.policy.get_value(next_obs_tensor).squeeze(0).cpu().item()
             next_obs_list.append(next_obs)
+            next_values_list.append(next_value)
 
             self._current_episode_reward += float(reward)
             self._current_episode_length += 1
@@ -227,27 +232,30 @@ class PPOTrainer:
         # Save state for next rollout call
         self._current_obs = obs
 
-        # Convert to tensors
-        obs_arr = np.array(obs_list)
-        next_obs_arr = np.array(next_obs_list)
+        # Build tensors
+        terminated_t = torch.BoolTensor(terminated_list).to(self.device)
+        truncated_t = torch.BoolTensor(truncated_list).to(self.device)
 
         data = {
-            "obs": torch.FloatTensor(obs_arr).to(self.device),
+            "obs": torch.FloatTensor(np.array(obs_list)).to(self.device),
             "actions": torch.FloatTensor(np.array(actions_list)).to(self.device),
             "rewards": torch.FloatTensor(rewards_list).to(self.device),
-            "terminated": torch.BoolTensor(terminated_list).to(self.device),
-            "truncated": torch.BoolTensor(truncated_list).to(self.device),
-            "dones": torch.BoolTensor(
-                [t or tr for t, tr in zip(terminated_list, truncated_list)]
-            ).to(self.device),
+            "terminated": terminated_t,
+            "truncated": truncated_t,
             "values": torch.FloatTensor(values_list).to(self.device),
             "log_probs": torch.FloatTensor(log_probs_list).to(self.device),
+            "next_values": torch.FloatTensor(next_values_list).to(self.device),
+            # Combined dones (kept for backward compat with train_step logging)
+            "dones": terminated_t | truncated_t,
         }
 
-        # Compute raw advantages with GAE — uses separated terminated/truncated
+        # Compute raw advantages with GAE using real next_values
         raw_advantages = self._compute_gae(
-            data["rewards"], data["values"],
-            data["terminated"], data["truncated"],
+            data["rewards"],
+            data["values"],
+            data["next_values"],
+            data["terminated"],
+            data["truncated"],
             last_obs_tensor=torch.FloatTensor(obs).to(self.device),
             last_terminated=terminated_list[-1] if terminated_list else False,
         )
@@ -260,6 +268,7 @@ class PPOTrainer:
         self,
         rewards: torch.Tensor,
         values: torch.Tensor,
+        next_values: torch.Tensor,
         terminated: torch.Tensor,
         truncated: torch.Tensor,
         last_obs_tensor: torch.Tensor,
@@ -267,44 +276,38 @@ class PPOTrainer:
     ) -> torch.Tensor:
         """Compute GAE — delegates to standalone compute_gae().
 
-        Uses separate terminated and truncated:
-        - terminated=True → bootstrap_mask=0 (no bootstrap)
-        - truncated=True or rollout boundary → uses critic bootstrap
-        - episode_ended = terminated OR truncated → stops GAE accumulation
+        Uses the REAL next_values from the rollout (computed from the
+        actual next_observation before any env.reset()).
+
+        For the final transition, if terminated → bootstrap=0;
+        otherwise bootstrap from the critic using last_obs.
         """
         gamma = self.cfg["gamma"]
         lam = self.cfg["gae_lambda"]
         n = len(rewards)
 
-        # Bootstrap value for the last step
         with torch.no_grad():
             if last_terminated:
                 final_value = 0.0
             else:
-                final_value = self.policy.get_value(
-                    last_obs_tensor.unsqueeze(0)
-                ).squeeze(0).item()
+                final_value = self.policy.get_value(last_obs_tensor.unsqueeze(0)).squeeze(0).item()
 
-        next_values = torch.cat(
-            [values[1:], torch.tensor([final_value], device=self.device)]
-        )
+        # Append bootstrap value for the final step's next_value
+        next_values_full = torch.cat([next_values, torch.tensor([final_value], device=self.device)])
 
-        # episode_ended = terminated OR truncated (stops GAE accumulation)
         episode_ended = terminated | truncated
 
         return compute_gae(
             rewards=rewards,
             values=values,
-            next_values=next_values,
+            next_values=next_values_full,
             terminated=terminated,
             episode_ended=episode_ended,
             gamma=gamma,
             gae_lambda=lam,
         )
 
-    def train_step(
-        self, data: dict[str, torch.Tensor]
-    ) -> dict[str, float]:
+    def train_step(self, data: dict[str, torch.Tensor]) -> dict[str, float]:
         """Perform one PPO update step on collected rollout data.
 
         Uses raw_advantages and returns from collect_rollout.
@@ -321,9 +324,15 @@ class PPOTrainer:
         total_v_loss = 0.0
         total_entropy = 0.0
         n_updates = 0
+        total_clip_frac = 0.0
+        _kl_exceeded = False
+        _last_approx_kl = 0.0
 
         raw_advantages = data["raw_advantages"]
         returns = data["returns"]
+
+        # For explained variance at the end
+        all_value_preds: list[torch.Tensor] = []
 
         # Create indices for mini-batches
         indices = np.arange(n)
@@ -342,12 +351,15 @@ class PPOTrainer:
                 returns_batch = returns[batch_indices_tensor]
                 old_log_probs_batch = data["log_probs"][batch_indices_tensor]
 
-                # Policy advantages: normalized per batch
+                # Policy advantages: normalized per batch (unbiased=False
+                # prevents NaN when batch has 1 sample)
                 batch_raw = raw_advantages[batch_indices_tensor]
-                advantages_batch = (
-                    (batch_raw - batch_raw.mean())
-                    / (batch_raw.std() + 1e-8)
-                )
+                batch_mean = batch_raw.mean()
+                batch_std = batch_raw.std(unbiased=False)
+                if batch_raw.numel() > 1 and batch_std > 1e-8:
+                    advantages_batch = (batch_raw - batch_mean) / (batch_std + 1e-8)
+                else:
+                    advantages_batch = batch_raw - batch_mean
 
                 # Get new action log probs and values
                 _, log_probs, entropy, values = self.policy.get_action_and_value(
@@ -380,27 +392,57 @@ class PPOTrainer:
                 # Gradient step
                 self.optimizer.zero_grad()
                 loss.backward()
-                nn.utils.clip_grad_norm_(
-                    self.policy.parameters(), self.cfg["max_grad_norm"]
-                )
+                nn.utils.clip_grad_norm_(self.policy.parameters(), self.cfg["max_grad_norm"])
                 self.optimizer.step()
 
                 total_pi_loss += pi_loss.item()
                 total_v_loss += v_loss.item()
                 total_entropy += entropy_mean.item()
+                total_clip_frac += ((ratio - 1.0).abs() > clip_range).float().mean().item()
+                all_value_preds.append(values.detach().squeeze())
                 n_updates += 1
 
-                # Early stopping via KL divergence
+                # Early stopping via KL divergence — exits both loops
                 if target_kl > 0.0:
                     with torch.no_grad():
-                        approx_kl = ((ratio - 1.0) - ratio.log()).mean().item()
-                        if approx_kl > target_kl:
+                        _last_approx_kl = ((ratio - 1.0) - ratio.log()).mean().item()
+                        if _last_approx_kl > target_kl:
+                            _kl_exceeded = True
                             break
+            if _kl_exceeded:
+                break
+        else:
+            _kl_exceeded = False
+        # Reset for next iteration
+        kl_stopped = _kl_exceeded
+
+        # Explained variance
+        if all_value_preds:
+            vpred = torch.cat(all_value_preds)
+            with torch.no_grad():
+                resid = returns - vpred
+                var_resid = resid.pow(2).sum()
+                var_returns = (returns - returns.mean()).pow(2).sum().clamp(min=1e-8)
+                explained_variance = 1.0 - var_resid / var_returns
+        else:
+            explained_variance = 0.0
+
+        # Gradient norm
+        total_norm = 0.0
+        for p in self.policy.parameters():
+            if p.grad is not None:
+                total_norm += p.grad.norm().item() ** 2
+        grad_norm = total_norm**0.5
 
         return {
             "pi_loss": total_pi_loss / max(1, n_updates),
             "v_loss": total_v_loss / max(1, n_updates),
             "entropy": total_entropy / max(1, n_updates),
+            "approx_kl": float(_last_approx_kl),
+            "clip_fraction": total_clip_frac / max(1, n_updates),
+            "explained_variance": float(explained_variance),
+            "gradient_norm": grad_norm,
+            "kl_stopped": kl_stopped,
         }
 
     def train(
@@ -450,7 +492,9 @@ class PPOTrainer:
 
         print("=" * 60)
         print("PPO Training")
-        print(f"Total timesteps: {total_timesteps}  Steps per iter: {n_steps}  Device: {self.device}")
+        print(
+            f"Total timesteps: {total_timesteps}  Steps per iter: {n_steps}  Device: {self.device}"
+        )
         print("=" * 60)
 
         while global_step < total_timesteps:
@@ -488,10 +532,15 @@ class PPOTrainer:
 
             # Print progress
             if iteration % 5 == 0 or iteration == 1:
-                print("  Iter {}: step={} mean_reward={:.3f} pi_loss={:.4f} v_loss={:.4f}".format(
-                    iteration, global_step, mean_ep_reward,
-                    loss_metrics["pi_loss"], loss_metrics["v_loss"],
-                ))
+                print(
+                    "  Iter {}: step={} mean_reward={:.3f} pi_loss={:.4f} v_loss={:.4f}".format(
+                        iteration,
+                        global_step,
+                        mean_ep_reward,
+                        loss_metrics["pi_loss"],
+                        loss_metrics["v_loss"],
+                    )
+                )
 
             # Evaluation + video
             if self.video_callback is not None and global_step % eval_interval < n_steps:
@@ -509,9 +558,11 @@ class PPOTrainer:
         summary["total_steps"] = global_step
 
         print(f"\nTraining complete ({total_time:.1f}s)")
-        print("Best mean reward: {:.3f} (iteration {})".format(
-            best_reward, summary.get("best_iteration", 0)
-        ))
+        print(
+            "Best mean reward: {:.3f} (iteration {})".format(
+                best_reward, summary.get("best_iteration", 0)
+            )
+        )
         print(f"Best model: {best_model_path}")
         print(f"Latest model: {latest_model_path}")
 
@@ -532,6 +583,7 @@ class PPOTrainer:
 def _plot_reward_curve(log_path: Path, output_path: Path) -> None:
     """Plot training reward curve."""
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 

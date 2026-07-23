@@ -59,45 +59,101 @@ def mini_a33(tmp_path: Path) -> Path:
         "timeline": {"frame_start": 0, "frame_end": 299, "display_rate": 30.0},
         "objects": {
             "Player_01": {
-                "category": "player", "class_id": 0, "track_id": 1,
-                "team": "A", "role": "ball_carrier",
-                "keyframes": [{"frame": i, "loc": [float(-1000 + i), float(100 - i), 90.0], "yaw_deg": 0.0} for i in range(300)],
+                "category": "player",
+                "class_id": 0,
+                "track_id": 1,
+                "team": "A",
+                "role": "ball_carrier",
+                "keyframes": [
+                    {"frame": i, "loc": [float(-1000 + i), float(100 - i), 90.0], "yaw_deg": 0.0}
+                    for i in range(300)
+                ],
                 "action_timeline": [{"start_frame": 0, "end_frame": 299, "action": "jog"}],
             },
             "Player_05": {
-                "category": "player", "class_id": 0, "track_id": 5,
-                "team": "B", "role": "primary_marker",
-                "keyframes": [{"frame": i, "loc": [float(-800 + i), float(50 - i), 90.0], "yaw_deg": 180.0} for i in range(300)],
+                "category": "player",
+                "class_id": 0,
+                "track_id": 5,
+                "team": "B",
+                "role": "primary_marker",
+                "keyframes": [
+                    {"frame": i, "loc": [float(-800 + i), float(50 - i), 90.0], "yaw_deg": 180.0}
+                    for i in range(300)
+                ],
                 "action_timeline": [{"start_frame": 0, "end_frame": 299, "action": "defend"}],
             },
             "Ball_01": {
-                "category": "ball", "class_id": 1, "track_id": 101,
-                "keyframes": [{"frame": i, "loc": [float(-900 + i), float(75 - i), 11.0]} for i in range(300)],
+                "category": "ball",
+                "class_id": 1,
+                "track_id": 101,
+                "keyframes": [
+                    {"frame": i, "loc": [float(-900 + i), float(75 - i), 11.0]} for i in range(300)
+                ],
             },
         },
         "possession_timeline": [
             {"state": "owned", "owner": "Player_01", "start_frame": 0, "end_frame": 299},
         ],
         "event_timeline": [
-            {"event_id": "event_001", "type": "dribble", "actor": "Player_01",
-             "start_frame": 0, "end_frame_exclusive": 300, "last_frame": 299},
-            {"event_id": "event_002", "type": "defend_follow", "actor": "Player_05",
-             "start_frame": 0, "end_frame_exclusive": 300, "last_frame": 299, "target": "Player_01"},
+            {
+                "event_id": "event_001",
+                "type": "dribble",
+                "actor": "Player_01",
+                "start_frame": 0,
+                "end_frame_exclusive": 300,
+                "last_frame": 299,
+            },
+            {
+                "event_id": "event_002",
+                "type": "defend_follow",
+                "actor": "Player_05",
+                "start_frame": 0,
+                "end_frame_exclusive": 300,
+                "last_frame": 299,
+                "target": "Player_01",
+            },
         ],
         "event_frame_map": {
-            "event_001": {"type": "dribble", "start_frame": 0, "end_frame_exclusive": 300, "actor": "Player_01"},
-            "event_002": {"type": "defend_follow", "start_frame": 0, "end_frame_exclusive": 300, "actor": "Player_05", "target": "Player_01"},
+            "event_001": {
+                "type": "dribble",
+                "start_frame": 0,
+                "end_frame_exclusive": 300,
+                "actor": "Player_01",
+            },
+            "event_002": {
+                "type": "defend_follow",
+                "start_frame": 0,
+                "end_frame_exclusive": 300,
+                "actor": "Player_05",
+                "target": "Player_01",
+            },
         },
         "contact_frames": [],
         "ball_state_timeline": [
             {"start_frame": 0, "end_frame": 299, "state": "controlled", "owner": "Player_01"},
         ],
         "episode_metadata": {
-            "event_count": 2, "player_count": 2,
+            "event_count": 2,
+            "player_count": 2,
             "object_stats": {
-                "Player_01": {"keyframe_count": 300, "total_distance_xy_cm": 0.0, "max_speed_xy_cm_s": 0.0, "category": "player"},
-                "Player_05": {"keyframe_count": 300, "total_distance_xy_cm": 0.0, "max_speed_xy_cm_s": 0.0, "category": "player"},
-                "Ball_01": {"keyframe_count": 300, "total_distance_xy_cm": 0.0, "max_speed_xy_cm_s": 0.0, "category": "ball"},
+                "Player_01": {
+                    "keyframe_count": 300,
+                    "total_distance_xy_cm": 0.0,
+                    "max_speed_xy_cm_s": 0.0,
+                    "category": "player",
+                },
+                "Player_05": {
+                    "keyframe_count": 300,
+                    "total_distance_xy_cm": 0.0,
+                    "max_speed_xy_cm_s": 0.0,
+                    "category": "player",
+                },
+                "Ball_01": {
+                    "keyframe_count": 300,
+                    "total_distance_xy_cm": 0.0,
+                    "max_speed_xy_cm_s": 0.0,
+                    "category": "ball",
+                },
             },
         },
         "track_id_map": {"Player_01": 1, "Player_05": 5, "Ball_01": 101},

@@ -85,12 +85,15 @@ def benchmark_policy(
         metrics["policy_type"] = policy_name
 
         results.append(metrics)
-        print("  [{}] episode {}: mark_dist={:.1f}cm oob={} coll={}".format(
-            policy_name, i + 1,
-            metrics["mean_marking_distance_cm"],
-            metrics["out_of_bounds_count"],
-            metrics["collision_count"],
-        ))
+        print(
+            "  [{}] episode {}: mark_dist={:.1f}cm oob={} coll={}".format(
+                policy_name,
+                i + 1,
+                metrics["mean_marking_distance_cm"],
+                metrics["out_of_bounds_count"],
+                metrics["collision_count"],
+            )
+        )
 
     return results
 
@@ -126,12 +129,14 @@ def benchmark_rule(source_paths: list[Path], n_episodes: int = 5) -> list[dict[s
         metrics["policy_type"] = "rule"
 
         results.append(metrics)
-        print("  [rule] episode {}: mark_dist={:.1f}cm oob={} coll={}".format(
-            i + 1,
-            metrics["mean_marking_distance_cm"],
-            metrics["out_of_bounds_count"],
-            metrics["collision_count"],
-        ))
+        print(
+            "  [rule] episode {}: mark_dist={:.1f}cm oob={} coll={}".format(
+                i + 1,
+                metrics["mean_marking_distance_cm"],
+                metrics["out_of_bounds_count"],
+                metrics["collision_count"],
+            )
+        )
 
     return results
 
@@ -139,6 +144,7 @@ def benchmark_rule(source_paths: list[Path], n_episodes: int = 5) -> list[dict[s
 def _extract_template(seq_id: str) -> int:
     """Extract template_id from seq_id like 'episode_random_0001_t1'."""
     import re
+
     m = re.search(r"_t(\d+)", seq_id)
     return int(m.group(1)) if m else 0
 
@@ -146,5 +152,6 @@ def _extract_template(seq_id: str) -> int:
 def _extract_seed(seq_id: str) -> int:
     """Extract seed from seq_id like 'episode_random_0001_t1'."""
     import re
+
     m = re.search(r"_(\d{4})_t", seq_id)
     return int(m.group(1)) if m else 0

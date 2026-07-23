@@ -14,6 +14,7 @@ from futsalmot_rl.core.rl_paths import RUNS_DIR
 
 # ── Run discovery ───────────────────────────────────────────────
 
+
 def find_rule_runs(
     runs_dir: str | Path = RUNS_DIR,
     template_ids: list[int] | None = None,
@@ -40,7 +41,7 @@ def find_rule_runs(
         for path in candidates:
             cfg = load_a33_config(path)
             ep_id = cfg.get("episode_id", "")
-            for tid in (template_ids or []):
+            for tid in template_ids or []:
                 if f"_t{tid:d}" in ep_id:
                     filtered.append(path)
                     break
@@ -81,6 +82,7 @@ def find_latest_successful_run(runs_dir: str | Path = RUNS_DIR) -> Path | None:
 
 
 # ── A3.3 config parsing ─────────────────────────────────────────
+
 
 def load_a33_config(path: str | Path) -> dict[str, Any]:
     """Load and validate an A3.3 trajectory config JSON."""
@@ -223,6 +225,7 @@ def get_episode_id(a33_cfg: dict[str, Any]) -> str:
 
 
 # ── Event annotation parsing ────────────────────────────────────
+
 
 def load_events(path: str | Path) -> list[dict[str, Any]]:
     """Load events from an events_*.json annotation file."""

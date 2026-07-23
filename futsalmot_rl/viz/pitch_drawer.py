@@ -39,8 +39,10 @@ def _setup_pitch(ax: plt.Axes, title: str = "") -> None:
     # Court boundary
     rect = plt.Rectangle(
         (COURT_X_MIN, COURT_Y_MIN),
-        COURT_W, COURT_H,
-        linewidth=2, edgecolor=COLOR_PITCH_LINE,
+        COURT_W,
+        COURT_H,
+        linewidth=2,
+        edgecolor=COLOR_PITCH_LINE,
         facecolor="none",
     )
     ax.add_patch(rect)
@@ -50,8 +52,12 @@ def _setup_pitch(ax: plt.Axes, title: str = "") -> None:
 
     # Center circle
     center_circle = plt.Circle(
-        (0, 0), 300, linewidth=1.5,
-        edgecolor=COLOR_PITCH_LINE, facecolor="none", alpha=0.5,
+        (0, 0),
+        300,
+        linewidth=1.5,
+        edgecolor=COLOR_PITCH_LINE,
+        facecolor="none",
+        alpha=0.5,
     )
     ax.add_patch(center_circle)
 
@@ -65,17 +71,25 @@ def _setup_pitch(ax: plt.Axes, title: str = "") -> None:
         ax.plot(
             [goal_x, goal_x],
             [-goal_width / 2, goal_width / 2],
-            color=COLOR_PITCH_LINE, linewidth=3,
+            color=COLOR_PITCH_LINE,
+            linewidth=3,
         )
         ax.text(
             goal_x + (60 if goal_x < 0 else -60),
-            0, goal_label, color=COLOR_PITCH_LINE,
-            fontsize=12, ha="center", va="center", fontweight="bold",
+            0,
+            goal_label,
+            color=COLOR_PITCH_LINE,
+            fontsize=12,
+            ha="center",
+            va="center",
+            fontweight="bold",
         )
 
     # Attack direction arrow
     ax.annotate(
-        "", xy=(COURT_X_MAX - 200, 0), xytext=(COURT_X_MAX - 600, 0),
+        "",
+        xy=(COURT_X_MAX - 200, 0),
+        xytext=(COURT_X_MAX - 600, 0),
         arrowprops=dict(arrowstyle="->", color=COLOR_PITCH_LINE, lw=2),
     )
 
@@ -97,17 +111,26 @@ def _draw_player(
 ) -> None:
     """Draw a player as a filled circle with ID label."""
     circle = plt.Circle(
-        pos, size, facecolor=color, alpha=alpha,
-        edgecolor="white", linewidth=edge_width,
+        pos,
+        size,
+        facecolor=color,
+        alpha=alpha,
+        edgecolor="white",
+        linewidth=edge_width,
     )
     ax.add_patch(circle)
     if show_id:
         # Short ID
         short_id = player_id.replace("Player_", "P")
         ax.text(
-            pos[0], pos[1], short_id,
-            color="white", fontsize=7,
-            ha="center", va="center", fontweight="bold",
+            pos[0],
+            pos[1],
+            short_id,
+            color="white",
+            fontsize=7,
+            ha="center",
+            va="center",
+            fontweight="bold",
         )
 
 
@@ -172,16 +195,26 @@ def draw_pitch_frame(
         for pid, pos in ghost_positions.items():
             if pid != agent_id:
                 _draw_player(
-                    ax, pos, pid,
-                    COLOR_GHOST, size=50, alpha=0.3,
-                    edge_width=1, show_id=False,
+                    ax,
+                    pos,
+                    pid,
+                    COLOR_GHOST,
+                    size=50,
+                    alpha=0.3,
+                    edge_width=1,
+                    show_id=False,
                 )
             else:
                 # Ghost for the agent
                 _draw_player(
-                    ax, pos, pid,
-                    COLOR_GHOST, size=55, alpha=0.3,
-                    edge_width=1, show_id=False,
+                    ax,
+                    pos,
+                    pid,
+                    COLOR_GHOST,
+                    size=55,
+                    alpha=0.3,
+                    edge_width=1,
+                    show_id=False,
                 )
 
     # Draw all players
@@ -204,8 +237,12 @@ def draw_pitch_frame(
         apos = all_positions[agent_id]
         tpos = all_positions[target_id]
         ax.plot(
-            [apos[0], tpos[0]], [apos[1], tpos[1]],
-            color=COLOR_PLAYER_05, linewidth=1, alpha=0.6, linestyle="--",
+            [apos[0], tpos[0]],
+            [apos[1], tpos[1]],
+            color=COLOR_PLAYER_05,
+            linewidth=1,
+            alpha=0.6,
+            linestyle="--",
         )
 
     # Velocity arrow
@@ -216,9 +253,15 @@ def draw_pitch_frame(
         if speed > 5.0:  # Only draw if moving
             scale = 0.5  # visual scaling
             ax.arrow(
-                pos[0], pos[1], vx * scale, vy * scale,
-                head_width=30, head_length=20,
-                fc=COLOR_PLAYER_05, ec=COLOR_PLAYER_05, alpha=0.8,
+                pos[0],
+                pos[1],
+                vx * scale,
+                vy * scale,
+                head_width=30,
+                head_length=20,
+                fc=COLOR_PLAYER_05,
+                ec=COLOR_PLAYER_05,
+                alpha=0.8,
             )
 
     # Info panel (upper left)
@@ -240,7 +283,9 @@ def draw_pitch_frame(
 
     info_text = "\n".join(info_lines)
     ax.text(
-        0.02, 0.98, info_text,
+        0.02,
+        0.98,
+        info_text,
         transform=ax.transAxes,
         color=COLOR_TEXT,
         fontsize=9,
@@ -253,7 +298,9 @@ def draw_pitch_frame(
     # Frame count in upper right
     time_s = frame / fps
     ax.text(
-        0.98, 0.98, f"t={time_s:.1f}s",
+        0.98,
+        0.98,
+        f"t={time_s:.1f}s",
         transform=ax.transAxes,
         color=COLOR_TEXT,
         fontsize=10,

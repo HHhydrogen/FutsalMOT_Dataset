@@ -29,6 +29,7 @@ def env(mini_a33: Path) -> FutsalDefenderFollowEnv:
 @pytest.fixture
 def source_a33() -> str:
     from futsalmot_rl.core.rl_paths import RUNS_DIR
+
     return str(RUNS_DIR / "production_run" / "episode_random_0001_t1_a33.json")
 
 

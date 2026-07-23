@@ -68,7 +68,9 @@ def run(args: argparse.Namespace, paths: ProjectPaths) -> int:
                 obs = obs_next
             all_rewards.append(ep_r)
         env.close()
-        print(f"RL eval: mean_reward={float(np.mean(all_rewards)):.3f} std={float(np.std(all_rewards)):.3f}")
+        print(
+            f"RL eval: mean_reward={float(np.mean(all_rewards)):.3f} std={float(np.std(all_rewards)):.3f}"
+        )
         return 0
 
     elif args.eval_cmd == "sanitize-env":
@@ -77,6 +79,7 @@ def run(args: argparse.Namespace, paths: ProjectPaths) -> int:
             PLAYER_05_MAX_SPEED_CM_S,
             extract_action_from_trajectory,
         )
+
         env = FutsalDefenderFollowEnv(source_episode_path=source)
         cfg = load_a33_config(source)
         all_pos = get_player_positions_2d(cfg)
@@ -87,7 +90,9 @@ def run(args: argparse.Namespace, paths: ProjectPaths) -> int:
         rule_reward = 0.0
         while not done:
             frame = min(env.current_frame, len(agent_positions) - 2)
-            action = extract_action_from_trajectory(agent_positions, frame, fps=30, max_speed=PLAYER_05_MAX_SPEED_CM_S)
+            action = extract_action_from_trajectory(
+                agent_positions, frame, fps=30, max_speed=PLAYER_05_MAX_SPEED_CM_S
+            )
             obs_next, r, term, trunc, _ = env.step(action)
             rule_reward += float(r)
             done = term or trunc

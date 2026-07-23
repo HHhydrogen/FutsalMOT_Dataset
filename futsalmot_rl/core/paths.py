@@ -143,9 +143,7 @@ def resolve_project_root(explicit: str | Path | None = None) -> Path:
         try:
             p = Path(explicit).resolve(strict=True)
         except (FileNotFoundError, OSError):
-            raise ConfigurationError(
-                f"--project-root path does not exist: {explicit}"
-            )
+            raise ConfigurationError(f"--project-root path does not exist: {explicit}")
         if not p.is_dir():
             raise ConfigurationError(f"--project-root is not a directory: {p}")
         return p
@@ -156,13 +154,9 @@ def resolve_project_root(explicit: str | Path | None = None) -> Path:
         try:
             p = Path(env_val).resolve(strict=True)
         except (FileNotFoundError, OSError):
-            raise ConfigurationError(
-                f"FUTSALMOT_PROJECT_ROOT={env_val} does not exist"
-            )
+            raise ConfigurationError(f"FUTSALMOT_PROJECT_ROOT={env_val} does not exist")
         if not p.is_dir():
-            raise ConfigurationError(
-                f"FUTSALMOT_PROJECT_ROOT={env_val} is not a directory"
-            )
+            raise ConfigurationError(f"FUTSALMOT_PROJECT_ROOT={env_val} is not a directory")
         return p
 
     # 3. Search upward from cwd for *.uproject

@@ -104,8 +104,12 @@ def write_benchmark_summary_md(
 
     lines.append("")
     lines.append("## Per-Episode Details\n")
-    lines.append("| seq_id | template | seed | policy | marking_dist | oob | coll | goal_side | max_speed |")
-    lines.append("|--------|----------|------|--------|-------------|-----|------|-----------|----------|")
+    lines.append(
+        "| seq_id | template | seed | policy | marking_dist | oob | coll | goal_side | max_speed |"
+    )
+    lines.append(
+        "|--------|----------|------|--------|-------------|-----|------|-----------|----------|"
+    )
 
     for r in sorted(results, key=lambda x: (x.get("policy_type", ""), x.get("seq_id", ""))):
         lines.append(

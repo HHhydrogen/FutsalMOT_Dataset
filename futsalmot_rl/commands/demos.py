@@ -36,7 +36,9 @@ def run(args: argparse.Namespace, paths: ProjectPaths) -> int:
 
         entries = []
         for p in a33_paths:
-            entry = export_demo_from_a33(p, agent_id=args.agent, target_id=args.target, output_dir=paths.demos_dir)
+            entry = export_demo_from_a33(
+                p, agent_id=args.agent, target_id=args.target, output_dir=paths.demos_dir
+            )
             entries.append(entry)
 
         index = build_demo_index(entries, paths.demos_dir)
@@ -55,7 +57,11 @@ def run(args: argparse.Namespace, paths: ProjectPaths) -> int:
         demos = index.get("demos", [])
         errors = 0
         for d in demos:
-            dp = Path(d["path"]) if Path(d["path"]).is_absolute() else paths.demos_dir / Path(d["path"]).name
+            dp = (
+                Path(d["path"])
+                if Path(d["path"]).is_absolute()
+                else paths.demos_dir / Path(d["path"]).name
+            )
             if not dp.is_file():
                 print(f"Missing: {dp}")
                 errors += 1

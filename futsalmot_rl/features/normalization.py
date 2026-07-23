@@ -71,7 +71,9 @@ class Normalizer:
     # ── Angle (auto) ─────────────────────────────────────────────
 
     @staticmethod
-    def angle_sin_cos(origin_x: float, origin_y: float, target_x: float, target_y: float) -> tuple[float, float]:
+    def angle_sin_cos(
+        origin_x: float, origin_y: float, target_x: float, target_y: float
+    ) -> tuple[float, float]:
         """Return (sin, cos) of the angle from origin to target."""
         dx = float(target_x) - float(origin_x)
         dy = float(target_y) - float(origin_y)

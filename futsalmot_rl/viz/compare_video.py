@@ -46,12 +46,14 @@ def make_comparison_video(
     """
     import imageio
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from matplotlib.patches import Circle
 
-    n_frames = min(len(rule_positions), len(bc_positions), len(ppo_positions),
-                   len(target_positions))
+    n_frames = min(
+        len(rule_positions), len(bc_positions), len(ppo_positions), len(target_positions)
+    )
     output_path = Path(output_path)
     ensure_dir(output_path.parent)
 
@@ -75,7 +77,9 @@ def make_comparison_video(
             (COURT_X_MIN, COURT_Y_MIN),
             COURT_X_MAX - COURT_X_MIN,
             COURT_Y_MAX - COURT_Y_MIN,
-            linewidth=2, edgecolor="#BDBDBD", facecolor="none",
+            linewidth=2,
+            edgecolor="#BDBDBD",
+            facecolor="none",
         )
         ax.add_patch(rect)
         ax.axvline(x=0, color="#BDBDBD", linewidth=1, linestyle="--", alpha=0.5)
@@ -84,19 +88,31 @@ def make_comparison_video(
         if t < len(ball_positions):
             ball = Circle(
                 (float(ball_positions[t, 0]), float(ball_positions[t, 1])),
-                12, facecolor="#FF6F00", edgecolor="white", linewidth=1,
+                12,
+                facecolor="#FF6F00",
+                edgecolor="white",
+                linewidth=1,
             )
             ax.add_patch(ball)
 
         # ── Target (Player_01) ──────────────────────────────────
         target = Circle(
             (float(target_positions[t, 0]), float(target_positions[t, 1])),
-            40, facecolor="#2979FF", edgecolor="white", linewidth=2,
+            40,
+            facecolor="#2979FF",
+            edgecolor="white",
+            linewidth=2,
         )
         ax.add_patch(target)
         ax.text(
-            float(target_positions[t, 0]), float(target_positions[t, 1]),
-            "T", color="white", fontsize=8, ha="center", va="center", fontweight="bold",
+            float(target_positions[t, 0]),
+            float(target_positions[t, 1]),
+            "T",
+            color="white",
+            fontsize=8,
+            ha="center",
+            va="center",
+            fontweight="bold",
         )
 
         # ── Trajectory trails (last 30 frames) ──────────────────
@@ -123,7 +139,10 @@ def make_comparison_video(
             if t < len(positions):
                 pos = Circle(
                     (float(positions[t, 0]), float(positions[t, 1])),
-                    35, facecolor=color, edgecolor="white", linewidth=edge_w,
+                    35,
+                    facecolor=color,
+                    edgecolor="white",
+                    linewidth=edge_w,
                 )
                 ax.add_patch(pos)
 
@@ -137,12 +156,16 @@ def make_comparison_video(
                 ax.plot(
                     [float(positions[t, 0]), float(target_positions[t, 0])],
                     [float(positions[t, 1]), float(target_positions[t, 1])],
-                    color=color, linewidth=1, alpha=0.3, linestyle=":",
+                    color=color,
+                    linewidth=1,
+                    alpha=0.3,
+                    linestyle=":",
                 )
 
         # ── Legend ──────────────────────────────────────────────
-        ax.legend(loc="upper left", fontsize=9, facecolor="black", edgecolor="white",
-                  labelcolor="white")
+        ax.legend(
+            loc="upper left", fontsize=9, facecolor="black", edgecolor="white", labelcolor="white"
+        )
 
         # ── Info panel ──────────────────────────────────────────
         time_s = t / FPS
@@ -151,8 +174,11 @@ def make_comparison_video(
             "",
             "Distance to target:",
         ]
-        for name, positions in [("Rule", rule_positions), ("BC", bc_positions),
-                                 ("PPO", ppo_positions)]:
+        for name, positions in [
+            ("Rule", rule_positions),
+            ("BC", bc_positions),
+            ("PPO", ppo_positions),
+        ]:
             if t < len(positions):
                 dist = np.hypot(
                     positions[t, 0] - target_positions[t, 0],
@@ -162,19 +188,29 @@ def make_comparison_video(
 
         info_lines.append("")
         # Out of bounds check
-        for name, positions in [("Rule", rule_positions), ("BC", bc_positions),
-                                 ("PPO", ppo_positions)]:
+        for name, positions in [
+            ("Rule", rule_positions),
+            ("BC", bc_positions),
+            ("PPO", ppo_positions),
+        ]:
             if t < len(positions):
                 x, y = positions[t]
-                oob = not (COURT_X_MIN + 10 <= x <= COURT_X_MAX - 10
-                           and COURT_Y_MIN + 10 <= y <= COURT_Y_MAX - 10)
+                oob = not (
+                    COURT_X_MIN + 10 <= x <= COURT_X_MAX - 10
+                    and COURT_Y_MIN + 10 <= y <= COURT_Y_MAX - 10
+                )
                 if oob:
                     info_lines.append(f"  {name}: OUT OF BOUNDS")
 
         ax.text(
-            0.02, 0.98, "\n".join(info_lines),
-            transform=ax.transAxes, color="white", fontsize=8,
-            verticalalignment="top", fontfamily="monospace",
+            0.02,
+            0.98,
+            "\n".join(info_lines),
+            transform=ax.transAxes,
+            color="white",
+            fontsize=8,
+            verticalalignment="top",
+            fontfamily="monospace",
             bbox=dict(boxstyle="round,pad=0.5", facecolor="black", alpha=0.7),
         )
 

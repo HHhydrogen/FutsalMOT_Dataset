@@ -93,9 +93,7 @@ class FutsalDefenderFollowEnv(gym.Env):
                 self._source_path = candidate
                 self._cfg = load_a33_config(candidate)
             else:
-                raise ValueError(
-                    "Either source_episode_path or a33_config must be provided"
-                )
+                raise ValueError("Either source_episode_path or a33_config must be provided")
 
         self._load_source_data()
 
@@ -122,10 +120,7 @@ class FutsalDefenderFollowEnv(gym.Env):
         self.ball_positions = get_ball_positions_2d(self._cfg)
 
         # Velocities
-        all_3d = {
-            pid: [(x, y, 0.0) for x, y in pts]
-            for pid, pts in self.all_positions.items()
-        }
+        all_3d = {pid: [(x, y, 0.0) for x, y in pts] for pid, pts in self.all_positions.items()}
         self.all_velocities = get_player_velocities(all_3d, self.fps)
 
         # Possession timeline
@@ -157,9 +152,7 @@ class FutsalDefenderFollowEnv(gym.Env):
         # Validate
         total_frames = len(self.agent_rule_positions)
         if total_frames < self.episode_length:
-            raise ValueError(
-                f"Episode has {total_frames} frames, expected {self.episode_length}"
-            )
+            raise ValueError(f"Episode has {total_frames} frames, expected {self.episode_length}")
 
         self.total_frames = total_frames
         self.seq_id = str(self._cfg.get("seq_id", "unknown"))
@@ -229,9 +222,7 @@ class FutsalDefenderFollowEnv(gym.Env):
 
         return obs, info
 
-    def step(
-        self, action: np.ndarray
-    ) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
+    def step(self, action: np.ndarray) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
         """Take a step in the environment.
 
         Args:
@@ -288,9 +279,13 @@ class FutsalDefenderFollowEnv(gym.Env):
         # Compute reward
         ball_idx = min(self.current_frame, len(self.ball_positions) - 1)
         ball_pos = (
-            float(self.ball_positions[ball_idx][0]),
-            float(self.ball_positions[ball_idx][1]),
-        ) if self.ball_positions else (0.0, 0.0)
+            (
+                float(self.ball_positions[ball_idx][0]),
+                float(self.ball_positions[ball_idx][1]),
+            )
+            if self.ball_positions
+            else (0.0, 0.0)
+        )
 
         reward, reward_components = self.reward_fn.compute(
             player_pos=self.agent_pos,

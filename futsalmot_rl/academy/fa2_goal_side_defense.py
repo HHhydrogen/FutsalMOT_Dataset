@@ -58,10 +58,10 @@ FA2_REWARD_CONFIG: dict[str, Any] = {
 
 # These metrics should be tracked during FA-2 evaluation:
 FA2_METRICS = [
-    "goal_side_success_rate",       # 在目标与球门之间的帧数比例
-    "time_behind_attacker_ratio",   # 在目标后方的帧数比例
-    "mean_goal_line_offset_cm",     # 离球门线的平均距离
-    "shot_lane_block_score",        # 射门线路阻挡分数
+    "goal_side_success_rate",  # 在目标与球门之间的帧数比例
+    "time_behind_attacker_ratio",  # 在目标后方的帧数比例
+    "mean_goal_line_offset_cm",  # 离球门线的平均距离
+    "shot_lane_block_score",  # 射门线路阻挡分数
 ]
 
 
@@ -144,8 +144,8 @@ FA2_EVAL_SEQ_IDS = [
 # ═══════════════════════════════════════════════════════════
 
 FA2_ACCEPTANCE_CRITERIA = {
-    "goal_side_success_rate_min": 0.3,       # 至少 30% 帧数在正确位置
-    "out_of_bounds_max": 0,                   # 不允许出界
-    "collision_max": 5,                       # 允许少量碰撞
-    "trajectory_validation_errors_max": 0,    # 轨迹验证零错误
+    "goal_side_success_rate_min": 0.3,  # 至少 30% 帧数在正确位置
+    "out_of_bounds_max": 0,  # 不允许出界
+    "collision_max": 5,  # 允许少量碰撞
+    "trajectory_validation_errors_max": 0,  # 轨迹验证零错误
 }

@@ -67,8 +67,7 @@ def check_ue_outputs(
 
             # Check for Player_05 track_id
             player_05_records = [
-                r for r in records
-                if r.get("track_id") == 5 or r.get("object_id") == "Player_05"
+                r for r in records if r.get("track_id") == 5 or r.get("object_id") == "Player_05"
             ]
             checks["player_05_record_count"] = len(player_05_records)
 

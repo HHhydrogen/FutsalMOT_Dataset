@@ -155,12 +155,8 @@ def export_rl_a33(
         "agent_id": agent_id,
         "n_frames": n_frames,
         "total_reward": float(rollout_data["total_reward"]),
-        "total_distance_cm": float(
-            obj_stats.get(agent_id, {}).get("total_distance_xy_cm", 0.0)
-        ),
-        "max_speed_cm_s": float(
-            obj_stats.get(agent_id, {}).get("max_speed_xy_cm_s", 0.0)
-        ),
+        "total_distance_cm": float(obj_stats.get(agent_id, {}).get("total_distance_xy_cm", 0.0)),
+        "max_speed_cm_s": float(obj_stats.get(agent_id, {}).get("max_speed_xy_cm_s", 0.0)),
     }
     report_path = output_dir / f"rl_{seq_id}_{agent_id}_export_report.json"
     write_json_atomic(report_path, report)
@@ -176,9 +172,7 @@ def export_rl_a33(
     return report
 
 
-def _compute_yaw_from_positions(
-    positions: np.ndarray, fps: int = 30
-) -> np.ndarray:
+def _compute_yaw_from_positions(positions: np.ndarray, fps: int = 30) -> np.ndarray:
     """Compute yaw angles from a trajectory of (x, y) positions.
 
     Uses central differences for smooth yaw, with forward fill for gaps.
@@ -208,7 +202,7 @@ def _compute_yaw_from_positions(
     smoothed = np.copy(yaws)
     window = 3
     for i in range(1, n - 1):
-        smoothed[i] = np.mean(yaws[max(0, i - window // 2): min(n, i + window // 2 + 1)])
+        smoothed[i] = np.mean(yaws[max(0, i - window // 2) : min(n, i + window // 2 + 1)])
 
     return smoothed
 

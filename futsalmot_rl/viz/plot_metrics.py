@@ -136,7 +136,9 @@ def plot_comparison_bar(
                 bar.get_x() + bar.get_width() / 2,
                 bar.get_height(),
                 f"{val:.1f}" if isinstance(val, float) else str(val),
-                ha="center", va="bottom", fontsize=8,
+                ha="center",
+                va="bottom",
+                fontsize=8,
             )
 
     fig.suptitle(title, fontsize=14)

@@ -49,50 +49,58 @@ def build_observation(
     yaw_rad = math.radians(float(self_yaw_deg))
 
     features: list[float] = [
-        Normalizer.x(sx),           # self_x_norm
-        Normalizer.y(sy),           # self_y_norm
+        Normalizer.x(sx),  # self_x_norm
+        Normalizer.y(sy),  # self_y_norm
         Normalizer.player_speed(svx),  # self_vx_norm
         Normalizer.player_speed(svy),  # self_vy_norm
-        math.sin(yaw_rad),          # self_yaw_sin
-        math.cos(yaw_rad),          # self_yaw_cos
+        math.sin(yaw_rad),  # self_yaw_sin
+        math.cos(yaw_rad),  # self_yaw_cos
     ]
 
     # ── Target (Player_01) ──────────────────────────────────────
     tx, ty = target_pos
     tvx, tvy = target_vel
-    features.extend([
-        Normalizer.x(tx),           # target_x_norm
-        Normalizer.y(ty),           # target_y_norm
-        Normalizer.player_speed(tvx),  # target_vx_norm
-        Normalizer.player_speed(tvy),  # target_vy_norm
-    ])
+    features.extend(
+        [
+            Normalizer.x(tx),  # target_x_norm
+            Normalizer.y(ty),  # target_y_norm
+            Normalizer.player_speed(tvx),  # target_vx_norm
+            Normalizer.player_speed(tvy),  # target_vy_norm
+        ]
+    )
 
     # ── Ball ────────────────────────────────────────────────────
     bx, by = ball_pos
     bvx, bvy = ball_vel
-    features.extend([
-        Normalizer.x(bx),           # ball_x_norm
-        Normalizer.y(by),           # ball_y_norm
-        Normalizer.ball_speed(bvx),    # ball_vx_norm
-        Normalizer.ball_speed(bvy),    # ball_vy_norm
-    ])
+    features.extend(
+        [
+            Normalizer.x(bx),  # ball_x_norm
+            Normalizer.y(by),  # ball_y_norm
+            Normalizer.ball_speed(bvx),  # ball_vx_norm
+            Normalizer.ball_speed(bvy),  # ball_vy_norm
+        ]
+    )
 
     # ── Own goal ─────────────────────────────────────────────────
     ogx, ogy = own_goal_pos
-    features.extend([
-        Normalizer.x(ogx),          # own_goal_x_norm
-        Normalizer.y(ogy),          # own_goal_y_norm
-    ])
+    features.extend(
+        [
+            Normalizer.x(ogx),  # own_goal_x_norm
+            Normalizer.y(ogy),  # own_goal_y_norm
+        ]
+    )
 
     # ── Distances ────────────────────────────────────────────────
     dist_to_target = math.hypot(tx - sx, ty - sy)
     dist_to_ball = math.hypot(bx - sx, by - sy)
     dist_to_goal = math.hypot(ogx - sx, ogy - sy)
-    features.extend([
-        Normalizer.distance(dist_to_target),
-        Normalizer.distance(dist_to_ball),
-        Normalizer.distance(dist_to_goal),
-    ])
+    features.extend(
+        [
+            Normalizer.distance(dist_to_target),
+            Normalizer.distance(dist_to_ball),
+            Normalizer.distance(dist_to_goal),
+        ]
+    )
 
     # ── Angles ──────────────────────────────────────────────────
     a_target_sin, a_target_cos = Normalizer.angle_sin_cos(sx, sy, tx, ty)
@@ -100,16 +108,20 @@ def build_observation(
     features.extend([a_target_sin, a_target_cos, a_ball_sin, a_ball_cos])
 
     # ── Boundary distances ──────────────────────────────────────
-    features.extend([
-        Normalizer.x(sx - COURT_X_MIN),    # boundary_left
-        Normalizer.x(COURT_X_MAX - sx),    # boundary_right
-        Normalizer.y(sy - COURT_Y_MIN),    # boundary_top
-        Normalizer.y(COURT_Y_MAX - sy),    # boundary_bottom
-    ])
+    features.extend(
+        [
+            Normalizer.x(sx - COURT_X_MIN),  # boundary_left
+            Normalizer.x(COURT_X_MAX - sx),  # boundary_right
+            Normalizer.y(sy - COURT_Y_MIN),  # boundary_top
+            Normalizer.y(COURT_Y_MAX - sy),  # boundary_bottom
+        ]
+    )
 
     # ── Possession ──────────────────────────────────────────────
     pos_target = 1.0 if possession_owner == "Player_01" else 0.0
-    pos_teammate = 1.0 if possession_owner in ("Player_05", "Player_06", "Player_07", "Player_08") else 0.0
+    pos_teammate = (
+        1.0 if possession_owner in ("Player_05", "Player_06", "Player_07", "Player_08") else 0.0
+    )
     pos_free = 1.0 if possession_owner is None else 0.0
     features.extend([pos_target, pos_teammate, pos_free])
 

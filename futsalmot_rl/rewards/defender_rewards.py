@@ -110,9 +110,8 @@ class DefenderReward:
             player_pos[0] - target_pos[0],
             player_pos[1] - target_pos[1],
         )
-        components["r_distance_band"] = (
-            self.distance_band_weight
-            * abs(dist_to_target - self.ideal_mark_distance_cm)
+        components["r_distance_band"] = self.distance_band_weight * abs(
+            dist_to_target - self.ideal_mark_distance_cm
         )
 
         # ── Goal-side positioning ─────────────────────────────────
@@ -121,10 +120,7 @@ class DefenderReward:
         # the player is between them (the two vectors point in different directions)
         vec_to_target = (target_pos[0] - player_pos[0], target_pos[1] - player_pos[1])
         vec_to_goal = (own_goal_pos[0] - player_pos[0], own_goal_pos[1] - player_pos[1])
-        dot_product = (
-            vec_to_target[0] * vec_to_goal[0]
-            + vec_to_target[1] * vec_to_goal[1]
-        )
+        dot_product = vec_to_target[0] * vec_to_goal[0] + vec_to_target[1] * vec_to_goal[1]
 
         # Also check that player is closer to own goal than target is
         dist_player_to_goal = math.hypot(
@@ -133,9 +129,7 @@ class DefenderReward:
         )
 
         is_goal_side = dot_product > 0 and dist_player_to_goal < dist_goal_to_target
-        components["r_goal_side"] = (
-            self.goal_side_bonus if is_goal_side else self.goal_side_penalty
-        )
+        components["r_goal_side"] = self.goal_side_bonus if is_goal_side else self.goal_side_penalty
 
         # ── Smoothness (acceleration penalty) ────────────────────
         acc_x = (current_velocity[0] - prev_velocity[0]) * fps
@@ -156,7 +150,9 @@ class DefenderReward:
 
         if min_edge_dist < self.boundary_proximity_margin_cm and not out_of_bounds:
             proximity = 1.0 - min_edge_dist / self.boundary_proximity_margin_cm
-            components["r_boundary_proximity"] = self.boundary_proximity_weight * proximity * proximity
+            components["r_boundary_proximity"] = (
+                self.boundary_proximity_weight * proximity * proximity
+            )
         else:
             components["r_boundary_proximity"] = 0.0
 

@@ -60,14 +60,18 @@ def evaluate_bc_policy(
             total_mse += float(np.mean((pred_action - true_action) ** 2))
 
             # Estimate position error from action difference
-            true_vel = np.array([
-                true_action[0] * PLAYER_05_MAX_SPEED_CM_S,
-                true_action[1] * PLAYER_05_MAX_SPEED_CM_S,
-            ])
-            pred_vel = np.array([
-                pred_action[0] * PLAYER_05_MAX_SPEED_CM_S,
-                pred_action[1] * PLAYER_05_MAX_SPEED_CM_S,
-            ])
+            true_vel = np.array(
+                [
+                    true_action[0] * PLAYER_05_MAX_SPEED_CM_S,
+                    true_action[1] * PLAYER_05_MAX_SPEED_CM_S,
+                ]
+            )
+            pred_vel = np.array(
+                [
+                    pred_action[0] * PLAYER_05_MAX_SPEED_CM_S,
+                    pred_action[1] * PLAYER_05_MAX_SPEED_CM_S,
+                ]
+            )
             # Position error over one frame (1/30 s)
             pos_error = np.linalg.norm(true_vel - pred_vel) / 30.0
             total_position_error += pos_error
@@ -165,17 +169,39 @@ def make_bc_video_callback(demo_dir: str | Path):
                 }
                 # Add approximate positions for other players (use rule as ghost)
                 ghost_positions = {
-                    "Player_02": (float(target_positions[t, 0]) + 200, float(target_positions[t, 1]) + 100),
-                    "Player_03": (float(target_positions[t, 0]) + 150, float(target_positions[t, 1]) - 200),
-                    "Player_04": (float(target_positions[t, 0]) - 300, float(target_positions[t, 1])),
-                    "Player_06": (float(target_positions[t, 0]) + 300, float(target_positions[t, 1]) + 200),
-                    "Player_07": (float(target_positions[t, 0]) + 250, float(target_positions[t, 1]) - 100),
-                    "Player_08": (float(target_positions[t, 0]) + 450, float(target_positions[t, 1])),
+                    "Player_02": (
+                        float(target_positions[t, 0]) + 200,
+                        float(target_positions[t, 1]) + 100,
+                    ),
+                    "Player_03": (
+                        float(target_positions[t, 0]) + 150,
+                        float(target_positions[t, 1]) - 200,
+                    ),
+                    "Player_04": (
+                        float(target_positions[t, 0]) - 300,
+                        float(target_positions[t, 1]),
+                    ),
+                    "Player_06": (
+                        float(target_positions[t, 0]) + 300,
+                        float(target_positions[t, 1]) + 200,
+                    ),
+                    "Player_07": (
+                        float(target_positions[t, 0]) + 250,
+                        float(target_positions[t, 1]) - 100,
+                    ),
+                    "Player_08": (
+                        float(target_positions[t, 0]) + 450,
+                        float(target_positions[t, 1]),
+                    ),
                 }
                 ball_pos = (
-                    float(ball_positions[t, 0]),
-                    float(ball_positions[t, 1]),
-                ) if t < len(ball_positions) else None
+                    (
+                        float(ball_positions[t, 0]),
+                        float(ball_positions[t, 1]),
+                    )
+                    if t < len(ball_positions)
+                    else None
+                )
 
                 dist_to_target = math.hypot(
                     pred_pos[0] - float(target_positions[t, 0]),

@@ -62,13 +62,12 @@ class RLVideoEvalCallback:
             return metrics
         except Exception as exc:
             import traceback
+
             print(f"    [Eval] Failed: {exc}")
             traceback.print_exc()
             return None
 
-    def _evaluate(
-        self, policy: torch.nn.Module, device: torch.device
-    ) -> dict[str, float]:
+    def _evaluate(self, policy: torch.nn.Module, device: torch.device) -> dict[str, float]:
         """Run evaluation episodes and return metrics."""
         total_rewards: list[float] = []
         episode_lengths: list[int] = []
@@ -102,16 +101,12 @@ class RLVideoEvalCallback:
             "mean_episode_length": float(np.mean(episode_lengths)),
         }
 
-    def _record_video(
-        self, policy: torch.nn.Module, step: int, device: torch.device
-    ) -> None:
+    def _record_video(self, policy: torch.nn.Module, step: int, device: torch.device) -> None:
         """Record a video of the current policy."""
         from futsalmot_rl.viz.video_recorder import record_episode_video
 
         seq_id = getattr(self.eval_env, "seq_id", "eval")
-        output_path = (
-            self.video_dir / f"ppo_step_{step:06d}_{seq_id}.mp4"
-        )
+        output_path = self.video_dir / f"ppo_step_{step:06d}_{seq_id}.mp4"
         ensure_dir(output_path.parent)
 
         def policy_fn(obs, deterministic=True):

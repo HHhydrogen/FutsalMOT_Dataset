@@ -137,8 +137,16 @@ IMPORTANT SAFEGUARDS:
 """.format(
         a33_abs_path=str(a33_path.resolve()).replace("/", "\\"),
         seq_id=seq_id,
-        render_output=str(PROJECT_ROOT / "Saved" / "FutsalMOT_RL" / "ue_closed_loop" / "images" / seq_id).replace("/", "\\"),
-        annotation_path=str(PROJECT_ROOT / "Saved" / "FutsalMOT" / "annotations" / f"objects_bbox_2d_clean_{seq_id}.json").replace("/", "\\"),
+        render_output=str(
+            PROJECT_ROOT / "Saved" / "FutsalMOT_RL" / "ue_closed_loop" / "images" / seq_id
+        ).replace("/", "\\"),
+        annotation_path=str(
+            PROJECT_ROOT
+            / "Saved"
+            / "FutsalMOT"
+            / "annotations"
+            / f"objects_bbox_2d_clean_{seq_id}.json"
+        ).replace("/", "\\"),
     )
 
 

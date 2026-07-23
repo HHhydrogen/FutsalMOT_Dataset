@@ -2,7 +2,7 @@
 # 在 UE Python 控制台直接运行此脚本，不需要设置环境变量。
 #
 # 用法:
-#   py "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/rl_07b_ue_render_rl.py"
+#   py "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/tools/legacy/rl_07b_ue_render_rl.py"
 
 import sys
 import os
@@ -27,7 +27,8 @@ if not os.path.isfile(RL_A33_PATH):
     raise SystemExit(1)
 
 # ── 运行 Preflight (只读检查) ────────────────────────────────
-CODE_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "."))
+# Script is at tools/legacy/rl_07b_ue_render_rl.py, repo root is two levels up
+CODE_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 sys.path.insert(0, CODE_DIR)
 
 print("\n▶ 第 1 步: UE Preflight 检查...")

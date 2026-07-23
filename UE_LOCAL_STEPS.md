@@ -5,36 +5,27 @@
 ## 前提
 
 - RL A3.3 文件已导出：`Saved/FutsalMOT_RL/exported_a33/rl_episode_random_0001_t1_Player_05_a33.json`
-- 该文件中 Player_05 的轨迹由 PPO 策略生成，其余球员和球保持规则回放
 - seq_id: `rl_episode_random_0001_t1_p05`
 
 ## 步骤 1：在 UE Python 控制台执行
 
-打开 Unreal Editor，在 Python Console 输入：
-
 ```python
-py "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/rl_07b_ue_render_rl.py"
+py "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/tools/legacy/rl_07b_ue_render_rl.py"
 ```
 
-这个脚本内置了 RL A3.3 文件路径，不需要预先设置环境变量。
+该脚本内置了 RL A3.3 路径，不需要提前设环境变量。
 
-**如果 `py` 命令不可用**，改用：
+如果 `py` 不可用：
 
 ```python
 import unreal
-unreal.SystemLibrary.execute_console_command(None, 'py "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/rl_07b_ue_render_rl.py"')
+unreal.SystemLibrary.execute_console_command(None, 'py "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/tools/legacy/rl_07b_ue_render_rl.py"')
 ```
-
-预期输出：
-- Config 加载信息（指向 RL A3.3 文件）
-- Preflight 检查通过
-- Level Sequence 构建完成
-- 标注导出成功
 
 ## 步骤 2：Movie Render Queue 渲染
 
 | 设置 | 值 |
-|------|-----|
+|------|------|
 | Output Directory | `D:\projects\FustalMOT_UEDataset\Saved\FutsalMOT_RL\ue_closed_loop\images\rl_episode_random_0001_t1_p05` |
 | File Name Format | `{frame_number}` |
 | Image Format | PNG |

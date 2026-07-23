@@ -12,13 +12,9 @@ from typing import Any
 
 from futsalmot_rl.core.rl_io import read_json, write_json_atomic, write_text_atomic
 from futsalmot_rl.core.rl_paths import (
-    CODE_DIR,
-    EXPORTED_A33_DIR,
     PROJECT_ROOT,
-    REPORTS_DIR,
     ensure_dirs,
 )
-
 
 UE_CLOSED_LOOP_DIR = PROJECT_ROOT / "Saved" / "FutsalMOT_RL" / "ue_closed_loop"
 
@@ -43,7 +39,7 @@ def prepare_ue_config(
     """
     rl_a33_path = Path(rl_a33_path)
     if not rl_a33_path.is_file():
-        raise FileNotFoundError("RL A3.3 file not found: {}".format(rl_a33_path))
+        raise FileNotFoundError(f"RL A3.3 file not found: {rl_a33_path}")
 
     output_dir = Path(output_dir) if output_dir else UE_CLOSED_LOOP_DIR
     ensure_dirs()
@@ -51,7 +47,7 @@ def prepare_ue_config(
     seq_id = _extract_seq_id(rl_a33_path)
 
     # 1. Copy the RL A3.3 to the closed-loop directory
-    dest_path = output_dir / "rl_{}_for_ue.json".format(seq_id)
+    dest_path = output_dir / f"rl_{seq_id}_for_ue.json"
     shutil.copy2(str(rl_a33_path), str(dest_path))
 
     # 2. Generate UE environment command
@@ -142,13 +138,13 @@ IMPORTANT SAFEGUARDS:
         a33_abs_path=str(a33_path.resolve()).replace("/", "\\"),
         seq_id=seq_id,
         render_output=str(PROJECT_ROOT / "Saved" / "FutsalMOT_RL" / "ue_closed_loop" / "images" / seq_id).replace("/", "\\"),
-        annotation_path=str(PROJECT_ROOT / "Saved" / "FutsalMOT" / "annotations" / "objects_bbox_2d_clean_{}.json".format(seq_id)).replace("/", "\\"),
+        annotation_path=str(PROJECT_ROOT / "Saved" / "FutsalMOT" / "annotations" / f"objects_bbox_2d_clean_{seq_id}.json").replace("/", "\\"),
     )
 
 
 def _generate_instructions(a33_path: Path, seq_id: str, output_dir: Path) -> str:
     """Generate detailed step-by-step UE instructions."""
-    return """# FutsalMOT-RL UE Closed-Loop Verification
+    return f"""# FutsalMOT-RL UE Closed-Loop Verification
 
 ## Overview
 
@@ -159,7 +155,7 @@ can be rendered in Unreal Engine and produce valid annotations.
 
 | File | Path |
 |------|------|
-| RL A3.3 Config | `{a33_path}` |
+| RL A3.3 Config | `{a33_path.resolve()!s}` |
 | Seq ID | `{seq_id}` |
 | Expected annotation | `Saved/FutsalMOT/annotations/objects_bbox_2d_clean_{seq_id}.json` |
 | Expected images | `Saved/FutsalMOT_RL/ue_closed_loop/images/{seq_id}/` |
@@ -200,7 +196,4 @@ After rendering, verify:
 - Verify FUTSALMOT_CONFIG_PATH is set correctly
 - Try running ue_preflight.py standalone in UE Python console
 - Check that the source A3.3 file exists and is valid
-""".format(
-        a33_path=str(a33_path.resolve()),
-        seq_id=seq_id,
-    )
+"""

@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import numpy as np
 
-from futsalmot_rl.core.rl_io import write_json_atomic
-from futsalmot_rl.core.rl_paths import MODELS_DIR, RUNS_DIR
 from futsalmot_rl.benchmark.metrics import compute_policy_metrics
 from futsalmot_rl.data.a33_reader import (
     get_ball_positions_2d,

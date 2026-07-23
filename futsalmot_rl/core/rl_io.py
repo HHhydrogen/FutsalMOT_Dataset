@@ -29,7 +29,7 @@ def write_text_atomic(path: str | Path, text: str) -> None:
     """Atomically write a text file."""
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_name(target.name + ".tmp.{}".format(os.getpid()))
+    tmp = target.with_name(target.name + f".tmp.{os.getpid()}")
     try:
         with tmp.open("w", encoding="utf-8", newline="\n") as f:
             f.write(text)

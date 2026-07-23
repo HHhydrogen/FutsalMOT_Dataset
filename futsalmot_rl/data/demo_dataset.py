@@ -39,7 +39,7 @@ class DemoDataset(Dataset):
         demos = list(self.index.get("demos", []))
 
         if not demos:
-            raise ValueError("No demos found in {}".format(demo_index_path))
+            raise ValueError(f"No demos found in {demo_index_path}")
 
         # Shuffle and split episodes deterministically
         rng = np.random.RandomState(seed)
@@ -91,7 +91,7 @@ class DemoDataset(Dataset):
             data.close()
 
         if not all_obs:
-            raise ValueError("No valid demo data loaded for split '{}'".format(split))
+            raise ValueError(f"No valid demo data loaded for split '{split}'")
 
         self.obs = np.concatenate(all_obs, axis=0).astype(np.float32)
         self.actions = np.concatenate(all_actions, axis=0).astype(np.float32)

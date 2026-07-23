@@ -25,7 +25,7 @@ def plot_loss_curve(
     train_losses: list[float] = []
     val_losses: list[float] = []
 
-    with open(log_path, "r", encoding="utf-8") as f:
+    with open(log_path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if line:
@@ -60,7 +60,7 @@ def plot_reward_curve(
     steps: list[int] = []
     rewards: list[float] = []
 
-    with open(log_path, "r", encoding="utf-8") as f:
+    with open(log_path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if line:
@@ -135,7 +135,7 @@ def plot_comparison_bar(
             ax.text(
                 bar.get_x() + bar.get_width() / 2,
                 bar.get_height(),
-                "{:.1f}".format(val) if isinstance(val, float) else str(val),
+                f"{val:.1f}" if isinstance(val, float) else str(val),
                 ha="center", va="bottom", fontsize=8,
             )
 

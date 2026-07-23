@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import os
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import matplotlib
 import matplotlib.pyplot as plt
@@ -92,27 +92,27 @@ def record_video_from_callback(
             return str(output_path)
         else:
             # Fallback: save PNG frames
-            fallback_dir = output_path.parent / "{}_frames".format(output_path.stem)
+            fallback_dir = output_path.parent / f"{output_path.stem}_frames"
             ensure_dir(fallback_dir)
             for i, frame in enumerate(frames):
                 import imageio as iio
 
-                iio.imwrite(str(fallback_dir / "frame_{:04d}.png".format(i)), frame)
+                iio.imwrite(str(fallback_dir / f"frame_{i:04d}.png"), frame)
             return str(fallback_dir)
 
     except Exception as exc:
-        print("[WARNING] Video recording failed ({}), trying fallback...".format(exc))
+        print(f"[WARNING] Video recording failed ({exc}), trying fallback...")
         try:
             frames = _extract_frames(frame_callback, n_frames, figsize, fps)
-            fallback_dir = output_path.parent / "{}_frames".format(output_path.stem)
+            fallback_dir = output_path.parent / f"{output_path.stem}_frames"
             ensure_dir(fallback_dir)
             for i, frame in enumerate(frames):
                 import imageio as iio
 
-                iio.imwrite(str(fallback_dir / "frame_{:04d}.png".format(i)), frame)
+                iio.imwrite(str(fallback_dir / f"frame_{i:04d}.png"), frame)
             return str(fallback_dir)
         except Exception as fallback_exc:
-            print("[ERROR] Fallback also failed: {}".format(fallback_exc))
+            print(f"[ERROR] Fallback also failed: {fallback_exc}")
             return None
 
 
@@ -199,13 +199,13 @@ def record_episode_video(
             writer.close()
             return str(output_path)
         else:
-            fallback_dir = output_path.parent / "{}_frames".format(output_path.stem)
+            fallback_dir = output_path.parent / f"{output_path.stem}_frames"
             ensure_dir(fallback_dir)
             import imageio as iio
 
             for i, frame in enumerate(frames):
-                iio.imwrite(str(fallback_dir / "frame_{:04d}.png".format(i)), frame)
+                iio.imwrite(str(fallback_dir / f"frame_{i:04d}.png"), frame)
             return str(fallback_dir)
     except Exception as exc:
-        print("[WARNING] Video recording failed: {}".format(exc))
+        print(f"[WARNING] Video recording failed: {exc}")
         return None

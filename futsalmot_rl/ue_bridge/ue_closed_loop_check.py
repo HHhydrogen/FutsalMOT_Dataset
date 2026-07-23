@@ -10,13 +10,11 @@ Verifies that the RL A3.3 config was correctly rendered by UE:
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
-from futsalmot_rl.core.rl_io import read_json, write_json_atomic, write_text_atomic
-from futsalmot_rl.core.rl_paths import CODE_DIR, PROJECT_ROOT, REPORTS_DIR, ensure_dirs
-
+from futsalmot_rl.core.rl_io import read_json, write_json_atomic
+from futsalmot_rl.core.rl_paths import PROJECT_ROOT, ensure_dirs
 
 UE_CLOSED_LOOP_DIR = PROJECT_ROOT / "Saved" / "FutsalMOT_RL" / "ue_closed_loop"
 
@@ -56,7 +54,7 @@ def check_ue_outputs(
     checks: dict[str, Any] = {}
 
     # 1. Check annotation JSON
-    annotation_path = annotation_dir / "objects_bbox_2d_clean_{}.json".format(seq_id)
+    annotation_path = annotation_dir / f"objects_bbox_2d_clean_{seq_id}.json"
     checks["annotation_file_exists"] = annotation_path.is_file()
     checks["annotation_file_path"] = str(annotation_path.resolve())
 

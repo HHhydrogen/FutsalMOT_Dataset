@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
@@ -10,9 +9,9 @@ import numpy as np
 import torch
 
 from futsalmot_rl.core.rl_io import write_json_atomic
-from futsalmot_rl.core.rl_paths import MODELS_DIR, TRAIN_LOGS_DIR, VIDEOS_DIR, ensure_dirs
+from futsalmot_rl.core.rl_paths import MODELS_DIR, ensure_dirs
 from futsalmot_rl.envs.defender_follow_env import FutsalDefenderFollowEnv
-from futsalmot_rl.training.train_ppo import PPOTrainer, _plot_reward_curve
+from futsalmot_rl.training.train_ppo import PPOTrainer
 
 
 def run_ablation_ppo_scratch(
@@ -39,8 +38,8 @@ def run_ablation_ppo_scratch(
 
     print("=" * 60)
     print("PPO from Scratch — Ablation Experiment")
-    print("Source: {}".format(source_path))
-    print("Total timesteps: {}".format(total_timesteps))
+    print(f"Source: {source_path}")
+    print(f"Total timesteps: {total_timesteps}")
     print("=" * 60)
 
     # Same reward config as PPO v2
@@ -185,10 +184,9 @@ def _write_ablation_report(
     device: str = "auto",
 ) -> None:
     """Write ablation comparison report as Markdown."""
-    from futsalmot_rl.data.a33_reader import get_player_positions_2d, load_a33_config
     from futsalmot_rl.benchmark.metrics import compute_policy_metrics
+    from futsalmot_rl.data.a33_reader import get_player_positions_2d, load_a33_config
     from futsalmot_rl.models.policy_io import load_policy
-    import numpy as np
 
     if device == "auto":
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -272,7 +270,7 @@ def _write_ablation_report(
         vals = []
         for name in ["rule", "ppo_from_scratch", "ppo_bc_init"]:
             if name in results:
-                vals.append("{:.2f}".format(results[name].get(key, 0)))
+                vals.append(f"{results[name].get(key, 0):.2f}")
             else:
                 vals.append("N/A")
         lines.append("| {} | {} |".format(label, " | ".join(vals)))
@@ -287,9 +285,9 @@ def _write_ablation_report(
     scratch_mark = results.get("ppo_from_scratch", {}).get("mean_marking_distance_cm", 0)
     bc_init_mark = results.get("ppo_bc_init", {}).get("mean_marking_distance_cm", 0)
 
-    lines.append("- PPO from scratch OOB: {} vs BC-init OOB: {}".format(scratch_oob, bc_init_oob))
-    lines.append("- PPO from scratch collisions: {} vs BC-init collisions: {}".format(scratch_coll, bc_init_coll))
-    lines.append("- PPO from scratch marking: {:.1f}cm vs BC-init marking: {:.1f}cm".format(scratch_mark, bc_init_mark))
+    lines.append(f"- PPO from scratch OOB: {scratch_oob} vs BC-init OOB: {bc_init_oob}")
+    lines.append(f"- PPO from scratch collisions: {scratch_coll} vs BC-init collisions: {bc_init_coll}")
+    lines.append(f"- PPO from scratch marking: {scratch_mark:.1f}cm vs BC-init marking: {bc_init_mark:.1f}cm")
 
     if bc_init_oob <= scratch_oob and bc_init_coll <= scratch_coll:
         lines.append("- **BC initialization improves training stability.**")
@@ -301,4 +299,4 @@ def _write_ablation_report(
     with open(report_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
 
-    print("\nAblation report: {}".format(report_path))
+    print(f"\nAblation report: {report_path}")

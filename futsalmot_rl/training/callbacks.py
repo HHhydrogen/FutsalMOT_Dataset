@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import numpy as np
 import torch
@@ -62,7 +62,7 @@ class RLVideoEvalCallback:
             return metrics
         except Exception as exc:
             import traceback
-            print("    [Eval] Failed: {}".format(exc))
+            print(f"    [Eval] Failed: {exc}")
             traceback.print_exc()
             return None
 
@@ -110,7 +110,7 @@ class RLVideoEvalCallback:
 
         seq_id = getattr(self.eval_env, "seq_id", "eval")
         output_path = (
-            self.video_dir / "ppo_step_{:06d}_{}.mp4".format(step, seq_id)
+            self.video_dir / f"ppo_step_{step:06d}_{seq_id}.mp4"
         )
         ensure_dir(output_path.parent)
 
@@ -126,7 +126,7 @@ class RLVideoEvalCallback:
             policy_fn,
             output_path,
             fps=self.video_fps,
-            title="PPO Step {}".format(step),
+            title=f"PPO Step {step}",
         )
         if result:
-            print("    [Video] Saved {}".format(result))
+            print(f"    [Video] Saved {result}")

@@ -6,11 +6,10 @@ Produces a 39-dim observation vector for Player_05 (defender) targeting Player_0
 from __future__ import annotations
 
 import math
-from typing import Any
 
 import numpy as np
 
-from futsalmot_rl.core.rl_paths import COURT_X_MIN, COURT_X_MAX, COURT_Y_MIN, COURT_Y_MAX
+from futsalmot_rl.core.rl_paths import COURT_X_MAX, COURT_X_MIN, COURT_Y_MAX, COURT_Y_MIN
 from futsalmot_rl.features.normalization import Normalizer
 
 # Supported event types for one-hot encoding
@@ -123,7 +122,7 @@ def build_observation(
         features.append(1.0 if i == evt_idx else 0.0)
 
     arr = np.array(features, dtype=np.float32)
-    assert arr.shape == (OBS_DIM,), "Expected obs dim {} got {}".format(OBS_DIM, arr.shape)
+    assert arr.shape == (OBS_DIM,), f"Expected obs dim {OBS_DIM} got {arr.shape}"
     return arr
 
 

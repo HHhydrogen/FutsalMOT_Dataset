@@ -7,8 +7,6 @@ from pathlib import Path
 from typing import Any
 
 from futsalmot_rl.core.rl_io import write_json_atomic, write_text_atomic
-from futsalmot_rl.core.rl_paths import ensure_dirs
-
 
 METRIC_LABELS = {
     "mean_marking_distance_cm": "Mean Marking Distance (cm)",
@@ -99,9 +97,9 @@ def write_benchmark_summary_md(
             mean = sum(vals) / max(1, len(vals))
             if len(vals) > 1:
                 std = (sum((v - mean) ** 2 for v in vals) / (len(vals) - 1)) ** 0.5
-                values.append("{:.2f} ± {:.2f}".format(mean, std))
+                values.append(f"{mean:.2f} ± {std:.2f}")
             else:
-                values.append("{:.2f}".format(mean))
+                values.append(f"{mean:.2f}")
         lines.append("| {} | {} |".format(label, " | ".join(values)))
 
     lines.append("")
@@ -166,5 +164,5 @@ def write_paper_table_csv(
             for key in paper_keys:
                 nums = [v.get(key, 0) or 0 for v in vals]
                 mean = sum(nums) / max(1, len(nums))
-                row.append("{:.2f}".format(mean))
+                row.append(f"{mean:.2f}")
             writer.writerow(row)

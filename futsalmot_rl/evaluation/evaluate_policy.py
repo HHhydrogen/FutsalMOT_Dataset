@@ -4,17 +4,13 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import numpy as np
 import torch
 
-from futsalmot_rl.core.rl_io import read_json, write_json_atomic
-from futsalmot_rl.core.rl_paths import DEMOS_DIR, VIDEOS_DIR, ensure_dirs
-from futsalmot_rl.data.a33_reader import get_player_positions_2d, load_a33_config
-from futsalmot_rl.features.action_builder import apply_motion_constraints, PLAYER_05_MAX_SPEED_CM_S
-from futsalmot_rl.features.normalization import Normalizer
-from futsalmot_rl.features.obs_builder import build_observation
+from futsalmot_rl.core.rl_io import read_json
+from futsalmot_rl.features.action_builder import PLAYER_05_MAX_SPEED_CM_S, apply_motion_constraints
 
 
 def evaluate_bc_policy(
@@ -98,8 +94,9 @@ def make_bc_video_callback(demo_dir: str | Path):
         """Record a video using the BC policy."""
         try:
             import imageio
-            import numpy as _np_for_cb
             import matplotlib.pyplot as _plt_for_close
+            import numpy as _np_for_cb
+
             from futsalmot_rl.viz.pitch_drawer import create_pitch_figure, draw_pitch_frame
 
             # Find a demo file to use for replay
@@ -128,7 +125,7 @@ def make_bc_video_callback(demo_dir: str | Path):
             n_frames = len(data["positions_rule"])
             fig, ax = create_pitch_figure()
 
-            output_path = Path(video_output_dir) / "bc_epoch_{:04d}_{}.mp4".format(epoch, seq_id)
+            output_path = Path(video_output_dir) / f"bc_epoch_{epoch:04d}_{seq_id}.mp4"
             output_path.parent.mkdir(parents=True, exist_ok=True)
             writer = imageio.get_writer(str(output_path), fps=15, codec="h264")
 
@@ -196,7 +193,7 @@ def make_bc_video_callback(demo_dir: str | Path):
                     ghost_positions=ghost_positions,
                     frame=t,
                     distance_to_target=dist_to_target,
-                    title="BC Epoch {} - {}".format(epoch, seq_id),
+                    title=f"BC Epoch {epoch} - {seq_id}",
                 )
                 fig.canvas.draw()
                 try:
@@ -214,9 +211,9 @@ def make_bc_video_callback(demo_dir: str | Path):
                 data.close()
             except Exception:
                 pass
-            print("    [video] Saved {}".format(output_path))
+            print(f"    [video] Saved {output_path}")
 
         except Exception as exc:
-            print("    [video] Failed: {}".format(exc))
+            print(f"    [video] Failed: {exc}")
 
     return callback

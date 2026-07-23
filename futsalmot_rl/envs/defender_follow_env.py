@@ -36,7 +36,6 @@ from futsalmot_rl.features.action_builder import (
     PLAYER_05_MAX_ACCEL_CM_S2,
     PLAYER_05_MAX_SPEED_CM_S,
     apply_motion_constraints,
-    extract_action_from_trajectory,
 )
 from futsalmot_rl.features.obs_builder import OBS_DIM, build_observation
 from futsalmot_rl.rewards.defender_rewards import DefenderReward
@@ -106,6 +105,7 @@ class FutsalDefenderFollowEnv(gym.Env):
         self.agent_vel: tuple[float, float] = (0.0, 0.0)
         self.prev_vel: tuple[float, float] = (0.0, 0.0)
         self.trail: list[tuple[float, float]] = []
+        self._last_yaw: float = 0.0
         self.last_info: dict[str, Any] = {}
 
     def _load_source_data(self) -> None:
@@ -158,9 +158,7 @@ class FutsalDefenderFollowEnv(gym.Env):
         total_frames = len(self.agent_rule_positions)
         if total_frames < self.episode_length:
             raise ValueError(
-                "Episode has {} frames, expected {}".format(
-                    total_frames, self.episode_length
-                )
+                f"Episode has {total_frames} frames, expected {self.episode_length}"
             )
 
         self.total_frames = total_frames
@@ -223,6 +221,7 @@ class FutsalDefenderFollowEnv(gym.Env):
         self.agent_vel = (0.0, 0.0)
         self.prev_vel = (0.0, 0.0)
         self.trail = [self.agent_pos]
+        self._last_yaw = 0.0
 
         obs = self._build_observation()
         info = self._build_info()
@@ -349,33 +348,48 @@ class FutsalDefenderFollowEnv(gym.Env):
 
         return obs, float(reward), terminated, truncated, info
 
+    def _compute_yaw_from_velocity(self, vx: float, vy: float) -> float:
+        """Compute yaw (degrees) from velocity vector. Zero-speed preserves last yaw."""
+        speed = math.hypot(vx, vy)
+        if speed > 5.0:  # minimum motion threshold (cm/s)
+            return math.degrees(math.atan2(vy, vx))
+        return self._last_yaw
+
+    def _compute_ball_velocity(self, frame: int) -> tuple[float, float]:
+        """Compute ball velocity from consecutive ball positions."""
+        if frame <= 0 or frame >= len(self.ball_positions):
+            return (0.0, 0.0)
+        dx = self.ball_positions[frame][0] - self.ball_positions[frame - 1][0]
+        dy = self.ball_positions[frame][1] - self.ball_positions[frame - 1][1]
+        return (dx * self.fps, dy * self.fps)
+
     def _build_observation(self) -> np.ndarray:
-        """Build the current observation."""
+        """Build the current observation from ACTUAL agent state (not rule replay)."""
         frame = self.current_frame
         target_idx = min(frame, len(self.target_positions) - 1)
+
+        # Self velocity: use actual agent velocity from physics
+        av = self.agent_vel
+
+        # Self yaw: compute from actual velocity
+        self_yaw = self._compute_yaw_from_velocity(av[0], av[1])
+
+        # Target velocity: use rule trajectory velocity (target follows rule)
+        vel_idx = min(frame, len(self.all_velocities.get(self.target_id, [(0, 0)])) - 1)
+        target_vel_arr = self.all_velocities.get(self.target_id, [(0.0, 0.0)])
+        tv = target_vel_arr[vel_idx] if vel_idx < len(target_vel_arr) else (0.0, 0.0)
+
+        # Ball velocity: compute from ball positions independently
+        bv = self._compute_ball_velocity(frame)
+
+        # Ball position
         ball_idx = min(frame, len(self.ball_positions) - 1)
-
-        # Agent yaw
-        yaws = self.all_yaws.get(self.agent_id, [0.0] * self.total_frames)
-        yaw = float(yaws[frame]) if frame < len(yaws) else 0.0
-
-        # Velocities
-        vel_idx = min(frame, len(self.all_velocities.get(self.agent_id, [(0, 0)])) - 1)
-        agent_vel = self.all_velocities.get(self.agent_id, [(0.0, 0.0)])
-        av = agent_vel[vel_idx] if vel_idx < len(agent_vel) else (0.0, 0.0)
-
-        target_vel = self.all_velocities.get(self.target_id, [(0.0, 0.0)])
-        tv = target_vel[vel_idx] if vel_idx < len(target_vel) else (0.0, 0.0)
-
-        ball_vel_arr = self.all_velocities.get("Ball_01") or [(0.0, 0.0)] * self.total_frames
-        bv = ball_vel_arr[vel_idx] if vel_idx < len(ball_vel_arr) else (0.0, 0.0)
-
         ball_pos = self.ball_positions[ball_idx] if self.ball_positions else (0.0, 0.0)
 
-        return build_observation(
+        obs = build_observation(
             self_pos=self.agent_pos,
             self_vel=av,
-            self_yaw_deg=yaw,
+            self_yaw_deg=self_yaw,
             target_pos=(
                 float(self.target_positions[target_idx][0]),
                 float(self.target_positions[target_idx][1]),
@@ -392,6 +406,7 @@ class FutsalDefenderFollowEnv(gym.Env):
             steps_left=self.total_frames - frame,
             total_steps=self.total_frames,
         )
+        return obs
 
     def _get_all_positions(self) -> dict[str, tuple[float, float]]:
         """Get positions of all players at current frame."""

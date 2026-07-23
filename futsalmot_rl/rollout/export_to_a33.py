@@ -14,10 +14,9 @@ from typing import Any
 import numpy as np
 
 from futsalmot_rl.core.rl_io import write_json_atomic
-from futsalmot_rl.core.rl_paths import EXPORTED_A33_DIR, REPORTS_DIR, FPS, ensure_dirs
+from futsalmot_rl.core.rl_paths import EXPORTED_A33_DIR, FPS, REPORTS_DIR, ensure_dirs
 from futsalmot_rl.data.a33_reader import get_seq_id, load_a33_config
 from futsalmot_rl.envs.defender_follow_env import FutsalDefenderFollowEnv
-from futsalmot_rl.features.action_builder import PLAYER_05_MAX_SPEED_CM_S
 from futsalmot_rl.rollout.policy_rollout import rollout_episode
 
 
@@ -48,7 +47,7 @@ def export_rl_a33(
 
     # Build output config — deep copy of source
     output_cfg = copy.deepcopy(source_cfg)
-    output_seq_id = "rl_{}_p05".format(seq_id)
+    output_seq_id = f"rl_{seq_id}_p05"
     output_cfg["seq_id"] = output_seq_id
     output_cfg["description"] = output_cfg.get("description", "") + " [RL Player_05]"
     output_cfg["episode_id"] = output_seq_id
@@ -60,7 +59,7 @@ def export_rl_a33(
     # Get original Player_05 object
     objects = output_cfg.get("objects", {})
     if agent_id not in objects:
-        raise ValueError("Agent {} not found in source config".format(agent_id))
+        raise ValueError(f"Agent {agent_id} not found in source config")
 
     player_obj = objects[agent_id]
 
@@ -144,7 +143,7 @@ def export_rl_a33(
     output_dir = Path(output_dir) if output_dir else EXPORTED_A33_DIR
     ensure_dirs()
 
-    output_path = output_dir / "rl_{}_{}_a33.json".format(seq_id, agent_id)
+    output_path = output_dir / f"rl_{seq_id}_{agent_id}_a33.json"
     write_json_atomic(output_path, output_cfg)
 
     # Write export report
@@ -163,7 +162,7 @@ def export_rl_a33(
             obj_stats.get(agent_id, {}).get("max_speed_xy_cm_s", 0.0)
         ),
     }
-    report_path = output_dir / "rl_{}_{}_export_report.json".format(seq_id, agent_id)
+    report_path = output_dir / f"rl_{seq_id}_{agent_id}_export_report.json"
     write_json_atomic(report_path, report)
 
     # Run trajectory validation
@@ -220,7 +219,6 @@ def _run_validation(a33_path: Path) -> dict[str, Any]:
     Uses the existing validate_trajectory.py via subprocess (read-only).
     """
     import subprocess
-    import json
 
     from futsalmot_rl.core.rl_paths import CODE_DIR
 
@@ -247,8 +245,6 @@ def _run_validation(a33_path: Path) -> dict[str, Any]:
         "stdout_tail": result.stdout[-500:],
         "stderr_tail": result.stderr[-500:],
     }
-    report_path = REPORTS_DIR / "rl_a33_validation_{}.json".format(
-        get_seq_id(load_a33_config(a33_path))
-    )
+    report_path = REPORTS_DIR / f"rl_a33_validation_{get_seq_id(load_a33_config(a33_path))}.json"
     write_json_atomic(report_path, report)
     return report

@@ -7,17 +7,22 @@ import time
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
 from futsalmot_rl.core.rl_io import write_json_atomic
-from futsalmot_rl.core.rl_paths import DEMOS_DIR, MODELS_DIR, TRAIN_LOGS_DIR, VIDEOS_DIR, ensure_dirs
+from futsalmot_rl.core.rl_paths import (
+    DEMOS_DIR,
+    MODELS_DIR,
+    TRAIN_LOGS_DIR,
+    VIDEOS_DIR,
+    ensure_dirs,
+)
 from futsalmot_rl.data.demo_dataset import DemoDataset
-from futsalmot_rl.models.mlp_policy import MLPPolicy
-from futsalmot_rl.models.policy_io import save_policy, save_checkpoint
 from futsalmot_rl.features.obs_builder import get_obs_dim
+from futsalmot_rl.models.mlp_policy import MLPPolicy
+from futsalmot_rl.models.policy_io import save_policy
 
 
 def train_bc(
@@ -44,7 +49,7 @@ def train_bc(
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     else:
         device = torch.device(device)
-    print("Using device: {}".format(device))
+    print(f"Using device: {device}")
 
     # ── Config ──────────────────────────────────────────────────
     cfg: dict[str, Any] = {
@@ -90,9 +95,9 @@ def train_bc(
         num_workers=0,
     )
 
-    print("  Train samples: {}".format(len(train_dataset)))
-    print("  Val samples:   {}".format(len(val_dataset)))
-    print("  Obs dim:       {}".format(obs_dim))
+    print(f"  Train samples: {len(train_dataset)}")
+    print(f"  Val samples:   {len(val_dataset)}")
+    print(f"  Obs dim:       {obs_dim}")
 
     # ── Model ────────────────────────────────────────────────────
     policy = MLPPolicy(obs_dim, hidden_sizes=cfg["hidden_sizes"], act_dim=2)
@@ -197,7 +202,7 @@ def train_bc(
             try:
                 video_callback(policy, epoch, VIDEOS_DIR / "bc")
             except Exception as exc:
-                print("    [WARNING] Video callback failed: {}".format(exc))
+                print(f"    [WARNING] Video callback failed: {exc}")
 
         summary["epochs"].append(log_entry)
 
@@ -209,20 +214,20 @@ def train_bc(
 
     # Save final model
     save_policy(policy, model_out, config=cfg, metrics=summary)
-    print("\nTraining complete ({:.1f}s)".format(total_time))
-    print("Best val loss: {:.6f} (epoch {})".format(best_val_loss, best_epoch))
-    print("Final model: {}".format(model_out))
+    print(f"\nTraining complete ({total_time:.1f}s)")
+    print(f"Best val loss: {best_val_loss:.6f} (epoch {best_epoch})")
+    print(f"Final model: {model_out}")
 
     # Generate loss curve
     try:
         _plot_loss_curve(log_path, log_dir / "loss_curve.png")
     except Exception as exc:
-        print("  [WARNING] Loss curve plot failed: {}".format(exc))
+        print(f"  [WARNING] Loss curve plot failed: {exc}")
 
     # Save summary
     summary_path = log_dir / "bc_summary.json"
     write_json_atomic(summary_path, summary)
-    print("Summary: {}".format(summary_path))
+    print(f"Summary: {summary_path}")
 
     return summary
 
@@ -237,7 +242,7 @@ def _plot_loss_curve(log_path: Path, output_path: Path) -> None:
     train_losses: list[float] = []
     val_losses: list[float] = []
 
-    with open(log_path, "r", encoding="utf-8") as f:
+    with open(log_path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if line:

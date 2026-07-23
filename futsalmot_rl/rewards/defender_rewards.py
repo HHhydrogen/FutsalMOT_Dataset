@@ -5,8 +5,6 @@ from __future__ import annotations
 import math
 from typing import Any
 
-import numpy as np
-
 
 class DefenderReward:
     """Dense reward function for the defender follow task.

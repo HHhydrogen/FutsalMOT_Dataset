@@ -12,7 +12,6 @@ from typing import Any
 from futsalmot_rl.core.rl_io import read_json
 from futsalmot_rl.core.rl_paths import RUNS_DIR
 
-
 # ── Run discovery ───────────────────────────────────────────────
 
 def find_rule_runs(
@@ -42,13 +41,13 @@ def find_rule_runs(
             cfg = load_a33_config(path)
             ep_id = cfg.get("episode_id", "")
             for tid in (template_ids or []):
-                if "_t{:d}".format(tid) in ep_id:
+                if f"_t{tid:d}" in ep_id:
                     filtered.append(path)
                     break
             else:
                 if seeds is not None:
                     for seed in seeds:
-                        if "_{:04d}_".format(seed) in ep_id:
+                        if f"_{seed:04d}_" in ep_id:
                             filtered.append(path)
                             break
                 else:
@@ -87,7 +86,7 @@ def load_a33_config(path: str | Path) -> dict[str, Any]:
     """Load and validate an A3.3 trajectory config JSON."""
     data = read_json(path)
     if not isinstance(data, dict):
-        raise ValueError("A3.3 config must be a JSON object: {}".format(path))
+        raise ValueError(f"A3.3 config must be a JSON object: {path}")
     if data.get("schema_version", "").startswith("3."):
         return data
     raise ValueError("Unsupported schema version: {}".format(data.get("schema_version")))

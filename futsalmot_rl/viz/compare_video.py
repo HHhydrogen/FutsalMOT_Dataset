@@ -6,18 +6,16 @@ Creates side-by-side or overlay videos comparing Rule / BC / PPO trajectories.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Callable
 
 import numpy as np
 
-from futsalmot_rl.core.rl_io import ensure_dir, write_json_atomic
+from futsalmot_rl.core.rl_io import ensure_dir
 from futsalmot_rl.core.rl_paths import (
     COURT_X_MAX,
     COURT_X_MIN,
     COURT_Y_MAX,
     COURT_Y_MIN,
     FPS,
-    VIDEOS_DIR,
 )
 
 
@@ -70,7 +68,7 @@ def make_comparison_video(
         ax.set_xlim(COURT_X_MIN, COURT_X_MAX)
         ax.set_ylim(COURT_Y_MIN, COURT_Y_MAX)
         ax.set_aspect("equal")
-        ax.set_title("Policy Comparison — {}".format(seq_id), color="white", fontsize=14)
+        ax.set_title(f"Policy Comparison — {seq_id}", color="white", fontsize=14)
 
         # Court boundary
         rect = plt.Rectangle(
@@ -149,7 +147,7 @@ def make_comparison_video(
         # ── Info panel ──────────────────────────────────────────
         time_s = t / FPS
         info_lines = [
-            "Frame: {}/{} ({:.1f}s)".format(t, n_frames - 1, time_s),
+            f"Frame: {t}/{n_frames - 1} ({time_s:.1f}s)",
             "",
             "Distance to target:",
         ]
@@ -160,7 +158,7 @@ def make_comparison_video(
                     positions[t, 0] - target_positions[t, 0],
                     positions[t, 1] - target_positions[t, 1],
                 )
-                info_lines.append("  {}: {:.0f} cm".format(name, dist))
+                info_lines.append(f"  {name}: {dist:.0f} cm")
 
         info_lines.append("")
         # Out of bounds check
@@ -171,7 +169,7 @@ def make_comparison_video(
                 oob = not (COURT_X_MIN + 10 <= x <= COURT_X_MAX - 10
                            and COURT_Y_MIN + 10 <= y <= COURT_Y_MAX - 10)
                 if oob:
-                    info_lines.append("  {}: OUT OF BOUNDS".format(name))
+                    info_lines.append(f"  {name}: OUT OF BOUNDS")
 
         ax.text(
             0.02, 0.98, "\n".join(info_lines),

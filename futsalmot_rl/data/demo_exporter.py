@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
@@ -20,8 +19,8 @@ from futsalmot_rl.data.a33_reader import (
     get_seq_id,
     load_a33_config,
 )
-from futsalmot_rl.features.action_builder import extract_all_actions, PLAYER_05_MAX_SPEED_CM_S
-from futsalmot_rl.features.obs_builder import build_observation, EVENT_TYPE_TO_IDX
+from futsalmot_rl.features.action_builder import PLAYER_05_MAX_SPEED_CM_S, extract_all_actions
+from futsalmot_rl.features.obs_builder import build_observation
 
 
 def export_demo_from_a33(
@@ -46,7 +45,7 @@ def export_demo_from_a33(
     agent_positions = all_positions_2d.get(agent_id)
     target_positions = all_positions_2d.get(target_id)
     if agent_positions is None or target_positions is None:
-        raise ValueError("Missing {} or {} in config {}".format(agent_id, target_id, a33_path))
+        raise ValueError(f"Missing {agent_id} or {target_id} in config {a33_path}")
 
     # Get yaw for the agent
     all_yaws = get_player_yaws(cfg)
@@ -145,7 +144,7 @@ def export_demo_from_a33(
     # Save demo
     output_dir = Path(output_dir) if output_dir else DEMOS_DIR
     output_dir.mkdir(parents=True, exist_ok=True)
-    demo_filename = "demo_{}_{}.npz".format(agent_id, seq_id)
+    demo_filename = f"demo_{agent_id}_{seq_id}.npz"
     demo_path = output_dir / demo_filename
 
     save_npz(

@@ -7,7 +7,6 @@ from typing import Any
 
 import torch
 
-from futsalmot_rl.core.rl_io import write_json_atomic
 from futsalmot_rl.models.mlp_policy import MLPActorCritic, MLPPolicy
 
 

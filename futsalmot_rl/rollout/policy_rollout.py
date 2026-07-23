@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-from futsalmot_rl.core.rl_paths import FPS
 from futsalmot_rl.envs.defender_follow_env import FutsalDefenderFollowEnv
 
 

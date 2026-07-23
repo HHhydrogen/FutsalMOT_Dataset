@@ -3,23 +3,19 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
-
-import numpy as np
+from typing import Any
 
 from futsalmot_rl.core.rl_io import write_json_atomic
 from futsalmot_rl.core.rl_paths import (
     REPORTS_DIR,
-    RUNS_DIR,
-    VIDEOS_DIR,
     ensure_dirs,
 )
 from futsalmot_rl.data.a33_reader import get_player_positions_2d, load_a33_config
 from futsalmot_rl.envs.defender_follow_env import FutsalDefenderFollowEnv
 from futsalmot_rl.features.action_builder import (
     PLAYER_05_MAX_SPEED_CM_S,
-    extract_action_from_trajectory,
 )
 
 
@@ -109,8 +105,6 @@ def compare_policies(
     Returns:
         Dict with per-policy metrics.
     """
-    from futsalmot_rl.core.rl_io import load_npz
-    from futsalmot_rl.core.rl_paths import DEMOS_DIR
 
     ensure_dirs()
     results: dict[str, Any] = {}
@@ -175,7 +169,7 @@ def save_comparison_report(
     seq_id: str = "comparison",
 ) -> dict[str, Any]:
     """Save comparison report as JSON and CSV."""
-    report_path = REPORTS_DIR / "compare_rule_bc_rl_{}.json".format(seq_id)
+    report_path = REPORTS_DIR / f"compare_rule_bc_rl_{seq_id}.json"
     write_json_atomic(report_path, results)
 
     # CSV summary

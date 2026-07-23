@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import math
-from typing import Any
 
 import matplotlib
 import matplotlib.pyplot as plt
-import numpy as np
 
 from futsalmot_rl.core.rl_paths import COURT_X_MAX, COURT_X_MIN, COURT_Y_MAX, COURT_Y_MIN
 
@@ -225,16 +223,16 @@ def draw_pitch_frame(
 
     # Info panel (upper left)
     info_lines = [
-        "Frame: {}/{} ({:.1f}s)".format(frame, 299, frame / fps),
+        f"Frame: {frame}/{299} ({frame / fps:.1f}s)",
     ]
     if reward is not None:
-        info_lines.append("Reward: {:.3f}".format(reward))
+        info_lines.append(f"Reward: {reward:.3f}")
     if distance_to_target is not None:
-        info_lines.append("Dist to target: {:.0f} cm".format(distance_to_target))
+        info_lines.append(f"Dist to target: {distance_to_target:.0f} cm")
     if possession_owner:
-        info_lines.append("Possession: {}".format(possession_owner))
+        info_lines.append(f"Possession: {possession_owner}")
     if event_type:
-        info_lines.append("Event: {}".format(event_type))
+        info_lines.append(f"Event: {event_type}")
     if collision:
         info_lines.append("⚠ COLLISION")
     if out_of_bounds:
@@ -255,7 +253,7 @@ def draw_pitch_frame(
     # Frame count in upper right
     time_s = frame / fps
     ax.text(
-        0.98, 0.98, "t={:.1f}s".format(time_s),
+        0.98, 0.98, f"t={time_s:.1f}s",
         transform=ax.transAxes,
         color=COLOR_TEXT,
         fontsize=10,

@@ -2131,6 +2131,24 @@ def evaluate_open_sequence_at_frame(frame_id):
         return False
 
 
+def refresh_skeletal_mesh_pose(actor):
+    """刷新动画求值后的骨骼缓存，避免读取到上一帧姿态。"""
+    skel_comp = get_skeletal_mesh_component(actor)
+    if skel_comp is None:
+        return
+
+    for method_name in [
+        "refresh_bone_transforms",
+        "update_bounds",
+    ]:
+        try:
+            method = getattr(skel_comp, method_name, None)
+            if method is not None:
+                method()
+        except Exception:
+            pass
+
+
 # ============================================================
 # Camera projection
 # ============================================================
@@ -2173,10 +2191,18 @@ def project_world_to_camera_uv(world_location, camera_actor):
     cx = IMAGE_WIDTH / 2.0
     cy = IMAGE_HEIGHT / 2.0
 
-    cam_loc = camera_actor.get_actor_location()
-    forward = camera_actor.get_actor_forward_vector()
-    right = camera_actor.get_actor_right_vector()
-    up = camera_actor.get_actor_up_vector()
+    # 投影必须使用 CineCameraComponent 的世界变换。Actor 根节点可能有
+    # 相对位置/旋转，使用 Actor 变换会让所有关键点产生固定偏移。
+    try:
+        cam_loc = cine_comp.get_world_location()
+        forward = cine_comp.get_forward_vector()
+        right = cine_comp.get_right_vector()
+        up = cine_comp.get_up_vector()
+    except Exception:
+        cam_loc = camera_actor.get_actor_location()
+        forward = camera_actor.get_actor_forward_vector()
+        right = camera_actor.get_actor_right_vector()
+        up = camera_actor.get_actor_up_vector()
 
     rel = world_location - cam_loc
 
@@ -2235,12 +2261,20 @@ def get_skeletal_mesh_component(actor):
 
 
 def get_socket_or_bone_world_location(skel_comp, name):
-    # 避免无效骨骼名返回组件原点并污染 bbox。
+    # 先使用明确的骨骼世界坐标，socket 查询只作为旧资源兼容回退。
     try:
         if hasattr(skel_comp, "get_bone_index"):
             bone_index = int(skel_comp.get_bone_index(name))
             if bone_index < 0:
                 return None
+    except Exception:
+        pass
+
+    try:
+        bone_spaces = getattr(unreal, "BoneSpaces", None)
+        world_space = getattr(bone_spaces, "WORLD_SPACE", None)
+        if world_space is not None and hasattr(skel_comp, "get_bone_location"):
+            return skel_comp.get_bone_location(name, world_space)
     except Exception:
         pass
 
@@ -2870,6 +2904,9 @@ for frame_id in range(FRAME_START, FRAME_END + 1):
     if pose_evaluation_active:
         if not evaluate_open_sequence_at_frame(frame_id):
             pose_evaluation_active = False
+        else:
+            for pose_actor in actors_by_label.values():
+                refresh_skeletal_mesh_pose(pose_actor)
 
     for cam_id, cam_actor in camera_actors.items():
         objects = []

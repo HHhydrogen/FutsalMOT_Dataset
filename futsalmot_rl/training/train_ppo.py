@@ -7,8 +7,9 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import numpy as np
 import torch
@@ -16,10 +17,52 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from futsalmot_rl.core.rl_io import write_json_atomic
-from futsalmot_rl.core.rl_paths import MODELS_DIR, TRAIN_LOGS_DIR, VIDEOS_DIR, ensure_dirs
-from futsalmot_rl.core.rl_seed import seed_all
+from futsalmot_rl.core.rl_paths import MODELS_DIR, TRAIN_LOGS_DIR, ensure_dirs
 from futsalmot_rl.models.mlp_policy import MLPActorCritic
 from futsalmot_rl.models.policy_io import save_policy
+
+
+def compute_gae(
+    rewards: torch.Tensor,
+    values: torch.Tensor,
+    next_values: torch.Tensor,
+    terminated: torch.Tensor,
+    episode_ended: torch.Tensor,
+    gamma: float,
+    gae_lambda: float,
+) -> torch.Tensor:
+    """Generalized Advantage Estimation — pure function, no env access.
+
+    Args:
+        rewards: (n,) tensor of rewards.
+        values: (n,) tensor of value estimates V(s_t).
+        next_values: (n,) tensor of value estimates V(s_{t+1}) for bootstrap.
+        terminated: (n,) bool — True where episode ended naturally.
+        episode_ended: (n,) bool — True where episode ended (terminated or truncated
+                      or rollout boundary). Used to stop GAE accumulation.
+        gamma: Discount factor.
+        gae_lambda: GAE smoothing parameter.
+
+    Returns:
+        (n,) tensor of raw (un-normalized) advantages.
+    """
+    n = len(rewards)
+    advantages = torch.zeros(n, device=rewards.device)
+    last_gae = 0.0
+
+    for t in reversed(range(n)):
+        bootstrap_mask = 1.0 - terminated[t].float()
+        continuation_mask = 1.0 - episode_ended[t].float()
+
+        delta = (
+            rewards[t]
+            + gamma * next_values[t] * bootstrap_mask
+            - values[t]
+        )
+        last_gae = delta + gamma * gae_lambda * continuation_mask * last_gae
+        advantages[t] = last_gae
+
+    return advantages
 
 
 class PPOTrainer:
@@ -109,8 +152,8 @@ class PPOTrainer:
                 [k for k in missing if k.startswith("critic.")]
             ))
         if unexpected:
-            print("  Unexpected keys (ignored): {}".format(unexpected))
-        print("  Loaded BC pretrained weights from {}".format(model_path))
+            print(f"  Unexpected keys (ignored): {unexpected}")
+        print(f"  Loaded BC pretrained weights from {model_path}")
 
     def collect_rollout(
         self, n_steps: int
@@ -188,17 +231,10 @@ class PPOTrainer:
         last_obs_tensor: torch.Tensor,
         last_terminated: bool,
     ) -> torch.Tensor:
-        """Compute Generalized Advantage Estimation (pure function, no env access).
+        """Compute GAE — delegates to standalone compute_gae().
 
-        Args:
-            rewards: (n,) tensor of rewards.
-            values: (n,) tensor of value estimates.
-            dones: (n,) bool tensor indicating episode termination.
-            last_obs_tensor: (obs_dim,) observation after the last step for bootstrap.
-            last_terminated: True if the last step ended due to termination (not truncation).
-
-        Returns:
-            (n,) tensor of raw (un-normalized) advantages.
+        Builds next_values tensor using the bootstrap value, then calls
+        the pure-function compute_gae() which never accesses env.
         """
         gamma = self.cfg["gamma"]
         lam = self.cfg["gae_lambda"]
@@ -213,25 +249,20 @@ class PPOTrainer:
                     last_obs_tensor.unsqueeze(0)
                 ).squeeze(0).item()
 
-        values_full = torch.cat(
-            [values, torch.tensor([final_value], device=self.device)]
+        # next_values[t] = V(s_{t+1}) from value[t+1] or bootstrap final_value
+        next_values = torch.cat(
+            [values[1:], torch.tensor([final_value], device=self.device)]
         )
 
-        advantages = torch.zeros(n, device=self.device)
-        last_gae = 0.0
-
-        for t in reversed(range(n)):
-            delta = (
-                rewards[t]
-                + gamma * values_full[t + 1] * (1.0 - float(dones[t]))
-                - values_full[t]
-            )
-            last_gae = delta + gamma * lam * (1.0 - float(dones[t])) * last_gae
-            advantages[t] = last_gae
-
-        # Note: raw advantages returned — normalization for policy loss
-        # is done locally inside train_step().
-        return advantages
+        return compute_gae(
+            rewards=rewards,
+            values=values,
+            next_values=next_values,
+            terminated=dones,
+            episode_ended=dones,
+            gamma=gamma,
+            gae_lambda=lam,
+        )
 
     def train_step(
         self, data: dict[str, torch.Tensor]
@@ -381,9 +412,7 @@ class PPOTrainer:
 
         print("=" * 60)
         print("PPO Training")
-        print("Total timesteps: {}  Steps per iter: {}  Device: {}".format(
-            total_timesteps, n_steps, self.device
-        ))
+        print(f"Total timesteps: {total_timesteps}  Steps per iter: {n_steps}  Device: {self.device}")
         print("=" * 60)
 
         while global_step < total_timesteps:
@@ -431,7 +460,7 @@ class PPOTrainer:
                 try:
                     self.video_callback(self.policy, global_step, self.device)
                 except Exception as exc:
-                    print("    [Eval] Failed: {}".format(exc))
+                    print(f"    [Eval] Failed: {exc}")
 
         # Save final model
         save_policy(self.policy, latest_model_path, config=self.cfg)
@@ -441,23 +470,23 @@ class PPOTrainer:
         summary["total_iterations"] = iteration
         summary["total_steps"] = global_step
 
-        print("\nTraining complete ({:.1f}s)".format(total_time))
+        print(f"\nTraining complete ({total_time:.1f}s)")
         print("Best mean reward: {:.3f} (iteration {})".format(
             best_reward, summary.get("best_iteration", 0)
         ))
-        print("Best model: {}".format(best_model_path))
-        print("Latest model: {}".format(latest_model_path))
+        print(f"Best model: {best_model_path}")
+        print(f"Latest model: {latest_model_path}")
 
         # Generate reward curve
         try:
             _plot_reward_curve(log_path, log_dir / "reward_curve.png")
         except Exception as exc:
-            print("  [WARNING] Reward curve plot failed: {}".format(exc))
+            print(f"  [WARNING] Reward curve plot failed: {exc}")
 
         # Save summary
         summary_path = log_dir / "ppo_summary.json"
         write_json_atomic(summary_path, summary)
-        print("Summary: {}".format(summary_path))
+        print(f"Summary: {summary_path}")
 
         return summary
 
@@ -473,7 +502,7 @@ def _plot_reward_curve(log_path: Path, output_path: Path) -> None:
     pi_losses: list[float] = []
     v_losses: list[float] = []
 
-    with open(log_path, "r", encoding="utf-8") as f:
+    with open(log_path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if line:

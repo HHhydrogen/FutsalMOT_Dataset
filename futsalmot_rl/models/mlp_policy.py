@@ -39,9 +39,23 @@ class MLPPolicy(nn.Module):
         self.net = nn.Sequential(*layers)
         self._obs_dim = obs_dim
         self._act_dim = act_dim
+        self.hidden_sizes = tuple(int(v) for v in (hidden_sizes or [128, 128]))
+
+    @property
+    def obs_dim(self) -> int:
+        return self._obs_dim
+
+    @property
+    def act_dim(self) -> int:
+        return self._act_dim
 
     def forward(self, obs: torch.Tensor) -> torch.Tensor:
+        """Return RAW unbounded mean — NO tanh."""
         return self.net(obs)
+
+    def deterministic_action_tensor(self, obs: torch.Tensor) -> torch.Tensor:
+        """Return tanh-squashed action tensor, same as get_action(..., deterministic=True)."""
+        return torch.tanh(self.forward(obs))
 
     def get_action(self, obs: torch.Tensor | np.ndarray, deterministic: bool = True) -> np.ndarray:
         device = _get_device(self)
@@ -72,7 +86,8 @@ class MLPActorCritic(nn.Module):
             hidden_sizes = [128, 128]
         self.obs_dim = obs_dim
         self.act_dim = act_dim
-        self.shared_backbone = shared_backbone
+        self.shared_backbone = bool(shared_backbone)
+        self.hidden_sizes = tuple(int(v) for v in (hidden_sizes or [128, 128]))
 
         if shared_backbone:
             backbone_layers: list[nn.Module] = []

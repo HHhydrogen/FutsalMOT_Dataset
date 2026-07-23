@@ -81,13 +81,17 @@ def test_missing_model_returns_error():
 
 def test_success_count_none():
     """When no success info, summary success_count is None."""
-    from futsalmot_rl.evaluation.evaluator import EvaluationResult
+    from futsalmot_rl.evaluation.evaluator import EvaluationResult, EpisodeEvaluation
+
+    episodes = tuple(
+        EpisodeEvaluation(episode_index=i, seed=42 + i, status="completed",
+                          reward=float(i + 1), length=10, success=None)
+        for i in range(3)
+    )
     r = EvaluationResult(
         algorithm="test", source_path="", model_path="",
         n_episodes=3, seed=42, device="cpu",
-        episode_rewards=(1.0, 2.0, 3.0),
-        episode_lengths=(10, 10, 10),
-        successes=(None, None, None),
+        episodes=episodes,
     )
     summary = r.to_summary()
     assert summary["success_count"] is None
@@ -96,13 +100,17 @@ def test_success_count_none():
 
 def test_success_count_mixed():
     """Mixed True/False/None: only known values counted."""
-    from futsalmot_rl.evaluation.evaluator import EvaluationResult
+    from futsalmot_rl.evaluation.evaluator import EvaluationResult, EpisodeEvaluation
+
+    episodes = (
+        EpisodeEvaluation(0, 42, "completed", reward=1.0, length=10, success=True),
+        EpisodeEvaluation(1, 43, "completed", reward=2.0, length=10, success=False),
+        EpisodeEvaluation(2, 44, "completed", reward=3.0, length=10, success=True),
+        EpisodeEvaluation(3, 45, "completed", reward=4.0, length=10, success=None),
+    )
     r = EvaluationResult(
         algorithm="test", source_path="", model_path="",
-        n_episodes=4, seed=42, device="cpu",
-        episode_rewards=(1.0, 2.0, 3.0, 4.0),
-        episode_lengths=(10, 10, 10, 10),
-        successes=(True, False, True, None),
+        n_episodes=4, seed=42, device="cpu", episodes=episodes,
     )
     summary = r.to_summary()
     assert summary["success_count"] == 2
@@ -111,11 +119,14 @@ def test_success_count_mixed():
 
 def test_summary_has_errors():
     """Summary includes error details."""
-    from futsalmot_rl.evaluation.evaluator import EvaluationResult
+    from futsalmot_rl.evaluation.evaluator import EvaluationResult, EpisodeEvaluation
+
+    episodes = (
+        EpisodeEvaluation(0, 42, "error", error_type="ValueError", error_message="test"),
+    )
     r = EvaluationResult(
         algorithm="test", source_path="", model_path="",
-        n_episodes=1, seed=42, device="cpu",
-        errors=({"episode_index": 0, "error_type": "ValueError", "message": "test"},),
+        n_episodes=1, seed=42, device="cpu", episodes=episodes,
     )
     summary = r.to_summary()
     assert summary["failed_episode_count"] == 1

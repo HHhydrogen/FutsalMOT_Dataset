@@ -12,8 +12,25 @@ import numpy as np
 
 
 @dataclass(frozen=True)
+class EpisodeEvaluation:
+    """One episode's evaluation result, preserving original index."""
+
+    episode_index: int
+    seed: int
+    status: str  # "completed" or "error"
+    reward: float | None = None
+    length: int | None = None
+    success: bool | None = None
+    terminated: bool | None = None
+    truncated: bool | None = None
+    error_type: str | None = None
+    error_message: str | None = None
+    traceback: str | None = None
+
+
+@dataclass(frozen=True)
 class EvaluationResult:
-    """Immutable evaluation result for one policy run."""
+    """Immutable evaluation result with per-episode records."""
 
     algorithm: str
     source_path: str
@@ -21,28 +38,52 @@ class EvaluationResult:
     n_episodes: int
     seed: int
     device: str
-    episode_rewards: tuple[float, ...] = ()
-    episode_lengths: tuple[int, ...] = ()
-    successes: tuple[bool | None, ...] = ()
-    errors: tuple[dict[str, Any], ...] = ()
+    episodes: tuple[EpisodeEvaluation, ...] = ()
+
+    @property
+    def episode_rewards(self) -> tuple[float, ...]:
+        return tuple(e.reward for e in self.episodes if e.status == "completed" and e.reward is not None)
+
+    @property
+    def episode_lengths(self) -> tuple[int, ...]:
+        return tuple(e.length for e in self.episodes if e.status == "completed" and e.length is not None)
+
+    @property
+    def successes(self) -> tuple[bool | None, ...]:
+        return tuple(e.success for e in self.episodes if e.status == "completed")
+
+    @property
+    def errors(self) -> list[dict[str, Any]]:
+        result: list[dict[str, Any]] = []
+        for e in self.episodes:
+            if e.status == "error":
+                result.append({
+                    "episode_index": e.episode_index,
+                    "error_type": e.error_type,
+                    "message": e.error_message,
+                    "traceback": e.traceback,
+                })
+        return result
 
     def to_summary(self) -> dict[str, Any]:
-        eps_rewards = list(self.episode_rewards)
-        eps_lengths = list(self.episode_lengths)
-        successes_list = list(self.successes)
+        completed = [e for e in self.episodes if e.status == "completed"]
+        failed = [e for e in self.episodes if e.status == "error"]
+        eps_rewards = [e.reward for e in completed if e.reward is not None]
+        eps_lengths = [e.length for e in completed if e.length is not None]
+        successes_list = [e.success for e in completed]
 
         summary: dict[str, Any] = {
             "algorithm": self.algorithm,
             "source_path": self.source_path,
             "model_path": self.model_path,
             "n_episodes": self.n_episodes,
-            "requested_episode_count": self.n_episodes,
-            "completed_episode_count": len(eps_rewards),
-            "failed_episode_count": len(self.errors),
+            "requested_episode_count": len(self.episodes),
+            "completed_episode_count": len(completed),
+            "failed_episode_count": len(failed),
             "seed": self.seed,
             "device": self.device,
             "timestamp": __import__("datetime").datetime.now().isoformat(),
-            "errors": list(self.errors),
+            "errors": self.errors,
         }
 
         if eps_rewards:
@@ -60,7 +101,6 @@ class EvaluationResult:
             summary["min_episode_length"] = None
             summary["max_episode_length"] = None
 
-        # success/failure: only set when env provides the info
         known = [s for s in successes_list if s is not None]
         if known:
             summary["success_count"] = sum(1 for s in known if s is True)
@@ -73,19 +113,22 @@ class EvaluationResult:
 
     def to_jsonl_lines(self) -> list[dict[str, Any]]:
         lines: list[dict[str, Any]] = []
-        for i in range(len(self.episode_rewards)):
-            lines.append({
-                "episode_index": i,
-                "reward": float(self.episode_rewards[i]),
-                "length": int(self.episode_lengths[i]),
-                "success": self.successes[i] if i < len(self.successes) else None,
-            })
-        for err in self.errors:
-            lines.append({
-                "episode_index": err.get("episode_index", -1),
-                "status": "error",
-                "error": err.get("message", str(err)),
-            })
+        for e in self.episodes:
+            d: dict[str, Any] = {
+                "episode_index": e.episode_index,
+                "seed": e.seed,
+                "status": e.status,
+            }
+            if e.status == "completed":
+                d["reward"] = e.reward
+                d["length"] = e.length
+                d["success"] = e.success
+                d["terminated"] = e.terminated
+                d["truncated"] = e.truncated
+            else:
+                d["error_type"] = e.error_type
+                d["error_message"] = e.error_message
+            lines.append(d)
         return lines
 
 
@@ -99,28 +142,14 @@ def evaluate_policy(
     model_path: str = "",
     device: str = "cpu",
 ) -> EvaluationResult:
-    """Run multiple evaluation episodes using a common action function.
+    """Run multiple evaluation episodes.
 
-    Args:
-        env: Gymnasium-like environment.
-        action_fn: Callable taking (obs) → action array.
-        n_episodes: Number of episodes to run (must be >= 1).
-        seed: Base RNG seed (incremented per episode).
-        algorithm: Policy name for the result.
-        source_path: Source episode path for provenance.
-        model_path: Model path for provenance.
-        device: Device string.
-
-    Returns:
-        EvaluationResult with per-episode metrics.
+    Each episode is recorded at its original index regardless of success/failure.
     """
     if n_episodes < 1:
         raise ValueError("n_episodes must be at least 1")
 
-    episode_rewards: list[float] = []
-    episode_lengths: list[int] = []
-    successes: list[bool | None] = []
-    errors: list[dict[str, Any]] = []
+    records: list[EpisodeEvaluation] = []
 
     for ep_idx in range(n_episodes):
         try:
@@ -128,6 +157,8 @@ def evaluate_policy(
             done = False
             ep_reward = 0.0
             ep_length = 0
+            terminated = False
+            truncated = False
 
             while not done:
                 action = action_fn(obs)
@@ -136,17 +167,26 @@ def evaluate_policy(
                 ep_length += 1
                 done = terminated or truncated
 
-            episode_rewards.append(ep_reward)
-            episode_lengths.append(ep_length)
-            successes.append(info.get("success", None))
+            records.append(EpisodeEvaluation(
+                episode_index=ep_idx,
+                seed=seed + ep_idx,
+                status="completed",
+                reward=ep_reward,
+                length=ep_length,
+                success=info.get("success"),
+                terminated=bool(terminated),
+                truncated=bool(truncated),
+            ))
 
         except Exception as exc:
-            errors.append({
-                "episode_index": ep_idx,
-                "error_type": type(exc).__name__,
-                "message": str(exc),
-                "traceback": traceback.format_exc(),
-            })
+            records.append(EpisodeEvaluation(
+                episode_index=ep_idx,
+                seed=seed + ep_idx,
+                status="error",
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+                traceback=traceback.format_exc(),
+            ))
 
     return EvaluationResult(
         algorithm=algorithm,
@@ -155,10 +195,7 @@ def evaluate_policy(
         n_episodes=n_episodes,
         seed=seed,
         device=device,
-        episode_rewards=tuple(episode_rewards),
-        episode_lengths=tuple(episode_lengths),
-        successes=tuple(successes),
-        errors=tuple(errors),
+        episodes=tuple(records),
     )
 
 
@@ -166,11 +203,7 @@ def save_evaluation(
     result: EvaluationResult,
     output_dir: str | Path,
 ) -> Path:
-    """Save evaluation summary JSON and per-episode JSONL.
-
-    Returns:
-        Path to the summary JSON.
-    """
+    """Save evaluation summary JSON and per-episode JSONL."""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 

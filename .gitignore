@@ -3,4 +3,10 @@ __pycache__/
 _agent_test_outputs/
 _backup_*/
 configs/runs/
+configs/events/generated/
 *.tmp.*
+Saved/
+*.mp4
+demo_index.json
+*.npz
+*.pt

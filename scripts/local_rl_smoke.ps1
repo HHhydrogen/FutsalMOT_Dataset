@@ -235,6 +235,17 @@ Invoke-Checked "Formal model integrity" {
         }
     }
 
+    $deletedFiles = @()
+    foreach ($beforeFile in $beforeFiles) {
+        if (-not (Test-Path $beforeFile)) {
+            $deletedFiles += $beforeFile
+        }
+    }
+
+    if ($deletedFiles.Count -gt 0) {
+        foreach ($d in $deletedFiles) { Write-Host "  DELETED: $d" -ForegroundColor Red }
+        throw "Formal model files were deleted"
+    }
     if ($violations.Count -gt 0) {
         foreach ($v in $violations) { Write-Host "  VIOLATION: $v" -ForegroundColor Red }
         throw "Formal model files were modified"

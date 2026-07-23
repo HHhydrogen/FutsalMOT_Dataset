@@ -11,7 +11,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import argparse
 from futsalmot_rl.envs.defender_follow_env import FutsalDefenderFollowEnv
 from futsalmot_rl.training.train_ppo import PPOTrainer
-from futsalmot_rl.models.policy_io import load_policy
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -24,6 +23,7 @@ if __name__ == "__main__":
     parser.add_argument("--n-epochs", type=int, default=10)
     parser.add_argument("--lr", type=float, default=0.0001)
     parser.add_argument("--device", type=str, default="auto")
+    parser.add_argument("--run-name", type=str, default="ppo")
     parser.add_argument("--bc-model", type=str, default=None)
     args = parser.parse_args()
 
@@ -48,6 +48,7 @@ if __name__ == "__main__":
         total_timesteps=args.total_timesteps,
         log_dir=log_dir,
         model_dir=model_dir,
+        run_name=args.run_name,
     )
 
     print(f"PPO training complete. Best reward: {summary.get('best_mean_reward', 'N/A')}")

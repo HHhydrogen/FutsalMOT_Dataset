@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import traceback
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Callable
@@ -23,7 +24,7 @@ class EvaluationResult:
     episode_rewards: tuple[float, ...] = ()
     episode_lengths: tuple[int, ...] = ()
     successes: tuple[bool | None, ...] = ()
-    errors: tuple[str, ...] = ()
+    errors: tuple[dict[str, Any], ...] = ()
 
     def to_summary(self) -> dict[str, Any]:
         eps_rewards = list(self.episode_rewards)
@@ -35,9 +36,13 @@ class EvaluationResult:
             "source_path": self.source_path,
             "model_path": self.model_path,
             "n_episodes": self.n_episodes,
+            "requested_episode_count": self.n_episodes,
+            "completed_episode_count": len(eps_rewards),
+            "failed_episode_count": len(self.errors),
             "seed": self.seed,
             "device": self.device,
             "timestamp": __import__("datetime").datetime.now().isoformat(),
+            "errors": list(self.errors),
         }
 
         if eps_rewards:
@@ -49,17 +54,20 @@ class EvaluationResult:
             summary["min_episode_length"] = int(np.min(eps_lengths))
             summary["max_episode_length"] = int(np.max(eps_lengths))
         else:
-            summary["mean_episode_reward"] = None
-            for k in ("std", "min", "max"):
+            for k in ("mean", "std", "min", "max"):
                 summary[f"{k}_episode_reward"] = None
             summary["mean_episode_length"] = None
             summary["min_episode_length"] = None
             summary["max_episode_length"] = None
 
-        n_success = sum(1 for s in successes_list if s is True)
-        n_fail = sum(1 for s in successes_list if s is False)
-        summary["success_count"] = n_success if successes_list else None
-        summary["failure_count"] = n_fail if successes_list else None
+        # success/failure: only set when env provides the info
+        known = [s for s in successes_list if s is not None]
+        if known:
+            summary["success_count"] = sum(1 for s in known if s is True)
+            summary["failure_count"] = sum(1 for s in known if s is False)
+        else:
+            summary["success_count"] = None
+            summary["failure_count"] = None
 
         return summary
 
@@ -71,6 +79,12 @@ class EvaluationResult:
                 "reward": float(self.episode_rewards[i]),
                 "length": int(self.episode_lengths[i]),
                 "success": self.successes[i] if i < len(self.successes) else None,
+            })
+        for err in self.errors:
+            lines.append({
+                "episode_index": err.get("episode_index", -1),
+                "status": "error",
+                "error": err.get("message", str(err)),
             })
         return lines
 
@@ -90,7 +104,7 @@ def evaluate_policy(
     Args:
         env: Gymnasium-like environment.
         action_fn: Callable taking (obs) → action array.
-        n_episodes: Number of episodes to run.
+        n_episodes: Number of episodes to run (must be >= 1).
         seed: Base RNG seed (incremented per episode).
         algorithm: Policy name for the result.
         source_path: Source episode path for provenance.
@@ -100,10 +114,13 @@ def evaluate_policy(
     Returns:
         EvaluationResult with per-episode metrics.
     """
+    if n_episodes < 1:
+        raise ValueError("n_episodes must be at least 1")
+
     episode_rewards: list[float] = []
     episode_lengths: list[int] = []
     successes: list[bool | None] = []
-    errors: list[str] = []
+    errors: list[dict[str, Any]] = []
 
     for ep_idx in range(n_episodes):
         try:
@@ -124,7 +141,12 @@ def evaluate_policy(
             successes.append(info.get("success", None))
 
         except Exception as exc:
-            errors.append(f"episode {ep_idx}: {exc}")
+            errors.append({
+                "episode_index": ep_idx,
+                "error_type": type(exc).__name__,
+                "message": str(exc),
+                "traceback": traceback.format_exc(),
+            })
 
     return EvaluationResult(
         algorithm=algorithm,

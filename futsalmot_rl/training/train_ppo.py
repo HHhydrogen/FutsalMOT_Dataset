@@ -268,26 +268,16 @@ class PPOTrainer:
         terminated: torch.Tensor,
         episode_ended: torch.Tensor,
     ) -> torch.Tensor:
-        """Compute GAE — pure function, no env or model access.
-
-        Each transition has its own next_value already computed.
-        No bootstrap value is appended — the final transition's
-        next_value was computed from the real next_observation.
-        """
-        gamma = self.cfg["gamma"]
-        lam = self.cfg["gae_lambda"]
-        n = len(rewards)
-        advantages = torch.zeros(n, device=rewards.device)
-        last_gae = 0.0
-
-        for t in reversed(range(n)):
-            bootstrap_mask = 1.0 - terminated[t].float()
-            continuation_mask = 1.0 - episode_ended[t].float()
-            delta = rewards[t] + gamma * next_values[t] * bootstrap_mask - values[t]
-            last_gae = delta + gamma * lam * continuation_mask * last_gae
-            advantages[t] = last_gae
-
-        return advantages
+        """GAE — thin delegation to standalone compute_gae()."""
+        return compute_gae(
+            rewards=rewards,
+            values=values,
+            next_values=next_values,
+            terminated=terminated,
+            episode_ended=episode_ended,
+            gamma=self.cfg["gamma"],
+            gae_lambda=self.cfg["gae_lambda"],
+        )
 
     def train_step(self, data: dict[str, torch.Tensor]) -> dict[str, float]:
         """Perform one PPO update step on collected rollout data.

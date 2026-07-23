@@ -120,8 +120,9 @@ def load_policy(
         act_dim = int(architecture["act_dim"])
         hidden_sizes = [int(v) for v in architecture.get("hidden_sizes", [128, 128])]
         shared_backbone = bool(architecture.get("shared_backbone", False))
+        model_type = save_dict.get("model_type", architecture.get("model_type", "MLPPolicy"))
 
-        if architecture.get("model_type") == "MLPActorCritic":
+        if model_type == "MLPActorCritic":
             policy: torch.nn.Module = MLPActorCritic(
                 obs_dim, hidden_sizes=hidden_sizes, act_dim=act_dim,
                 shared_backbone=shared_backbone,

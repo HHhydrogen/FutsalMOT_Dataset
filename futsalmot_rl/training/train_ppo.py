@@ -157,7 +157,7 @@ class PPOTrainer:
             print(f"  Unexpected keys (ignored): {unexpected}")
         print(f"  Loaded BC pretrained weights from {model_path}")
 
-    def collect_rollout(self, n_steps: int) -> dict[str, torch.Tensor]:
+    def collect_rollout(self, n_steps: int) -> tuple[dict[str, torch.Tensor], list[float]]:
         """Collect a rollout of n_steps from the environment.
 
         Each transition stores:
@@ -232,7 +232,7 @@ class PPOTrainer:
         # Save state for next rollout call
         self._current_obs = obs
 
-        # Build tensors
+        # Build tensors (note: next_obs saved only for correctness proof, not used in GAE)
         terminated_t = torch.BoolTensor(terminated_list).to(self.device)
         truncated_t = torch.BoolTensor(truncated_list).to(self.device)
 
@@ -284,23 +284,24 @@ class PPOTrainer:
         """
         gamma = self.cfg["gamma"]
         lam = self.cfg["gae_lambda"]
-        len(rewards)
 
+        # Bootstrap for the last step: if terminated, next_value=0; else use critic
         with torch.no_grad():
             if last_terminated:
                 final_value = 0.0
             else:
                 final_value = self.policy.get_value(last_obs_tensor.unsqueeze(0)).squeeze(0).item()
 
-        # Append bootstrap value for the final step's next_value
-        next_values_full = torch.cat([next_values, torch.tensor([final_value], device=self.device)])
+        # next_values is (n,). Append bootstrap so shape becomes (n+1,) matching
+        # the compute_gae interface where next_values[t] = V(s_{t+1}).
+        next_values_ext = torch.cat([next_values, torch.tensor([final_value], device=self.device)])
 
         episode_ended = terminated | truncated
 
         return compute_gae(
             rewards=rewards,
             values=values,
-            next_values=next_values_full,
+            next_values=next_values_ext,
             terminated=terminated,
             episode_ended=episode_ended,
             gamma=gamma,
@@ -493,15 +494,28 @@ class PPOTrainer:
         while global_step < total_timesteps:
             iteration += 1
 
-            # Collect rollout
-            rollout_data, ep_rewards = self.collect_rollout(n_steps)
-            global_step += n_steps
+            # Final round: collect remaining steps, not a full n_steps
+            remaining = total_timesteps - global_step
+            steps_to_collect = min(n_steps, remaining)
+
+            rollout_data, ep_rewards = self.collect_rollout(steps_to_collect)
+            global_step += steps_to_collect
 
             # PPO update
             loss_metrics = self.train_step(rollout_data)
 
-            # Logging
-            mean_ep_reward = float(np.mean(ep_rewards)) if ep_rewards else 0.0
+            # Logging — only update best model based on completed episodes
+            completed_count = len(ep_rewards)
+            if ep_rewards:
+                mean_ep_reward = float(np.mean(ep_rewards))
+                if mean_ep_reward > best_reward:
+                    best_reward = mean_ep_reward
+                    summary["best_mean_reward"] = best_reward
+                    summary["best_iteration"] = iteration
+                    save_policy(self.policy, best_model_path, config=self.cfg)
+            else:
+                mean_ep_reward = None  # no completed episode this rollout
+
             log_entry = {
                 "iteration": iteration,
                 "global_step": global_step,
@@ -509,19 +523,17 @@ class PPOTrainer:
                 "pi_loss": loss_metrics["pi_loss"],
                 "v_loss": loss_metrics["v_loss"],
                 "entropy": loss_metrics["entropy"],
-                "n_episodes": len(ep_rewards),
+                "approx_kl": loss_metrics["approx_kl"],
+                "clip_fraction": loss_metrics["clip_fraction"],
+                "explained_variance": loss_metrics["explained_variance"],
+                "gradient_norm": loss_metrics["gradient_norm"],
+                "n_episodes": completed_count,
             }
 
             with open(log_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(log_entry) + "\n")
 
             summary["iterations"].append(log_entry)
-
-            if mean_ep_reward > best_reward:
-                best_reward = mean_ep_reward
-                summary["best_mean_reward"] = best_reward
-                summary["best_iteration"] = iteration
-                save_policy(self.policy, best_model_path, config=self.cfg)
 
             # Print progress
             if iteration % 5 == 0 or iteration == 1:

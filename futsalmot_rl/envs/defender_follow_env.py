@@ -104,6 +104,7 @@ class FutsalDefenderFollowEnv(gym.Env):
         self.prev_vel: tuple[float, float] = (0.0, 0.0)
         self.trail: list[tuple[float, float]] = []
         self._last_yaw: float = 0.0
+        self._yaw_speed_threshold: float = 5.0  # cm/s
         self.last_info: dict[str, Any] = {}
 
     def _load_source_data(self) -> None:
@@ -343,11 +344,12 @@ class FutsalDefenderFollowEnv(gym.Env):
 
         return obs, float(reward), terminated, truncated, info
 
-    def _compute_yaw_from_velocity(self, vx: float, vy: float) -> float:
-        """Compute yaw (degrees) from velocity vector. Zero-speed preserves last yaw."""
-        speed = math.hypot(vx, vy)
-        if speed > 5.0:  # minimum motion threshold (cm/s)
-            return math.degrees(math.atan2(vy, vx))
+    def _update_yaw(self, vx: float, vy: float) -> float:
+        """Update and return yaw from actual velocity. Below threshold keeps last yaw."""
+        import numpy as np
+        speed = np.hypot(vx, vy)
+        if speed > self._yaw_speed_threshold:
+            self._last_yaw = float(np.degrees(np.arctan2(vy, vx)))
         return self._last_yaw
 
     def _compute_ball_velocity(self, frame: int) -> tuple[float, float]:
@@ -366,8 +368,8 @@ class FutsalDefenderFollowEnv(gym.Env):
         # Self velocity: use actual agent velocity from physics
         av = self.agent_vel
 
-        # Self yaw: compute from actual velocity
-        self_yaw = self._compute_yaw_from_velocity(av[0], av[1])
+        # Self yaw: compute from actual velocity (persists when stopped)
+        self_yaw = self._update_yaw(av[0], av[1])
 
         # Target velocity: use rule trajectory velocity (target follows rule)
         vel_idx = min(frame, len(self.all_velocities.get(self.target_id, [(0, 0)])) - 1)

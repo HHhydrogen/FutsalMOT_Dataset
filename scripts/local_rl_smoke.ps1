@@ -29,7 +29,26 @@ if (Test-Path $ConfigFile) {
     if ($cfg.python_exe) { $PythonExe = $cfg.python_exe }
 }
 
-$SourceFile = "configs/runs/production_run/episode_random_0001_t1_a33.json"
+# Record formal model hashes BEFORE any smoke operations
+$FormalModelDirs = @(
+    "$RepoRoot/Saved/FutsalMOT_RL/models"
+)
+$beforeHashes = @{}
+$beforeFiles = @()
+foreach ($dir in $FormalModelDirs) {
+    if (Test-Path $dir) {
+        Get-ChildItem $dir -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Extension -in ".pt", ".pth", ".ckpt" } |
+            ForEach-Object {
+                $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash
+                $beforeHashes[$_.FullName] = $hash
+                $beforeFiles += $_.FullName
+            }
+    }
+}
+Write-Host "Formal models tracked: $($beforeFiles.Count) files"
+
+$SourceFile = "$RepoRoot/configs/runs/production_run/episode_random_0001_t1_a33.json"
 if (-not (Test-Path $SourceFile)) {
     Write-Host "[FAIL] Source file not found: $SourceFile" -ForegroundColor Red
     exit 1
@@ -130,25 +149,21 @@ print(f'BC done, loss={summary[\"best_val_loss\"]:.4f}')
 
 # 5. BC eval
 Invoke-Checked "BC eval" {
-    & $PythonExe -c "
-from futsalmot_rl.models.policy_io import load_policy
-from futsalmot_rl.envs.defender_follow_env import FutsalDefenderFollowEnv
-policy, _, _ = load_policy('$SmokeBcModel')
-env = FutsalDefenderFollowEnv(source_episode_path='$SourceFile')
-for _ in range(3):
-    obs, _ = env.reset()
-    done = False
-    while not done:
-        a = policy.get_action(obs, deterministic=True)
-        obs, _, term, trunc, _ = env.step(a)
-        done = term or trunc
-env.close()
-print('BC eval: 3 episodes OK')
-"
+    & $PythonExe -m futsalmot_rl.cli evaluate bc `
+        --source $SourceFile `
+        --model $SmokeBcModel `
+        --output-dir $SmokeEval/bc `
+        --n-episodes 3 `
+        --device cpu `
+        --seed 42
+    if (-not (Test-Path "$SmokeEval/bc/evaluation_summary.json")) {
+        throw "evaluation_summary.json not found"
+    }
 }
 
-# 6. PPO smoke
+# 6. PPO smoke (1024 steps)
 $SmokePpoModel = "$SmokeModels/ppo_smoke_best.pt"
+$SmokePpoLatest = "$SmokeModels/ppo_smoke_latest.pt"
 Invoke-Checked "PPO smoke (1024 steps)" {
     & $PythonExe -c "
 import sys
@@ -158,44 +173,34 @@ from futsalmot_rl.training.train_ppo import PPOTrainer
 env = FutsalDefenderFollowEnv(source_episode_path='$SourceFile')
 trainer = PPOTrainer(env, config={'total_timesteps': 1024, 'n_steps': 1024, 'n_epochs': 3, 'batch_size': 64})
 trainer.load_pretrained('$SmokeBcModel')
-summary = trainer.train(total_timesteps=1024, log_dir='$SmokeLogs/ppo', model_dir='$SmokeModels')
+summary = trainer.train(total_timesteps=1024, log_dir='$SmokeLogs/ppo', model_dir='$SmokeModels', run_name='ppo_smoke')
 print(f'PPO done, reward={summary.get(\"best_mean_reward\", \"N/A\")}')
 env.close()
 "
-    if (-not (Test-Path $SmokePpoModel)) {
-        # Try latest
-        $SmokePpoModel = "$SmokeModels/defender_follow_ppo_v1_best.pt"
+    if (-not (Test-Path $SmokePpoLatest)) {
+        throw "PPO latest checkpoint not found at $SmokePpoLatest"
     }
 }
 
 # 7. PPO eval
 Invoke-Checked "PPO eval" {
-    $model = if (Test-Path $SmokePpoModel) { $SmokePpoModel } else { "$SmokeModels/defender_follow_ppo_v1_best.pt" }
-    & $PythonExe -c "
-from futsalmot_rl.models.policy_io import load_policy
-from futsalmot_rl.envs.defender_follow_env import FutsalDefenderFollowEnv
-policy, _, _ = load_policy('$model')
-env = FutsalDefenderFollowEnv(source_episode_path='$SourceFile')
-rewards = []
-for ep in range(3):
-    obs, _ = env.reset()
-    done = False
-    total = 0.0
-    while not done:
-        a = policy.get_action(obs, deterministic=True)
-        obs, r, term, trunc, _ = env.step(a)
-        total += r
-        done = term or trunc
-    rewards.append(total)
-env.close()
-import numpy as np
-print(f'PPO eval: mean={np.mean(rewards):.1f} std={np.std(rewards):.1f} (3 eps)')
-"
+    $model = if (Test-Path $SmokePpoModel) { $SmokePpoModel } else { "$SmokeModels/ppo_smoke_latest.pt" }
+    & $PythonExe -m futsalmot_rl.cli evaluate ppo `
+        --source $SourceFile `
+        --model $model `
+        --output-dir $SmokeEval/ppo `
+        --n-episodes 3 `
+        --device cpu `
+        --seed 42
+    if (-not (Test-Path "$SmokeEval/ppo/evaluation_summary.json")) {
+        throw "evaluation_summary.json not found"
+    }
 }
 
 # 8. A3.3 export
 Invoke-Checked "Export A3.3" {
-    $model = if (Test-Path $SmokePpoModel) { $SmokePpoModel } else { "$SmokeModels/defender_follow_ppo_v1_best.pt" }
+    $model = $SmokePpoLatest
+    if (-not (Test-Path $model)) { throw "PPO model not found: $model" }
     & $PythonExe -c "
 from futsalmot_rl.models.policy_io import load_policy
 from futsalmot_rl.rollout.export_to_a33 import export_rl_a33
@@ -208,14 +213,44 @@ print(f'A3.3 exported: {report[\"output_path\"]} ({report[\"n_frames\"]} frames)
 
 # 9. Verify formal models not overwritten
 Invoke-Checked "Formal model integrity" {
-    $formalModel = "$RepoRoot/Saved/FutsalMOT_RL/models/defender_follow_bc_v1.pt"
-    if (Test-Path $formalModel) {
-        $hashBefore = (Get-FileHash $formalModel -Algorithm SHA256).Hash
-        # Re-run a check comparing with saved hash
-        Write-Host "  Formal BC model: $hashBefore (present, not overwritten)"
-    } else {
-        Write-Host "  (No formal BC model yet, skipping)"
+    $violations = @()
+    $newFiles = @()
+    $afterFiles = @()
+
+    foreach ($dir in $FormalModelDirs) {
+        if (Test-Path $dir) {
+            Get-ChildItem $dir -Recurse -File -ErrorAction SilentlyContinue |
+                Where-Object { $_.Extension -in ".pt", ".pth", ".ckpt" } |
+                ForEach-Object {
+                    $afterFiles += $_.FullName
+                    if ($beforeFiles -contains $_.FullName) {
+                        $hashAfter = (Get-FileHash $_.FullName -Algorithm SHA256).Hash
+                        if ($beforeHashes[$_.FullName] -ne $hashAfter) {
+                            $violations += "Modified: $($_.FullName)"
+                        }
+                    } else {
+                        $newFiles += $_.FullName
+                    }
+                }
+        }
     }
+
+    if ($violations.Count -gt 0) {
+        foreach ($v in $violations) { Write-Host "  VIOLATION: $v" -ForegroundColor Red }
+        throw "Formal model files were modified"
+    }
+    if ($newFiles.Count -gt 0) {
+        Write-Host "  New files in formal dir: $($newFiles.Count)" -ForegroundColor Yellow
+        foreach ($n in $newFiles) { Write-Host "    NEW: $n" -ForegroundColor Yellow }
+        throw "Smoke created files in formal model directory"
+    }
+    if ($beforeFiles.Count -eq 0) {
+        Write-Host "  (No formal models existed before smoke — none created now)" -ForegroundColor Yellow
+    } else {
+        Write-Host "  All $($beforeFiles.Count) formal model(s) unchanged" -ForegroundColor Green
+    }
+    Write-Host "  Formal models unchanged: PASS" -ForegroundColor Green
+    Write-Host "  Smoke output isolation: PASS" -ForegroundColor Green
 }
 
 Write-Host "`n============================================" -ForegroundColor Yellow

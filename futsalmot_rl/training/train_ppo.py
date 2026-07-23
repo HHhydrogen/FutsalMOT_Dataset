@@ -17,7 +17,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from futsalmot_rl.core.rl_io import write_json_atomic
-from futsalmot_rl.core.rl_paths import ensure_dirs
 from futsalmot_rl.models.mlp_policy import MLPActorCritic
 from futsalmot_rl.models.policy_io import save_policy
 
@@ -123,6 +122,7 @@ class PPOTrainer:
         self._current_episode_reward: float = 0.0
         self._current_episode_length: int = 0
         self._rollout_started: bool = False
+        self._run_name: str = "ppo"
 
     def set_video_callback(self, callback: Callable) -> None:
         """Set a callback for recording evaluation videos."""
@@ -426,6 +426,7 @@ class PPOTrainer:
         *,
         log_dir: str | Path,
         model_dir: str | Path,
+        run_name: str | None = None,
         eval_interval: int = 25000,
     ) -> dict[str, Any]:
         """Run the full PPO training loop.
@@ -444,17 +445,18 @@ class PPOTrainer:
 
         log_dir = Path(log_dir)
         model_dir = Path(model_dir)
-        ensure_dirs()
         log_dir.mkdir(parents=True, exist_ok=True)
         model_dir.mkdir(parents=True, exist_ok=True)
 
-        log_path = log_dir / "train_log.jsonl"
-        best_model_path = model_dir / "defender_follow_ppo_v1_best.pt"
-        latest_model_path = model_dir / "defender_follow_ppo_v1_latest.pt"
+        self._run_name = run_name or "ppo"
+        log_path = log_dir / f"{self._run_name}_log.jsonl"
+        best_model_path = model_dir / f"{self._run_name}_best.pt"
+        latest_model_path = model_dir / f"{self._run_name}_latest.pt"
 
         # Training state
         global_step = 0
         best_reward = -float("inf")
+        best_iteration: int | None = None
         summary: dict[str, Any] = {
             "config": self.cfg,
             "iterations": [],
@@ -490,10 +492,11 @@ class PPOTrainer:
             completed_count = len(ep_rewards)
             if ep_rewards:
                 mean_ep_reward = float(np.mean(ep_rewards))
-                if mean_ep_reward > best_reward:
+                if best_iteration is None or mean_ep_reward > best_reward:
                     best_reward = mean_ep_reward
+                    best_iteration = iteration
                     summary["best_mean_reward"] = best_reward
-                    summary["best_iteration"] = iteration
+                    summary["best_iteration"] = best_iteration
                     save_policy(self.policy, best_model_path, config=self.cfg)
             else:
                 mean_ep_reward = None  # no completed episode this rollout
@@ -534,7 +537,7 @@ class PPOTrainer:
                 except Exception as exc:
                     print(f"    [Eval] Failed: {exc}")
 
-        # Save final model
+        # Save final checkpoint (always saved)
         save_policy(self.policy, latest_model_path, config=self.cfg)
 
         total_time = time.time() - train_start
@@ -543,13 +546,14 @@ class PPOTrainer:
         summary["total_steps"] = global_step
 
         print(f"\nTraining complete ({total_time:.1f}s)")
-        print(
-            "Best mean reward: {:.3f} (iteration {})".format(
-                best_reward, summary.get("best_iteration", 0)
-            )
-        )
-        print(f"Best model: {best_model_path}")
-        print(f"Latest model: {latest_model_path}")
+        if best_iteration is not None:
+            print(f"Best mean reward: {best_reward:.3f} (iteration {best_iteration})")
+            print(f"Best model: {best_model_path}")
+        else:
+            summary["best_mean_reward"] = None
+            summary["best_iteration"] = None
+            print("Best mean reward: N/A — no completed episode")
+        print(f"Latest checkpoint: {latest_model_path}")
 
         # Generate reward curve
         try:
@@ -558,7 +562,7 @@ class PPOTrainer:
             print(f"  [WARNING] Reward curve plot failed: {exc}")
 
         # Save summary
-        summary_path = log_dir / "ppo_summary.json"
+        summary_path = log_dir / f"{self._run_name}_summary.json"
         write_json_atomic(summary_path, summary)
         print(f"Summary: {summary_path}")
 

@@ -13,13 +13,20 @@
 打开 Unreal Editor，在 Python Console 输入：
 
 ```python
-import os
-os.environ["FUTSALMOT_CONFIG_PATH"] = r"D:\projects\FustalMOT_UEDataset\Saved\FutsalMOT_RL\exported_a33\rl_episode_random_0001_t1_Player_05_a33.json"
+py "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/rl_07b_ue_render_rl.py"
+```
 
-exec(open(r"D:\projects\FustalMOT_UEDataset\Content\FutsalMOT\code\02_run_unreal.py", encoding="utf-8").read())
+这个脚本内置了 RL A3.3 文件路径，不需要预先设置环境变量。
+
+**如果 `py` 命令不可用**，改用：
+
+```python
+import unreal
+unreal.SystemLibrary.execute_console_command(None, 'py "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/rl_07b_ue_render_rl.py"')
 ```
 
 预期输出：
+- Config 加载信息（指向 RL A3.3 文件）
 - Preflight 检查通过
 - Level Sequence 构建完成
 - 标注导出成功

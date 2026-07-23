@@ -175,11 +175,10 @@ python -c "from futsalmot_rl.rollout.export_to_a33 import ..."
 打开 Unreal Editor，在 Python Console 运行：
 
 ```python
-import os
-os.environ["FUTSALMOT_CONFIG_PATH"] = r"D:\projects\FustalMOT_UEDataset\Saved\FutsalMOT_RL\exported_a33\rl_episode_random_0001_t1_Player_05_a33.json"
-
-exec(open(r"D:\projects\FustalMOT_UEDataset\Content\FutsalMOT\code\02_run_unreal.py", encoding="utf-8").read())
+py "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/rl_07b_ue_render_rl.py"
 ```
+
+该脚本内置了 RL A3.3 路径，不需要外部环境变量。
 
 ### 步骤 3: Movie Render Queue 渲染
 

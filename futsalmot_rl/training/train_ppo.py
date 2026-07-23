@@ -185,14 +185,14 @@ class PPOTrainer:
 
         # Reset only if needed
         if not self._rollout_started or self._current_obs is None:
-            self._current_obs, info = self.env.reset()
+            self._current_obs, _info = self.env.reset()
             self._current_episode_reward = 0.0
             self._current_episode_length = 0
             self._rollout_started = True
 
         obs = self._current_obs
 
-        for step in range(n_steps):
+        for _step in range(n_steps):
             obs_tensor = torch.from_numpy(obs).float().unsqueeze(0).to(self.device)
 
             with torch.no_grad():
@@ -203,7 +203,7 @@ class PPOTrainer:
             values_list.append(value.squeeze(0).cpu().item())
             log_probs_list.append(log_prob.squeeze(0).cpu().item())
 
-            next_obs, reward, terminated, truncated, info = self.env.step(
+            next_obs, reward, terminated, truncated, _info = self.env.step(
                 action.squeeze(0).cpu().numpy()
             )
             rewards_list.append(float(reward))
@@ -284,7 +284,7 @@ class PPOTrainer:
         """
         gamma = self.cfg["gamma"]
         lam = self.cfg["gae_lambda"]
-        n = len(rewards)
+        len(rewards)
 
         with torch.no_grad():
             if last_terminated:
@@ -337,7 +337,7 @@ class PPOTrainer:
         # Create indices for mini-batches
         indices = np.arange(n)
 
-        for epoch in range(n_epochs):
+        for _epoch in range(n_epochs):
             np.random.shuffle(indices)
 
             for start in range(0, n, batch_size):

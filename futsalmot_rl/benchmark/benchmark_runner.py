@@ -43,7 +43,7 @@ def benchmark_policy(
         all_pos = get_player_positions_2d(cfg)
         ball_pos = np.array(get_ball_positions_2d(cfg), dtype=np.float32)
         target_pos = np.array(all_pos.get("Player_01", []), dtype=np.float32)
-        rule_pos = np.array(all_pos.get("Player_05", []), dtype=np.float32)
+        np.array(all_pos.get("Player_05", []), dtype=np.float32)
 
         # Other player positions for collision detection
         other_pos = {}

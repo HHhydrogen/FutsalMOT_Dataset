@@ -134,7 +134,7 @@ def export_rl_a33(
 
     # Update event_frame_map for agent events
     event_map = output_cfg.get("event_frame_map", {})
-    for evt_id, evt_data in event_map.items():
+    for _evt_id, evt_data in event_map.items():
         if isinstance(evt_data, dict) and evt_data.get("actor") == agent_id:
             evt_data["note"] = "rl_controlled"
     output_cfg["event_frame_map"] = event_map

@@ -130,8 +130,7 @@ def make_comparison_video(
                 ax.plot(trail_x, trail_y, color=color, linewidth=1.5, alpha=0.6, label=label)
 
         # ── Player positions ────────────────────────────────────
-        labels_added = set()
-        for positions, color, label, edge_w in [
+        for positions, color, _label, edge_w in [
             (rule_positions, "#888888", "Rule", 2),
             (bc_positions, "#FF6F00", "BC", 2),
             (ppo_positions, "#4CAF50", "PPO", 3),
@@ -221,7 +220,7 @@ def make_comparison_video(
             writer.append_data(np.asarray(buf)[:, :, :3])
         except AttributeError:
             buf = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
-            writer.append_data(buf.reshape(fig.canvas.get_width_height()[::-1] + (3,)))
+            writer.append_data(buf.reshape((*fig.canvas.get_width_height()[::-1], 3)))
 
     writer.close()
     plt.close(fig)

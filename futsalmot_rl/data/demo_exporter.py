@@ -73,7 +73,7 @@ def export_demo_from_a33(
     event_map = get_event_frame_map(cfg)
     # Build a reverse lookup: frame -> event types
     frame_event_type: dict[int, str] = {}
-    for evt_id, evt_data in event_map.items():
+    for _evt_id, evt_data in event_map.items():
         evt_type = evt_data.get("type", "")
         actor = evt_data.get("actor", "")
         start = int(evt_data.get("start_frame", 0))

@@ -56,21 +56,21 @@ def run(args: argparse.Namespace, paths: ProjectPaths) -> int:
         policy, _, _ = load_policy(model)
         env = FutsalDefenderFollowEnv(source_episode_path=source)
         all_rewards = []
-        for ep in range(args.n_episodes):
+        for _ep in range(args.n_episodes):
             obs, _ = env.reset()
             done = False
             ep_r = 0.0
             while not done:
                 action = policy.get_action(obs, deterministic=True)
-                obs_next, r, term, trunc, info = env.step(action)
+                obs_next, r, term, trunc, _info = env.step(action)
                 ep_r += float(r)
                 done = term or trunc
                 obs = obs_next
             all_rewards.append(ep_r)
         env.close()
-        print(
-            f"RL eval: mean_reward={float(np.mean(all_rewards)):.3f} std={float(np.std(all_rewards)):.3f}"
-        )
+        mean_r = float(np.mean(all_rewards))
+        std_r = float(np.std(all_rewards))
+        print(f"RL eval: mean_reward={mean_r:.3f} std={std_r:.3f}")
         return 0
 
     elif args.eval_cmd == "sanitize-env":

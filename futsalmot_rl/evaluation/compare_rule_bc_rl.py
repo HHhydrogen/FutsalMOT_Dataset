@@ -45,7 +45,7 @@ def _compute_trajectory_metrics(
             out_of_bounds += 1
 
         # Collisions
-        for pid, other_pos in other_positions.items():
+        for _pid, other_pos in other_positions.items():
             if i < len(other_pos):
                 ox, oy = other_pos[i]
                 dist = math.hypot(x - ox, y - oy)
@@ -131,12 +131,12 @@ def compare_policies(
     if bc_policy is not None:
         env = FutsalDefenderFollowEnv(source_episode_path=source_a33_path)
         bc_positions: list[tuple[float, float]] = []
-        for ep in range(n_episodes):
+        for _ep in range(n_episodes):
             obs, _ = env.reset()
             done = False
             while not done:
                 action = bc_policy(obs)
-                obs_next, reward, term, trunc, info = env.step(action)
+                obs_next, _reward, term, trunc, info = env.step(action)
                 bc_positions.append(info.get("all_positions", {}).get("Player_05", (0.0, 0.0)))
                 done = term or trunc
                 obs = obs_next
@@ -150,12 +150,12 @@ def compare_policies(
     if rl_policy is not None:
         env = FutsalDefenderFollowEnv(source_episode_path=source_a33_path)
         rl_positions: list[tuple[float, float]] = []
-        for ep in range(n_episodes):
+        for _ep in range(n_episodes):
             obs, _ = env.reset()
             done = False
             while not done:
                 action = rl_policy(obs)
-                obs_next, reward, term, trunc, info = env.step(action)
+                obs_next, _reward, term, trunc, info = env.step(action)
                 rl_positions.append(info.get("all_positions", {}).get("Player_05", (0.0, 0.0)))
                 done = term or trunc
                 obs = obs_next
@@ -188,7 +188,7 @@ def save_comparison_report(
                 all_keys.update(policy_data.keys())
         all_keys.discard("method")
 
-        fieldnames = ["method"] + sorted(all_keys)
+        fieldnames = ["method", *sorted(all_keys)]
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         for method_name, policy_data in results.items():

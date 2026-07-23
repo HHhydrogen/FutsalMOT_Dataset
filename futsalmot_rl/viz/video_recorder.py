@@ -37,7 +37,7 @@ def _fig_to_rgb(fig: matplotlib.figure.Figure) -> np.ndarray:
     except AttributeError:
         # fallback for older versions
         buf = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
-        return buf.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+        return buf.reshape((*fig.canvas.get_width_height()[::-1], 3))
 
 
 def _extract_frames(

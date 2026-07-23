@@ -47,6 +47,8 @@ class TestObservationContract:
         except ImportError:
             try:
                 # older gymnasium
+                import gymnasium
+
                 check_env = gymnasium.utils.check_env
             except AttributeError:
                 pytest.skip("No check_env available in this gymnasium version")
@@ -69,14 +71,13 @@ class TestObservationValues:
         assert np.all(np.isfinite(obs)), "NaN or Inf in observation"
 
     def test_obs_no_nan_after_steps(self, env: FutsalDefenderFollowEnv) -> None:
-        obs, _ = env.reset()
+        _obs, _ = env.reset()
         done = False
         while not done:
             action = env.action_space.sample()
             obs_next, _, term, trunc, _ = env.step(action)
             assert np.all(np.isfinite(obs_next)), "NaN or Inf after step"
             done = term or trunc
-            obs = obs_next
 
     def test_steps_left_decreases(self, env: FutsalDefenderFollowEnv) -> None:
         """steps_left (index 30 in obs) should decrease."""
@@ -109,10 +110,10 @@ class TestSelfVelocity:
         assert abs(obs[3]) < 0.01, "Initial vy should be ~0"
 
     def test_action_changes_self_velocity(self, env: FutsalDefenderFollowEnv) -> None:
-        obs, _ = env.reset()
+        _obs, _ = env.reset()
         # Apply a positive-x action
         action = np.array([1.0, 0.0], dtype=np.float32)
-        obs_next, _, _, _, info = env.step(action)
+        obs_next, _, _, _, _info = env.step(action)
         # vx should be positive after moving right
         self_vx = obs_next[2]
         assert self_vx > 0.0, f"After +x action, vx should be positive, got {self_vx}"
@@ -121,7 +122,7 @@ class TestSelfVelocity:
         """RL agent's observed velocity is NOT the same as the rule trajectory velocity."""
         obs, _ = env.reset()
         # Store the first rule velocity info
-        rule_vx_initial = obs[2]
+        obs[2]
 
         # Take a strong action that differs from rule
         for _ in range(5):
@@ -180,12 +181,12 @@ class TestActionClipping:
     """Actions are properly clipped to [-1, 1]."""
 
     def test_clip_above_1(self, env: FutsalDefenderFollowEnv) -> None:
-        obs, _ = env.reset()
+        _obs, _ = env.reset()
         obs_next, _, _, _, _ = env.step(np.array([5.0, 0.0], dtype=np.float32))
         assert np.all(np.isfinite(obs_next))
 
     def test_clip_below_neg1(self, env: FutsalDefenderFollowEnv) -> None:
-        obs, _ = env.reset()
+        _obs, _ = env.reset()
         obs_next, _, _, _, _ = env.step(np.array([-5.0, 0.0], dtype=np.float32))
         assert np.all(np.isfinite(obs_next))
 
@@ -200,10 +201,10 @@ class TestReset:
         assert np.allclose(obs1, obs2, atol=1e-6)
 
     def test_reset_after_episode(self, env: FutsalDefenderFollowEnv) -> None:
-        obs, _ = env.reset()
+        env.reset()
         done = False
         while not done:
-            obs, _, term, trunc, _ = env.step(np.array([0.0, 0.0], dtype=np.float32))
+            _obs, _, term, trunc, _ = env.step(np.array([0.0, 0.0], dtype=np.float32))
             done = term or trunc
 
         # Reset and verify new episode starts fresh

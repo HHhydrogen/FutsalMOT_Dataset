@@ -72,8 +72,8 @@ class RLVideoEvalCallback:
         total_rewards: list[float] = []
         episode_lengths: list[int] = []
 
-        for ep in range(self.n_eval_episodes):
-            obs, info = self.eval_env.reset()
+        for _ep in range(self.n_eval_episodes):
+            obs, _info = self.eval_env.reset()
             done = False
             ep_reward = 0.0
             ep_len = 0
@@ -86,7 +86,7 @@ class RLVideoEvalCallback:
                     else:
                         action = policy(obs_tensor).squeeze(0).cpu().numpy()
 
-                next_obs, reward, terminated, truncated, info = self.eval_env.step(action)
+                next_obs, reward, terminated, truncated, _info = self.eval_env.step(action)
                 ep_reward += float(reward)
                 ep_len += 1
                 done = terminated or truncated

@@ -5,6 +5,7 @@ Reuses patterns from futsalmot/core/io.py — adds npz support.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 from pathlib import Path
@@ -38,10 +39,8 @@ def write_text_atomic(path: str | Path, text: str) -> None:
         os.replace(str(tmp), str(target))
     finally:
         if tmp.exists():
-            try:
+            with contextlib.suppress(OSError):
                 tmp.unlink()
-            except OSError:
-                pass
 
 
 def save_npz(path: str | Path, **kwargs: Any) -> None:

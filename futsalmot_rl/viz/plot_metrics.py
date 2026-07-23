@@ -131,7 +131,7 @@ def plot_comparison_bar(
         ax.tick_params(axis="x", rotation=45)
 
         # Add value labels on bars
-        for bar, val in zip(bars, values):
+        for bar, val in zip(bars, values, strict=False):
             ax.text(
                 bar.get_x() + bar.get_width() / 2,
                 bar.get_height(),

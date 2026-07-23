@@ -115,5 +115,5 @@ class DemoDataset(Dataset):
                 "end": end,
                 "transitions": end - start,
             }
-            for eid, (start, end) in zip(self._episode_ids, self._episode_ranges)
+            for eid, (start, end) in zip(self._episode_ids, self._episode_ranges, strict=False)
         ]

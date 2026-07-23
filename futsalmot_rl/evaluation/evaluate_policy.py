@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import math
 from pathlib import Path
 from typing import Any
@@ -227,16 +228,14 @@ def make_bc_video_callback(demo_dir: str | Path):
                     writer.append_data(_np_for_cb.asarray(buf)[:, :, :3])
                 except AttributeError:
                     buf = _np_for_cb.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
-                    buf = buf.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+                    buf = buf.reshape((*fig.canvas.get_width_height()[::-1], 3))
                     writer.append_data(buf)
 
             writer.close()
             _plt_for_close.close(fig)
             # data.close() may trigger a benign NameError in some Python versions
-            try:
+            with contextlib.suppress(Exception):
                 data.close()
-            except Exception:
-                pass
             print(f"    [video] Saved {output_path}")
 
         except Exception as exc:

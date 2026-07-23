@@ -47,7 +47,7 @@ class FutsalDefenderFollowEnv(gym.Env):
     All other players and the ball follow their rule-generated trajectories.
     """
 
-    metadata = {"render_modes": ["rgb_array"], "render_fps": 15}
+    metadata: dict = {"render_modes": ["rgb_array"], "render_fps": 15}  # noqa: RUF012
 
     def __init__(
         self,
@@ -136,7 +136,7 @@ class FutsalDefenderFollowEnv(gym.Env):
         # Event frame map
         self.event_map = get_event_frame_map(self._cfg)
         self._frame_event_type: dict[int, str] = {}
-        for evt_id, evt_data in self.event_map.items():
+        for _evt_id, evt_data in self.event_map.items():
             evt_type = evt_data.get("type", "")
             actor = evt_data.get("actor", "")
             start = int(evt_data.get("start_frame", 0))

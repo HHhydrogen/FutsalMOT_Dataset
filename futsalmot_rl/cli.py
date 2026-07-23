@@ -10,8 +10,8 @@ import argparse
 import sys
 
 from futsalmot_rl.commands import demos, evaluate
-from futsalmot_rl.core.paths import create_paths
 from futsalmot_rl.core.exceptions import ConfigurationError
+from futsalmot_rl.core.paths import create_paths
 
 
 def build_parser() -> argparse.ArgumentParser:

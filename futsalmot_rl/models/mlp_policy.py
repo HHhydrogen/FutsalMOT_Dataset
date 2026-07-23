@@ -183,6 +183,13 @@ class MLPActorCritic(nn.Module):
         entropy = dist.entropy().sum(dim=-1)
         return action, log_prob, entropy, value
 
+    def get_value(self, obs: torch.Tensor) -> torch.Tensor:
+        """Get state-value estimate for bootstrap."""
+        if self.shared_backbone and self.backbone is not None:
+            features = self.backbone(obs)
+            return self.critic_head(features)
+        return self.critic(obs)
+
     def get_action(self, obs: np.ndarray, deterministic: bool = True) -> np.ndarray:
         """Get action for inference.
 

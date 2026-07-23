@@ -331,9 +331,6 @@ class PPOTrainer:
         raw_advantages = data["raw_advantages"]
         returns = data["returns"]
 
-        # For explained variance at the end
-        all_value_preds: list[torch.Tensor] = []
-
         # Create indices for mini-batches
         indices = np.arange(n)
 
@@ -399,7 +396,6 @@ class PPOTrainer:
                 total_v_loss += v_loss.item()
                 total_entropy += entropy_mean.item()
                 total_clip_frac += ((ratio - 1.0).abs() > clip_range).float().mean().item()
-                all_value_preds.append(values.detach().squeeze())
                 n_updates += 1
 
                 # Early stopping via KL divergence — exits both loops
@@ -416,16 +412,13 @@ class PPOTrainer:
         # Reset for next iteration
         kl_stopped = _kl_exceeded
 
-        # Explained variance
-        if all_value_preds:
-            vpred = torch.cat(all_value_preds)
-            with torch.no_grad():
-                resid = returns - vpred
-                var_resid = resid.pow(2).sum()
-                var_returns = (returns - returns.mean()).pow(2).sum().clamp(min=1e-8)
-                explained_variance = 1.0 - var_resid / var_returns
-        else:
-            explained_variance = 0.0
+        # Explained variance — compute from the full rollout
+        with torch.no_grad():
+            vpred_full = data["values"]
+            resid = returns - vpred_full
+            var_resid = resid.pow(2).sum()
+            var_returns = (returns - returns.mean()).pow(2).sum().clamp(min=1e-8)
+            explained_variance = float(1.0 - var_resid / var_returns)
 
         # Gradient norm
         total_norm = 0.0

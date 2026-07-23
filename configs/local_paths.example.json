@@ -1,0 +1,7 @@
+{
+  "schema_version": "1.0",
+  "description": "Local machine paths — copy to local_paths.json and fill in",
+  "repo_root": "",
+  "ue_project_root": "",
+  "uproject_file": ""
+}

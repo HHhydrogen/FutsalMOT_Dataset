@@ -144,18 +144,20 @@ class MLPActorCritic(nn.Module):
         # For continuous actions, use a Gaussian policy with learnable log_std
         std = self.log_std.exp().expand_as(mean_action)
 
-        if action is None:
-            # Sample action
-            dist = torch.distributions.Normal(mean_action, std)
-            action = dist.rsample()
-            # Tanh-squash the action
-            action = torch.tanh(action)
-
-        # Compute log prob of the action
-        # Using the squashed gaussian correction
         dist = torch.distributions.Normal(mean_action, std)
-        log_prob = dist.log_prob(action)
-        # Tanh correction
+
+        if action is None:
+            # Sample raw Gaussian, then tanh-squash
+            raw_action = dist.rsample()          # u ~ N(mean, std)
+            action = torch.tanh(raw_action)       # a = tanh(u)
+        else:
+            # Action is already tanh-squashed — invert to get raw sample u
+            raw_action = torch.clamp(action, -0.999, 0.999)
+            raw_action = 0.5 * torch.log((1.0 + raw_action) / (1.0 - raw_action))
+
+        # Compute log-probability with tanh correction:
+        #   log pi(a|s) = log N(u | mean, std) - sum log(1 - tanh(u)^2)
+        log_prob = dist.log_prob(raw_action)
         log_prob -= torch.log(1.0 - action.pow(2) + 1e-6)
         log_prob = log_prob.sum(dim=-1)
 

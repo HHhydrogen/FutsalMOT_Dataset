@@ -125,6 +125,7 @@ class PPOTrainer:
 
         obs, info = self.env.reset()
         episode_rewards: list[float] = []
+        current_episode_reward = 0.0
 
         for step in range(n_steps):
             obs_tensor = torch.from_numpy(obs).float().unsqueeze(0).to(self.device)
@@ -144,13 +145,17 @@ class PPOTrainer:
             )
             rewards_list.append(float(reward))
             dones_list.append(terminated or truncated)
+            current_episode_reward += float(reward)
 
             if dones_list[-1]:
-                episode_rewards.append(
-                    sum(rewards_list[-self.env.episode_length:])
-                )
+                episode_rewards.append(current_episode_reward)
+                current_episode_reward = 0.0
 
             obs = next_obs if not dones_list[-1] else self.env.reset()[0]
+
+        # Save last observation and termination state for correct GAE bootstrap
+        last_obs = obs.copy()  # obs is already next_obs from the last step
+        last_terminated = bool(dones_list[-1]) if dones_list else False
 
         # Convert to tensors
         data = {
@@ -160,51 +165,83 @@ class PPOTrainer:
             "dones": torch.BoolTensor(dones_list).to(self.device),
             "values": torch.FloatTensor(values_list).to(self.device),
             "log_probs": torch.FloatTensor(log_probs_list).to(self.device),
+            "last_obs": torch.FloatTensor(last_obs).to(self.device),
+            "last_terminated": last_terminated,
         }
 
-        # Compute advantages with GAE
-        data["advantages"] = self._compute_gae(data)
-        data["returns"] = data["advantages"] + data["values"]
+        # Compute raw advantages with GAE (no normalization inside)
+        raw_advantages = self._compute_gae(
+            data["rewards"], data["values"], data["dones"],
+            last_obs_tensor=torch.FloatTensor(last_obs).to(self.device),
+            last_terminated=last_terminated,
+        )
+        data["raw_advantages"] = raw_advantages
+        data["returns"] = raw_advantages + data["values"]
 
         return data, episode_rewards
 
-    def _compute_gae(self, data: dict[str, torch.Tensor]) -> torch.Tensor:
-        """Compute Generalized Advantage Estimation."""
+    def _compute_gae(
+        self,
+        rewards: torch.Tensor,
+        values: torch.Tensor,
+        dones: torch.Tensor,
+        last_obs_tensor: torch.Tensor,
+        last_terminated: bool,
+    ) -> torch.Tensor:
+        """Compute Generalized Advantage Estimation (pure function, no env access).
+
+        Args:
+            rewards: (n,) tensor of rewards.
+            values: (n,) tensor of value estimates.
+            dones: (n,) bool tensor indicating episode termination.
+            last_obs_tensor: (obs_dim,) observation after the last step for bootstrap.
+            last_terminated: True if the last step ended due to termination (not truncation).
+
+        Returns:
+            (n,) tensor of raw (un-normalized) advantages.
+        """
         gamma = self.cfg["gamma"]
         lam = self.cfg["gae_lambda"]
-        n = len(data["rewards"])
+        n = len(rewards)
+
+        # Bootstrap value: if terminated, value is 0; otherwise use critic
+        with torch.no_grad():
+            if last_terminated:
+                final_value = 0.0
+            else:
+                final_value = self.policy.get_value(
+                    last_obs_tensor.unsqueeze(0)
+                ).squeeze(0).item()
+
+        values_full = torch.cat(
+            [values, torch.tensor([final_value], device=self.device)]
+        )
 
         advantages = torch.zeros(n, device=self.device)
         last_gae = 0.0
 
-        # Get final value (bootstrapping)
-        with torch.no_grad():
-            obs_tensor = torch.from_numpy(
-                np.array([self.env.reset()[0]])
-            ).float().to(self.device)
-            final_value = self.policy.get_value(obs_tensor).item()
-
-        values_full = torch.cat(
-            [data["values"], torch.tensor([final_value], device=self.device)]
-        )
-
         for t in reversed(range(n)):
             delta = (
-                data["rewards"][t]
-                + gamma * values_full[t + 1] * (1.0 - float(data["dones"][t]))
+                rewards[t]
+                + gamma * values_full[t + 1] * (1.0 - float(dones[t]))
                 - values_full[t]
             )
-            last_gae = delta + gamma * lam * (1.0 - float(data["dones"][t])) * last_gae
+            last_gae = delta + gamma * lam * (1.0 - float(dones[t])) * last_gae
             advantages[t] = last_gae
 
-        # Normalize advantages
-        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+        # Note: raw advantages returned — normalization for policy loss
+        # is done locally inside train_step().
         return advantages
 
     def train_step(
         self, data: dict[str, torch.Tensor]
     ) -> dict[str, float]:
-        """Perform one PPO update step on collected rollout data."""
+        """Perform one PPO update step on collected rollout data.
+
+        Uses raw_advantages and returns from collect_rollout.
+        Advantages are normalized per mini-batch for policy loss only.
+        Critic loss uses raw (un-normalized) returns.
+        """
         n = len(data["obs"])
         batch_size = self.cfg["batch_size"]
         n_epochs = self.cfg["n_epochs"]
@@ -215,6 +252,9 @@ class PPOTrainer:
         total_v_loss = 0.0
         total_entropy = 0.0
         n_updates = 0
+
+        raw_advantages = data["raw_advantages"]
+        returns = data["returns"]
 
         # Create indices for mini-batches
         indices = np.arange(n)
@@ -229,9 +269,16 @@ class PPOTrainer:
 
                 obs_batch = data["obs"][batch_indices_tensor]
                 actions_batch = data["actions"][batch_indices_tensor]
-                advantages_batch = data["advantages"][batch_indices_tensor]
-                returns_batch = data["returns"][batch_indices_tensor]
+                # Critic target: raw returns (un-normalized)
+                returns_batch = returns[batch_indices_tensor]
                 old_log_probs_batch = data["log_probs"][batch_indices_tensor]
+
+                # Policy advantages: normalized per batch
+                batch_raw = raw_advantages[batch_indices_tensor]
+                advantages_batch = (
+                    (batch_raw - batch_raw.mean())
+                    / (batch_raw.std() + 1e-8)
+                )
 
                 # Get new action log probs and values
                 _, log_probs, entropy, values = self.policy.get_action_and_value(
@@ -248,7 +295,7 @@ class PPOTrainer:
                 )
                 pi_loss = torch.mean(torch.max(pi_loss1, pi_loss2))
 
-                # Value function loss
+                # Value function loss — uses raw returns (un-normalized)
                 v_loss = F.mse_loss(values.squeeze(), returns_batch)
 
                 # Entropy bonus

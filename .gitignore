@@ -1,12 +1,36 @@
+# Python
 __pycache__/
 *.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Output and artifacts
 _agent_test_outputs/
 _backup_*/
 configs/runs/
 configs/events/generated/
-*.tmp.*
+configs/pipeline_current.json
 Saved/
+
+# Temp files
+*.tmp.*
+*.bak
+*.bak[0-9]*
+
+# Media and large binaries
 *.mp4
-demo_index.json
+*.png
+*.jpg
 *.npz
+*.npy
+
+# Models
 *.pt
+*.pth
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo

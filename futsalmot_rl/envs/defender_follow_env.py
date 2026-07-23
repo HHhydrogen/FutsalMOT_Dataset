@@ -383,6 +383,10 @@ class FutsalDefenderFollowEnv(gym.Env):
         ball_idx = min(frame, len(self.ball_positions) - 1)
         ball_pos = self.ball_positions[ball_idx] if self.ball_positions else (0.0, 0.0)
 
+        # 300 frames = 299 transitions
+        num_transitions = max(0, self.total_frames - 1)
+        remaining_transitions = max(0, num_transitions - frame)
+
         obs = build_observation(
             self_pos=self.agent_pos,
             self_vel=av,
@@ -400,8 +404,8 @@ class FutsalDefenderFollowEnv(gym.Env):
             own_goal_pos=self.own_goal_pos,
             possession_owner=self._get_possession_owner(frame),
             current_event_type=self._get_event_type(frame),
-            steps_left=self.total_frames - frame,
-            total_steps=self.total_frames,
+            steps_left=remaining_transitions,
+            total_steps=num_transitions,
         )
         return obs
 

@@ -249,15 +249,11 @@ class PPOTrainer:
             "dones": terminated_t | truncated_t,
         }
 
-        # Compute raw advantages with GAE using real next_values
+        # Compute raw advantages with GAE — all inputs are (n,) arrays
+        episode_ended = data["terminated"] | data["truncated"]
         raw_advantages = self._compute_gae(
-            data["rewards"],
-            data["values"],
-            data["next_values"],
-            data["terminated"],
-            data["truncated"],
-            last_obs_tensor=torch.FloatTensor(obs).to(self.device),
-            last_terminated=terminated_list[-1] if terminated_list else False,
+            data["rewards"], data["values"], data["next_values"],
+            data["terminated"], episode_ended,
         )
         data["raw_advantages"] = raw_advantages
         data["returns"] = raw_advantages + data["values"]
@@ -270,43 +266,28 @@ class PPOTrainer:
         values: torch.Tensor,
         next_values: torch.Tensor,
         terminated: torch.Tensor,
-        truncated: torch.Tensor,
-        last_obs_tensor: torch.Tensor,
-        last_terminated: bool,
+        episode_ended: torch.Tensor,
     ) -> torch.Tensor:
-        """Compute GAE — delegates to standalone compute_gae().
+        """Compute GAE — pure function, no env or model access.
 
-        Uses the REAL next_values from the rollout (computed from the
-        actual next_observation before any env.reset()).
-
-        For the final transition, if terminated → bootstrap=0;
-        otherwise bootstrap from the critic using last_obs.
+        Each transition has its own next_value already computed.
+        No bootstrap value is appended — the final transition's
+        next_value was computed from the real next_observation.
         """
         gamma = self.cfg["gamma"]
         lam = self.cfg["gae_lambda"]
+        n = len(rewards)
+        advantages = torch.zeros(n, device=rewards.device)
+        last_gae = 0.0
 
-        # Bootstrap for the last step: if terminated, next_value=0; else use critic
-        with torch.no_grad():
-            if last_terminated:
-                final_value = 0.0
-            else:
-                final_value = self.policy.get_value(last_obs_tensor.unsqueeze(0)).squeeze(0).item()
+        for t in reversed(range(n)):
+            bootstrap_mask = 1.0 - terminated[t].float()
+            continuation_mask = 1.0 - episode_ended[t].float()
+            delta = rewards[t] + gamma * next_values[t] * bootstrap_mask - values[t]
+            last_gae = delta + gamma * lam * continuation_mask * last_gae
+            advantages[t] = last_gae
 
-        # next_values is (n,). Append bootstrap so shape becomes (n+1,) matching
-        # the compute_gae interface where next_values[t] = V(s_{t+1}).
-        next_values_ext = torch.cat([next_values, torch.tensor([final_value], device=self.device)])
-
-        episode_ended = terminated | truncated
-
-        return compute_gae(
-            rewards=rewards,
-            values=values,
-            next_values=next_values_ext,
-            terminated=terminated,
-            episode_ended=episode_ended,
-            gamma=gamma,
-            gae_lambda=lam,
-        )
+        return advantages
 
     def train_step(self, data: dict[str, torch.Tensor]) -> dict[str, float]:
         """Perform one PPO update step on collected rollout data.
@@ -538,14 +519,12 @@ class PPOTrainer:
 
             # Print progress
             if iteration % 5 == 0 or iteration == 1:
+                reward_text = (
+                    f"{mean_ep_reward:.3f}" if mean_ep_reward is not None else "N/A"
+                )
                 print(
-                    "  Iter {}: step={} mean_reward={:.3f} pi_loss={:.4f} v_loss={:.4f}".format(
-                        iteration,
-                        global_step,
-                        mean_ep_reward,
-                        loss_metrics["pi_loss"],
-                        loss_metrics["v_loss"],
-                    )
+                    f"  Iter {iteration}: step={global_step} mean_reward={reward_text}"
+                    f" pi_loss={loss_metrics['pi_loss']:.4f} v_loss={loss_metrics['v_loss']:.4f}"
                 )
 
             # Evaluation + video

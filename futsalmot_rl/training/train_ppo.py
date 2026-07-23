@@ -17,7 +17,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from futsalmot_rl.core.rl_io import write_json_atomic
-from futsalmot_rl.core.rl_paths import MODELS_DIR, TRAIN_LOGS_DIR, ensure_dirs
+from futsalmot_rl.core.rl_paths import ensure_dirs
 from futsalmot_rl.models.mlp_policy import MLPActorCritic
 from futsalmot_rl.models.policy_io import save_policy
 
@@ -441,9 +441,10 @@ class PPOTrainer:
 
     def train(
         self,
-        total_timesteps: int | None = None,
-        log_dir: str | Path = TRAIN_LOGS_DIR / "ppo",
-        model_dir: str | Path = MODELS_DIR,
+        total_timesteps: int,
+        *,
+        log_dir: str | Path,
+        model_dir: str | Path,
         eval_interval: int = 25000,
     ) -> dict[str, Any]:
         """Run the full PPO training loop.

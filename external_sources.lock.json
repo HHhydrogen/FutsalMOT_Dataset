@@ -1,0 +1,15 @@
+{
+  "repositories": {
+    "google-research-football": {
+      "url": "https://github.com/google-research/football.git",
+      "commit": "3d9e754720a95621bba6475c4d3b0d56fe919014",
+      "cloned_into": ".external/google-research-football"
+    },
+    "GRF_MARL": {
+      "url": "https://github.com/jidiai/GRF_MARL.git",
+      "commit": "6cf67a509dc204f5f413adaa57619652580c80f1",
+      "cloned_into": ".external/GRF_MARL"
+    }
+  },
+  "generated_at": "2026-07-24T10:51:00Z"
+}

@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "grf-ue-bridge"
+version = "0.1.0"
+requires-python = ">=3.9,<3.10"
+dependencies = [
+    "gfootball>=2.10.2",
+    "gym<0.26",
+    "numpy",
+    "pydantic",
+    "six>=1.17.0",
+    "typer",
+]
+
+[project.scripts]
+grf-ue = "grf_ue_bridge.cli:app"
+
+[dependency-groups]
+dev = [
+    "pytest",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/grf_ue_bridge"]

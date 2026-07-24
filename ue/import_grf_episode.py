@@ -18,6 +18,7 @@ This script does NOT require gfootball, GRF_MARL, or the .venv.
 import argparse
 import json
 import math
+import re
 import sys
 from pathlib import Path
 
@@ -160,7 +161,22 @@ def add_double_channel_key(channel, frame_index: int, value: float, *, interpola
         if interpolation is not None
         else unreal.MovieSceneKeyInterpolation.LINEAR
     )
-    channel.add_key(time=frame_number, new_value=numeric_value, interpolation=interp)
+    return channel.add_key(time=frame_number, new_value=numeric_value, interpolation=interp)
+
+
+def _canonical_channel_name(channel) -> str:
+    """Get channel name with trailing numeric suffix stripped (UE 5.8+ appends _NNN)."""
+    raw_name = None
+    try:
+        raw_name = channel.get_editor_property("channel_name")
+    except Exception:
+        pass
+    if not raw_name:
+        try:
+            raw_name = channel.get_name()
+        except Exception:
+            raw_name = str(channel)
+    return re.sub(r"_\d+$", "", str(raw_name))
 
 
 def _channel_name(channel) -> str:
@@ -178,29 +194,30 @@ def _channel_name(channel) -> str:
 
 
 def _build_channel_map(channels) -> dict:
-    """Build a dict mapping display names like 'Location.X' to channel objects.
+    """Build a dict mapping canonical channel names (e.g. 'Location.X') to channel objects.
 
-    Falls back to positional indexing with a length check when name resolution
-    is unreliable. Logs the channel names for diagnostics.
+    Strips UE 5.8+ numeric suffixes (_NNN) before matching.
+    Falls back to positional indexing with a length check if needed.
+    Logs raw channel names for diagnostics.
     """
     import unreal
-    name_map = {}
+    canonical_map = {}
     for ch in channels:
-        name = _channel_name(ch)
-        name_map[name] = ch
+        canonical = _canonical_channel_name(ch)
+        canonical_map[canonical] = ch
     unreal.log(
         "Transform channels: "
-        + ", ".join(name_map.keys())
+        + ", ".join(f"{c}" for c in canonical_map.keys())
     )
     if len(channels) < 9:
         raise RuntimeError(
             f"Expected at least 9 transform channels, got {len(channels)}"
         )
-    # If we got all 9 by name, use named map
-    if all(n in name_map for n in EXPECTED_CHANNEL_NAMES):
-        return name_map
+    if all(n in canonical_map for n in EXPECTED_CHANNEL_NAMES):
+        print("  Transform channel name mapping: PASS")
+        return canonical_map
     # Fallback: positional indexing with length check
-    unreal.log("Warning: channel name matching incomplete, using positional fallback")
+    unreal.log("Warning: canonical channel name matching incomplete, using positional fallback")
     return {
         "Location.X": channels[0],
         "Location.Y": channels[1],
@@ -260,11 +277,21 @@ def _smoke_test_sequencer_api(actors: dict, total_output_frames: int):
     channels = section.get_all_channels()
     cmap = _build_channel_map(channels)
 
-    # Add two test keys
+    # Add two test keys and remove them via remove_key()
     test_ch = cmap["Location.X"]
-    test_ch.remove_all_keys()
-    test_ch.add_key(unreal.FrameNumber(0), 0.0)
-    test_ch.add_key(unreal.FrameNumber(1), 100.0)
+    test_key_0 = add_double_channel_key(test_ch, 0, 0.0)
+    test_key_1 = add_double_channel_key(test_ch, 1, 100.0)
+    if test_ch.get_num_keys() != 2:
+        raise RuntimeError(
+            f"Sequencer smoke test: expected 2 keys, got {test_ch.get_num_keys()}"
+        )
+    test_ch.remove_key(test_key_0)
+    test_ch.remove_key(test_key_1)
+    if test_ch.get_num_keys() != 0:
+        raise RuntimeError(
+            f"Sequencer smoke test cleanup: expected 0 keys, got {test_ch.get_num_keys()}"
+        )
+    print("  Smoke test PASS: add_key accepts FrameNumber, remove_key works")
 
     return temp_seq, cmap
 
@@ -324,19 +351,9 @@ def create_sequence(meta: dict, frames: list, mapping: dict, replace_existing: b
     print(f"  Timeline: {total_output_frames} frames @ {playback_fps} FPS")
 
     # ── Smoke test on a temporary sequence before batch writing ─────────
-    temp_seq, temp_channels = _smoke_test_sequencer_api(
-        actors, total_output_frames,
-    )
-    key_count = temp_channels["Location.X"].get_num_keys()
-    # Delete temp sequence
-    temp_path = f"{SEQUENCE_PACKAGE_PATH}/_TEMP_SMOKE"
-    unreal.EditorAssetLibrary.delete_asset(temp_path)
-    if key_count < 2:
-        raise RuntimeError(
-            f"Smoke test failed: expected 2 keys from add_key, got {key_count}. "
-            f"Incompatible UE Python Sequencer API."
-        )
-    print(f"  Smoke test PASS: add_key accepts FrameNumber")
+    temp_seq, _ = _smoke_test_sequencer_api(actors, total_output_frames)
+    # Clean up temp sequence
+    unreal.EditorAssetLibrary.delete_asset(f"{SEQUENCE_PACKAGE_PATH}/_TEMP_SMOKE")
 
     # ── Process each actor ─────────────────────────────────────────────
     total_transform_keys = 0

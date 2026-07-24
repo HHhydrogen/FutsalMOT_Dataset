@@ -173,11 +173,11 @@ def create_sequence(meta: dict, frames: list, mapping: dict):
         # Access transform channels via get_all_channels()
         channels = transform_section.get_all_channels()
         # Channel indices: 0=LocationX, 1=LocationY, 2=LocationZ
-        #                  3=RotationX, 4=RotationY, 5=RotationZ
+        #                  3=RotationX (Roll), 4=RotationY (Pitch), 5=RotationZ (Yaw)
         loc_x_channel = channels[0]
         loc_y_channel = channels[1]
         loc_z_channel = channels[2]
-        rot_z_channel = channels[5]
+        rot_roll_channel = channels[3]  # Roll = Rotator third param
 
         prev_yaws = {}
         previous_pos = None
@@ -198,10 +198,10 @@ def create_sequence(meta: dict, frames: list, mapping: dict):
                     if player_data["id"] != entity_id:
                         continue
                     pos_m = player_data["position_m"]
-                    px, py, pz = _pos_m_to_cm(pos_m)
+                    px, py, _ = _pos_m_to_cm(pos_m)
                     loc_x_channel.add_key(frame_number, px)
                     loc_y_channel.add_key(frame_number, py)
-                    loc_z_channel.add_key(frame_number, pz)
+                    loc_z_channel.add_key(frame_number, 90.0)  # fixed ground level
 
                     # Yaw from delta
                     if previous_pos is not None:
@@ -212,9 +212,9 @@ def create_sequence(meta: dict, frames: list, mapping: dict):
                     else:
                         yaw = 0.0
                     prev_yaws[entity_id] = yaw
-                    previous_pos = (px, py, pz)
+                    previous_pos = (px, py)
 
-                    rot_z_channel.add_key(frame_number, -yaw)
+                    rot_roll_channel.add_key(frame_number, yaw)
 
     # Save the asset
     unreal.EditorAssetLibrary.save_asset(f"{package_path}/{asset_name}", only_if_is_dirty=True)
@@ -263,8 +263,8 @@ def _apply_player_frame(actors: dict, frame: dict, prev_yaws: dict,
         if pid not in actors:
             continue
 
-        px, py, pz = _pos_m_to_cm(player_data["position_m"])
-        pos_cm = unreal.Vector(px, py, pz)
+        px, py, _ = _pos_m_to_cm(player_data["position_m"])
+        pos_cm = unreal.Vector(px, py, 90.0)  # fixed ground level
 
         # Yaw from delta
         prev_pos = prev_positions.get(pid)
@@ -280,7 +280,7 @@ def _apply_player_frame(actors: dict, frame: dict, prev_yaws: dict,
         prev_positions[pid] = pos_cm
 
         actors[pid].set_actor_location_and_rotation(
-            pos_cm, unreal.Rotator(0.0, yaw, 0.0), False, False
+            pos_cm, unreal.Rotator(0.0, 0.0, yaw), False, False
         )
 
 

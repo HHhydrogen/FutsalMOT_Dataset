@@ -158,7 +158,7 @@ def create_sequence(meta: dict, frames: list, mapping: dict):
     # Set display rate to 30 FPS, duration to the episode length
     seq.set_display_rate(unreal.FrameRate(30, 1))
     total_frames = int(math.ceil(num_steps * source_step * 30))
-    seq.set_playback_end(unreal.FrameNumber(total_frames))
+    seq.set_playback_end(total_frames)
 
     # Bind actors and add transform tracks
     for entity_id, actor in actors.items():
@@ -168,10 +168,7 @@ def create_sequence(meta: dict, frames: list, mapping: dict):
         transform_section = transform_track.add_section()
 
         # Set section range
-        transform_section.set_range(
-            unreal.FrameNumber(0),
-            unreal.FrameNumber(total_frames),
-        )
+        transform_section.set_range(0, total_frames)
 
         # Channel indices in a 3D Transform section:
         # 0=LocationX, 1=LocationY, 2=LocationZ
@@ -193,18 +190,18 @@ def create_sequence(meta: dict, frames: list, mapping: dict):
                 ball_pos = frame["ball"]["position_m"]
                 px, py, pz = _pos_m_to_cm(ball_pos)
                 pz += BALL_Z_OFFSET_CM
-                loc_x_channel.add_key(unreal.FrameNumber(frame_number), px)
-                loc_y_channel.add_key(unreal.FrameNumber(frame_number), py)
-                loc_z_channel.add_key(unreal.FrameNumber(frame_number), pz)
+                loc_x_channel.add_key(frame_number, px)
+                loc_y_channel.add_key(frame_number, py)
+                loc_z_channel.add_key(frame_number, pz)
             else:
                 for player_data in frame["players"]:
                     if player_data["id"] != entity_id:
                         continue
                     pos_m = player_data["position_m"]
                     px, py, pz = _pos_m_to_cm(pos_m)
-                    loc_x_channel.add_key(unreal.FrameNumber(frame_number), px)
-                    loc_y_channel.add_key(unreal.FrameNumber(frame_number), py)
-                    loc_z_channel.add_key(unreal.FrameNumber(frame_number), pz)
+                    loc_x_channel.add_key(frame_number, px)
+                    loc_y_channel.add_key(frame_number, py)
+                    loc_z_channel.add_key(frame_number, pz)
 
                     # Yaw from delta
                     if previous_pos is not None:
@@ -217,7 +214,7 @@ def create_sequence(meta: dict, frames: list, mapping: dict):
                     prev_yaws[entity_id] = yaw
                     previous_pos = (px, py, pz)
 
-                    rot_z_channel.add_key(unreal.FrameNumber(frame_number), -yaw)
+                    rot_z_channel.add_key(frame_number, -yaw)
 
     # Save the asset
     unreal.EditorAssetLibrary.save_asset(f"{package_path}/{asset_name}", only_if_is_dirty=True)

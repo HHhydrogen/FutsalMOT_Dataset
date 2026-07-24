@@ -1,37 +1,51 @@
 # Python
+.venv/
 __pycache__/
 *.py[cod]
 *.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 dist/
 build/
 
-# Output and artifacts
-_agent_test_outputs/
-_backup_*/
-configs/runs/
-configs/events/generated/
-configs/pipeline_current.json
-configs/local_paths.json
+# Local Python selection
+.python-version.local
+
+# External repositories and native builds
+.external/
+external/
+third_party/
+
+# Generated episodes
+outputs/*
+!outputs/.gitkeep
+
+# Unreal generated directories
+Binaries/
+DerivedDataCache/
+Intermediate/
 Saved/
 
-# Temp files
-*.tmp.*
-*.bak
-*.bak[0-9]*
+# Local configuration
+configs/local*.json
+*.local.json
 
-# Media and large binaries
-*.mp4
-*.png
-*.jpg
-*.npz
-*.npy
-
-# Models
-*.pt
-*.pth
+# Visual Studio / CMake / vcpkg build products
+.vs/
+CMakeFiles/
+CMakeCache.txt
+cmake-build-*/
+out/
+x64/
+Debug/
+Release/
 
 # IDE
-.idea/
 .vscode/
-*.swp
-*.swo
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini

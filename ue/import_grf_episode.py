@@ -170,14 +170,14 @@ def create_sequence(meta: dict, frames: list, mapping: dict):
         # Set section range
         transform_section.set_range(0, total_frames)
 
-        # Channel indices in a 3D Transform section:
-        # 0=LocationX, 1=LocationY, 2=LocationZ
-        # 3=RotationX, 4=RotationY, 5=RotationZ
-        # 6=ScaleX, 7=ScaleY, 8=ScaleZ
-        loc_x_channel = transform_section.get_channels()[0]
-        loc_y_channel = transform_section.get_channels()[1]
-        loc_z_channel = transform_section.get_channels()[2]
-        rot_z_channel = transform_section.get_channels()[5]
+        # Access transform channels via get_all_channels()
+        channels = transform_section.get_all_channels()
+        # Channel indices: 0=LocationX, 1=LocationY, 2=LocationZ
+        #                  3=RotationX, 4=RotationY, 5=RotationZ
+        loc_x_channel = channels[0]
+        loc_y_channel = channels[1]
+        loc_z_channel = channels[2]
+        rot_z_channel = channels[5]
 
         prev_yaws = {}
         previous_pos = None

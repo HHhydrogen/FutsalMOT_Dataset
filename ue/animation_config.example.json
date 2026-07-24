@@ -1,0 +1,25 @@
+{
+  "enabled": true,
+  "animations": {
+    "idle": "/Game/Characters/Animations/Idle",
+    "walk": "/Game/Characters/Animations/Walk_Fwd",
+    "run": "/Game/Characters/Animations/Run_Fwd"
+  },
+  "locomotion": {
+    "idle_max_speed_mps": 0.20,
+    "run_min_speed_mps": 2.50,
+    "smoothing_window": 5,
+    "minimum_segment_frames": 6,
+    "idle_play_rate": 1.0,
+    "walk_reference_speed_mps": 1.4,
+    "run_reference_speed_mps": 4.0,
+    "minimum_play_rate": 0.75,
+    "maximum_play_rate": 1.50
+  },
+  "ball": {
+    "enabled": true,
+    "radius_m": 0.11,
+    "minimum_move_distance_m": 0.0001,
+    "roll_sign": 1.0
+  }
+}

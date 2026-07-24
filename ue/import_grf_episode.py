@@ -112,11 +112,12 @@ def apply_preview(meta: dict, frames: list, mapping: dict):
 
     num_steps = meta["timing"]["num_steps"]
     prev_yaws: dict = {}
+    prev_positions: dict = {}
 
     for frame_idx, frame in enumerate(frames):
         step = frame["step"]
         _apply_ball_frame(actors, frame)
-        _apply_player_frame(actors, frame, prev_yaws)
+        _apply_player_frame(actors, frame, prev_yaws, prev_positions)
 
         if step > 0 and step % 50 == 0:
             print(f"  Preview: {step}/{num_steps}")
@@ -255,7 +256,8 @@ def _apply_ball_frame(actors: dict, frame: dict):
     )
 
 
-def _apply_player_frame(actors: dict, frame: dict, prev_yaws: dict):
+def _apply_player_frame(actors: dict, frame: dict, prev_yaws: dict,
+                         prev_positions: dict):
     """Position and rotate player actors from frame data."""
     import unreal
 
@@ -268,8 +270,8 @@ def _apply_player_frame(actors: dict, frame: dict, prev_yaws: dict):
         pos_cm = unreal.Vector(px, py, pz)
 
         # Yaw from delta
-        prev_pos = getattr(actors[pid], "_prev_pos", None)
-        if prev_pos:
+        prev_pos = prev_positions.get(pid)
+        if prev_pos is not None:
             dx = pos_cm.x - prev_pos.x
             dy = pos_cm.y - prev_pos.y
             prev_yaw = prev_yaws.get(pid, 0.0)
@@ -278,7 +280,7 @@ def _apply_player_frame(actors: dict, frame: dict, prev_yaws: dict):
             yaw = 0.0
 
         prev_yaws[pid] = yaw
-        actors[pid]._prev_pos = pos_cm
+        prev_positions[pid] = pos_cm
 
         actors[pid].set_actor_location_and_rotation(
             pos_cm, unreal.Rotator(0.0, yaw, 0.0), False, False

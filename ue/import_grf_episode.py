@@ -66,11 +66,18 @@ def load_mapping(path: Path) -> dict:
         return json.load(f)
 
 
+def _get_actor_subsystem():
+    """Get the EditorActorSubsystem (UE5 replacement for deprecated EditorLevelLibrary)."""
+    import unreal
+    return unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
+
+
 def find_actor(name: str):
     """Find a UE actor by label or name, case-insensitive."""
     import unreal
 
-    actors = unreal.EditorLevelLibrary.get_all_level_actors()
+    subsystem = _get_actor_subsystem()
+    actors = subsystem.get_all_level_actors()
     for actor in actors:
         actor_name = actor.get_actor_label() or actor.get_name()
         if actor_name.lower() == name.lower():
@@ -244,7 +251,7 @@ def _apply_ball_frame(actors: dict, frame: dict):
     ball_pos = frame["ball"]["position_m"]
     px, py, pz = _pos_m_to_cm(ball_pos)
     actors["BALL"].set_actor_location(
-        unreal.Vector(px, py, pz + BALL_Z_OFFSET_CM), False
+        unreal.Vector(px, py, pz + BALL_Z_OFFSET_CM), False, False
     )
 
 
@@ -274,7 +281,7 @@ def _apply_player_frame(actors: dict, frame: dict, prev_yaws: dict):
         actors[pid]._prev_pos = pos_cm
 
         actors[pid].set_actor_location_and_rotation(
-            pos_cm, unreal.Rotator(0.0, yaw, 0.0), False
+            pos_cm, unreal.Rotator(0.0, yaw, 0.0), False, False
         )
 
 

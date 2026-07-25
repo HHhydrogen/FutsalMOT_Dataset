@@ -144,10 +144,13 @@ def load_animation_config(path: Path) -> dict:
     with open(path) as f:
         cfg = json.load(f)
 
-    anims = cfg.get("animations", {})
-    for key in ("idle", "walk", "run"):
-        if key not in anims or not anims[key]:
-            raise ValueError(f"Animation config missing '{key}' asset path")
+    enabled = cfg.get("enabled", True)
+
+    if enabled:
+        anims = cfg.get("animations", {})
+        for key in ("idle", "walk", "run"):
+            if key not in anims or not anims[key]:
+                raise ValueError(f"Animation config missing '{key}' asset path")
 
     loco = cfg.get("locomotion", {})
     for key in ("idle_max_speed_mps", "run_min_speed_mps", "smoothing_window",
@@ -164,6 +167,8 @@ def load_animation_config(path: Path) -> dict:
 
 def precheck_animation_assets(anim_cfg: dict, actors: dict, mapping: dict):
     """Verify animation assets exist and players have skeletal mesh components."""
+    if not anim_cfg.get("enabled", True):
+        return
     import unreal
 
     anims = anim_cfg["animations"]

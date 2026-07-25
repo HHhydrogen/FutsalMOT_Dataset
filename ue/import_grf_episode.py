@@ -5,8 +5,11 @@ Two modes (default: both):
   --preview    Set actor transforms directly in the level (Editor preview).
   --sequence   Create / overwrite a Level Sequence asset with keyframed transforms.
 
-Usage (in Unreal Editor Python Console):
-    py "D:/path/to/ue/import_grf_episode.py" --episode "D:/path/to/outputs/episode_0001" --mapping "D:/path/to/ue/actor_mapping.example.json" --replace-existing
+Usage (in Unreal Editor Python Console) — using config file:
+    py "D:/path/to/code/ue/import_grf_episode.py" --config "D:/path/to/code/ue_import_config.json"
+
+Or with explicit CLI flags (config values are overridden by CLI flags):
+    py "D:/path/to/code/ue/import_grf_episode.py" --episode "D:/path/to/outputs/episode_0001" --mapping "D:/path/to/code/ue/actor_mapping.example.json" --replace-existing
 
 Dependencies:
     - unreal (UE built-in module)
@@ -42,11 +45,11 @@ def _parse_args():
         description="Import GRF-UE episode into Unreal Engine"
     )
     parser.add_argument(
-        "--episode", required=True,
+        "--episode", default=None,
         help="Path to episode directory (contains meta.json, frames.jsonl)"
     )
     parser.add_argument(
-        "--mapping", required=True,
+        "--mapping", default=None,
         help="Path to actor mapping JSON file"
     )
     parser.add_argument(
@@ -54,14 +57,21 @@ def _parse_args():
         help="Execution mode"
     )
     parser.add_argument(
-        "--replace-existing", action="store_true",
+        "--replace-existing", action="store_true", default=False,
         help="Delete and recreate an existing Level Sequence without showing an overwrite dialog"
     )
     parser.add_argument(
         "--animation-config", type=str, default=None,
         help="Optional animation configuration JSON. When omitted, locomotion animation and ball rolling are not added."
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--config", type=str, default=None,
+        help="Path to import config JSON. All parameters can be set here; CLI flags override config values."
+    )
+    parsed = parser.parse_args()
+    if not parsed.config and not (parsed.episode and parsed.mapping):
+        parser.error("Either --config or both --episode and --mapping are required.")
+    return parsed
 
 
 # ── Load helpers ────────────────────────────────────────────────────────
@@ -1061,16 +1071,45 @@ def _apply_player_frame(actors: dict, frame: dict, prev_yaws: dict, prev_positio
 def main():
     args = _parse_args()
 
-    episode_dir = Path(args.episode)
-    mapping_path = Path(args.mapping)
-    mode = args.mode
-    replace_existing = args.replace_existing
-    anim_config_path = Path(args.animation_config) if args.animation_config else None
+    # Load config file (if provided) as defaults
+    cfg_defaults = {}
+    if args.config:
+        cfg_path = Path(args.config)
+        if not cfg_path.exists():
+            print(f"ERROR: Config file not found: {cfg_path}", file=sys.stderr)
+            sys.exit(1)
+        with open(cfg_path) as f:
+            raw = json.load(f)
+        # Strip comment_* keys, keep only real parameters
+        for k, v in raw.items():
+            if not k.startswith("comment_"):
+                cfg_defaults[k] = v
 
-    if not episode_dir.exists():
+    episode_dir = Path(
+        args.episode if args.episode
+        else cfg_defaults.get("episode")
+    )
+    mapping_path = Path(
+        args.mapping if args.mapping
+        else cfg_defaults.get("mapping")
+    )
+    mode = (
+        args.mode if args.mode != "both"
+        else cfg_defaults.get("mode", "both")
+    )
+    replace_existing = (
+        args.replace_existing if args.replace_existing
+        else cfg_defaults.get("replace_existing", False)
+    )
+    anim_config_path = Path(
+        args.animation_config if args.animation_config
+        else cfg_defaults.get("animation_config", "")
+    ) if (args.animation_config or cfg_defaults.get("animation_config")) else None
+
+    if not episode_dir or not episode_dir.exists():
         print(f"ERROR: Episode directory not found: {episode_dir}", file=sys.stderr)
         sys.exit(1)
-    if not mapping_path.exists():
+    if not mapping_path or not mapping_path.exists():
         print(f"ERROR: Mapping file not found: {mapping_path}", file=sys.stderr)
         sys.exit(1)
 

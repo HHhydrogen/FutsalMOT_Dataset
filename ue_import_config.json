@@ -32,12 +32,17 @@
     }
   ],
 
-  "comment_animation_config": "动画配置文件（可选，不填则只导入 Transform）",
-  "animation_config": "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/ue/animation_config.local.json",
-
-  "comment_mode": "运行模式：preview / sequence / both",
+"comment_mode": "运行模式：preview / sequence / both",
   "mode": "sequence",
 
   "comment_replace_existing": "是否覆盖已有 Sequence（true=覆盖，false=报错）",
-  "replace_existing": true
+  "replace_existing": true,
+
+  "comment_ball_rolling": "球滚动旋转（可选，不填则启用默认值）",
+  "ball_rolling": {
+    "enabled": true,
+    "radius_m": 0.11,
+    "minimum_move_distance_m": 0.0001,
+    "roll_sign": 1.0
+  }
 }

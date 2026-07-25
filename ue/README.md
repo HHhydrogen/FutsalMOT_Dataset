@@ -1,121 +1,58 @@
-# UE Import Script — GRF Replay Preview
+# UE Import Script — `import_grf_episode.py`
 
-## Files
+## 文件清单
 
-| File | Description |
-|------|-------------|
-| `actor_mapping.example.json` | Maps entity IDs (L0–L4, R0–R4, BALL) to UE actor names |
-| `animation_config.example.json` | Example animation config — copy to `animation_config.local.json` and fill in your asset paths |
-| `import_grf_episode.py` | UE Python script that imports episode data into a Level Sequence |
+| 文件 | 说明 |
+|------|------|
+| `import_grf_episode.py` | **主脚本** — 在 Unreal Editor Python Console 中执行 |
+| `actor_mapping.example.json` | 实体 ID (L0~L4, R0~R4, BALL) → UE Actor 标签 映射 |
 
-## Requirements
+## 要求
 
-- Unreal Engine 5.x project with 10 player actors + 1 ball actor placed in the level
-- No `gfootball`, no `.venv`, no GRF_MARL — pure UE Python + stdlib
+- Unreal Engine 5.x 项目，关卡中放置了 11 个 Actor（10 名球员 + 1 个足球）
+- **无需** gfootball、.venv、GRF_MARL — 纯 UE Python + stdlib
+- Actor 标签与 mapping 文件一致（默认 `Player_L0`~`Player_L4`, `Player_R0`~`Player_R4`, `Ball_01`）
 
-## Quick Start (Transform Only)
+## 使用方式
 
-1. Place actors in the UE level matching names in your mapping file.
-2. Export a GRF episode:
-   ```powershell
-   uv run grf-ue export --config configs/mvp_builtin_5v5.json --output outputs/episode_0001
-   ```
-3. In Unreal Editor Python Console:
-   ```python
-   py "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/ue/import_grf_episode.py" --episode "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/outputs/episode_0001" --mapping "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/ue/actor_mapping.example.json" --replace-existing
-   ```
-4. Script creates a Level Sequence with Transform Tracks for all 10 players + ball.
+### 方式一：一键导入（推荐）
 
-## Locomotion Animation + Ball Rolling
-
-To add automatic Idle/Walk/Run animation and ball rolling rotation:
-
-### 1. Prepare In-Place Animations
-
-Create three **In-Place Animation Sequences** compatible with your character's Skeleton:
-
-- `Idle` — standing still
-- `Walk_Fwd` — forward walk
-- `Run_Fwd` — forward run
-
-These must be **In-Place** animations (no Root Motion). Root Motion will cause the character to drift away from the Transform Track position.
-
-### 2. Create Local Config
-
-Copy `animation_config.example.json` to `animation_config.local.json`:
-
-```powershell
-cp ue/animation_config.example.json ue/animation_config.local.json
-```
-
-Edit `animation_config.local.json` and fill in the actual asset paths:
-
-```json
-{
-  "animations": {
-    "idle": "/Game/YourProject/Animations/Idle",
-    "walk": "/Game/YourProject/Animations/Walk_Fwd",
-    "run": "/Game/YourProject/Animations/Run_Fwd"
-  }
-}
-```
-
-### 3. Run with Animation
+确保 `ue_import_config.json`（位于 `code/` 根目录）已配置好，然后在 UE Python Console 中：
 
 ```python
-py "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/ue/import_grf_episode.py" --episode "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/outputs/episode_0001" --mapping "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/ue/actor_mapping.example.json" --animation-config "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/ue/animation_config.local.json" --replace-existing
+py "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/ue/import_grf_episode.py"
 ```
 
-## Locomotion Configuration
+脚本自动从 `ue_import_config.json` 加载所有参数。
 
-The `locomotion` section controls speed thresholds:
+### 方式二：命令行参数覆盖
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `idle_max_speed_mps` | 0.20 | Speed below this → Idle |
-| `run_min_speed_mps` | 2.50 | Speed above this → Run |
-| `smoothing_window` | 5 | Moving average window (odd number) |
-| `minimum_segment_frames` | 6 | Minimum animation section length (30 FPS frames) |
-| `idle_play_rate` | 1.0 | Idle animation play rate |
-| `walk_reference_speed_mps` | 1.4 | Speed at which walk animation looks natural |
-| `run_reference_speed_mps` | 4.0 | Speed at which run animation looks natural |
-| `minimum_play_rate` | 0.75 | Clamp lower bound |
-| `maximum_play_rate` | 1.50 | Clamp upper bound |
+```python
+# 覆盖 episode 目录和 mapping
+py "D:/.../import_grf_episode.py" --episode "D:/.../outputs/episode_0001" --mapping "D:/.../actor_mapping.example.json" --replace-existing
 
-Play rate for walk/run = `mean_speed / reference_speed`, clamped to [minimum, maximum].
+# 仅预览模式（直接在关卡中设置 Actor 变换，不创建 Sequence 资产）
+py "D:/.../import_grf_episode.py" --mode preview
+```
 
-## Ball Rolling Configuration
+## 脚本模式
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `radius_m` | 0.11 | Ball radius in meters |
-| `minimum_move_distance_m` | 0.0001 | Ignore tiny displacements |
-| `roll_sign` | 1.0 | Set to `-1.0` if ball rolls backward visually |
+| 模式 | 说明 |
+|------|------|
+| `preview` | 直接在关卡中设置 Actor 变换（不创建资产） |
+| `sequence` | 创建/覆盖 Level Sequence 资产 |
+| `both`（默认） | 先 preview 后 sequence |
 
-If the ball rolls backward visually, change `roll_sign` to `-1.0`. Do NOT modify GRF data.
+## 球滚动旋转
 
-## Actor Mapping
+脚本自动为足球添加滚动旋转，基于位移量计算。在 `ue_import_config.json` 的 `ball_rolling` 段中配置：
+- `radius_m` — 球半径（默认 0.11）
+- `roll_sign` — 滚反了设为 `-1.0`
+- `enabled: false` 可完全禁用
 
-Edit `actor_mapping.example.json` to match your UE level's actor labels.
-Default mapping assumes:
-- `Player_L0` through `Player_L4` for left team
-- `Player_R0` through `Player_R4` for right team
-- `Ball_01` for the football
+## 注意事项
 
-## Script Modes
-
-| Mode | Description |
-|------|-------------|
-| `preview` | Set actor transforms directly in the level (no asset creation) |
-| `sequence` | Create/overwrite a Level Sequence asset |
-| `both` (default) | Both preview + sequence |
-
-## Notes
-
-- Player Z = 90cm (character pivot at waist level; ground is Z=0)
-- Ball Z = GRF data × 100 + 2cm offset
-- Yaw is computed from position deltas
-- **Transform Tracks** control all world positions; animation is purely in-place
-- If characters drift or slide, your animations likely contain Root Motion — switch to In-Place animations
-- No CharacterMovement, NavMesh, collision correction, or IK
-- Manual verification required in UE viewport
+- 球员 Z = 90cm（角色中枢在地面以上；地面 Z=0）
+- 球 Z = GRF 数据 × 100 + 2cm 偏移
+- Yaw 通过位置增量计算，低速保持先前朝向
+- 需要人工在 UE 视口中验证效果

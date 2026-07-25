@@ -61,10 +61,6 @@ def _parse_args():
         help="Delete and recreate an existing Level Sequence without showing an overwrite dialog"
     )
     parser.add_argument(
-        "--animation-config", type=str, default=None,
-        help="Optional animation configuration JSON. When omitted, locomotion animation and ball rolling are not added."
-    )
-    parser.add_argument(
         "--config", type=str, default=None,
         help="Deprecated: config is auto-loaded from ue_import_config.json next to this script."
     )
@@ -143,104 +139,6 @@ def build_yaw(dx: float, dy: float, prev_yaw: float) -> float:
 def _pos_m_to_cm(pos_m: list) -> tuple:
     """Convert [x, y, z] meters to (x_cm, y_cm, z_cm)."""
     return (pos_m[0] * M_TO_CM, pos_m[1] * M_TO_CM, pos_m[2] * M_TO_CM)
-
-
-# ── Animation config ────────────────────────────────────────────────────
-
-def load_animation_config(path: Path) -> dict:
-    """Load animation configuration JSON and validate required fields."""
-    with open(path) as f:
-        cfg = json.load(f)
-
-    enabled = cfg.get("enabled", True)
-
-    if enabled:
-        anims = cfg.get("animations", {})
-        for key in ("idle", "walk", "run"):
-            if key not in anims or not anims[key]:
-                raise ValueError(f"Animation config missing '{key}' asset path")
-
-    loco = cfg.get("locomotion", {})
-    for key in ("idle_max_speed_mps", "run_min_speed_mps", "smoothing_window",
-                 "minimum_segment_frames"):
-        if key not in loco:
-            raise ValueError(f"Locomotion config missing '{key}'")
-
-    ball_cfg = cfg.get("ball", {})
-    if "radius_m" not in ball_cfg:
-        raise ValueError("Ball config missing 'radius_m'")
-
-    return cfg
-
-
-# ── Ball rolling ─────────────────────────────────────────────────────────
-
-def compute_ball_rotation_quat(
-    ball_positions,
-    radius_m,
-    minimum_move_distance_m,
-    roll_sign,
-):
-    """Compute ball rotation per output frame using quaternion accumulation.
-
-    Args:
-        ball_positions: list of (x, y, z) in meters.
-        radius_m: ball radius in meters.
-        minimum_move_distance_m: minimum displacement to count as moving.
-        roll_sign: sign multiplier (1.0 or -1.0) for axis correction.
-
-    Returns:
-        list of (roll_deg, pitch_deg, yaw_deg) for each frame.
-        First frame is (0, 0, 0).
-    """
-    import unreal
-
-    current_quat = unreal.MathLibrary.quat_make_from_euler(unreal.Vector(0.0, 0.0, 0.0))
-    rotations = [(0.0, 0.0, 0.0)]  # frame 0
-
-    prev_roll, prev_pitch, prev_yaw = 0.0, 0.0, 0.0
-
-    for i in range(1, len(ball_positions)):
-        bx_prev, by_prev, _ = ball_positions[i - 1]
-        bx_cur, by_cur, bz_cur = ball_positions[i]
-
-        dx = bx_cur - bx_prev
-        dy = by_cur - by_prev
-        distance = math.hypot(dx, dy)
-
-        # Check if ball is near ground (within radius + 3cm tolerance)
-        if bz_cur <= radius_m + 0.03:
-            if distance > minimum_move_distance_m:
-                # Rolling on ground
-                angle_degrees = math.degrees(distance / radius_m)
-                axis = unreal.Vector(-dy / distance, dx / distance, 0.0)
-                rotation_vector = unreal.Vector(
-                    axis.x * angle_degrees * roll_sign,
-                    axis.y * angle_degrees * roll_sign,
-                    0.0,
-                )
-                delta_quat = unreal.MathLibrary.quat_make_from_rotation_vector(rotation_vector)
-                current_quat = unreal.MathLibrary.multiply_quat_quat(delta_quat, current_quat)
-        # else: airborne, keep current rotation (already set above)
-
-        current_quat = unreal.MathLibrary.quat_normalized(current_quat)
-        rotator = unreal.MathLibrary.quat_rotator(current_quat)
-        roll = _unwind_angle(prev_roll, rotator.roll)
-        pitch = _unwind_angle(prev_pitch, rotator.pitch)
-        yaw = _unwind_angle(prev_yaw, rotator.yaw)
-        rotations.append((roll, pitch, yaw))
-        prev_roll, prev_pitch, prev_yaw = roll, pitch, yaw
-
-    return rotations
-
-
-def _unwind_angle(previous, current):
-    """Unwind angle to avoid -180/180 jumps."""
-    while current - previous > 180.0:
-        current -= 360.0
-    while current - previous < -180.0:
-        current += 360.0
-    return current
 
 
 # ── Sequence key helpers ────────────────────────────────────────────────
@@ -342,6 +240,106 @@ def _build_channel_map(channels) -> dict:
     }
 
 
+# ── Ball rolling ─────────────────────────────────────────────────────────
+
+def _unwind_angle(previous, current):
+    """Unwind angle to avoid -180/180 jumps."""
+    while current - previous > 180.0:
+        current -= 360.0
+    while current - previous < -180.0:
+        current += 360.0
+    return current
+
+
+def compute_ball_rotation_quat(
+    ball_positions,
+    radius_m,
+    minimum_move_distance_m,
+    roll_sign,
+):
+    """Compute ball rotation per frame using quaternion accumulation.
+
+    Args:
+        ball_positions: list of (x, y, z) in meters.
+        radius_m: ball radius in meters.
+        minimum_move_distance_m: minimum displacement to count as moving.
+        roll_sign: sign multiplier (1.0 or -1.0) for axis correction.
+
+    Returns:
+        list of (roll_deg, pitch_deg, yaw_deg) for each frame.
+        First frame is (0, 0, 0).
+    """
+    import unreal
+
+    current_quat = unreal.MathLibrary.quat_make_from_euler(unreal.Vector(0.0, 0.0, 0.0))
+    rotations = [(0.0, 0.0, 0.0)]  # frame 0
+
+    prev_roll, prev_pitch, prev_yaw = 0.0, 0.0, 0.0
+
+    for i in range(1, len(ball_positions)):
+        bx_prev, by_prev, _ = ball_positions[i - 1]
+        bx_cur, by_cur, bz_cur = ball_positions[i]
+
+        dx = bx_cur - bx_prev
+        dy = by_cur - by_prev
+        distance = math.hypot(dx, dy)
+
+        # Rolling on ground (near radius height)
+        if bz_cur <= radius_m + 0.03 and distance > minimum_move_distance_m:
+            angle_degrees = math.degrees(distance / radius_m)
+            axis = unreal.Vector(-dy / distance, dx / distance, 0.0)
+            rotation_vector = unreal.Vector(
+                axis.x * angle_degrees * roll_sign,
+                axis.y * angle_degrees * roll_sign,
+                0.0,
+            )
+            delta_quat = unreal.MathLibrary.quat_make_from_rotation_vector(rotation_vector)
+            current_quat = unreal.MathLibrary.multiply_quat_quat(delta_quat, current_quat)
+
+        current_quat = unreal.MathLibrary.quat_normalized(current_quat)
+        rotator = unreal.MathLibrary.quat_rotator(current_quat)
+        roll = _unwind_angle(prev_roll, rotator.roll)
+        pitch = _unwind_angle(prev_pitch, rotator.pitch)
+        yaw = _unwind_angle(prev_yaw, rotator.yaw)
+        rotations.append((roll, pitch, yaw))
+        prev_roll, prev_pitch, prev_yaw = roll, pitch, yaw
+
+    return rotations
+
+
+def _add_ball_rolling(frames, sequence, source_step, playback_fps,
+                       actor_bindings, ball_cfg):
+    """Add ball rolling rotation keys to the ball's transform track."""
+    import unreal
+
+    if "BALL" not in actor_bindings:
+        return
+
+    _, channels, _ = actor_bindings["BALL"]
+    cmap = _build_channel_map(channels)
+
+    if "Rotation.X" not in cmap:
+        return
+
+    radius_m = ball_cfg.get("radius_m", 0.11)
+    minimum_move_distance_m = ball_cfg.get("minimum_move_distance_m", 0.0001)
+    roll_sign = ball_cfg.get("roll_sign", 1.0)
+
+    ball_positions = [(f["ball"]["position_m"][0], f["ball"]["position_m"][1], f["ball"]["position_m"][2])
+                      for f in frames]
+
+    rotations = compute_ball_rotation_quat(ball_positions, radius_m, minimum_move_distance_m, roll_sign)
+
+    for fi in range(len(frames)):
+        kf = int(round(fi * source_step * playback_fps))
+        r, p, y = rotations[fi]
+        add_double_channel_key(cmap["Rotation.X"], kf, r)
+        add_double_channel_key(cmap["Rotation.Y"], kf, p)
+        add_double_channel_key(cmap["Rotation.Z"], kf, y)
+
+    print(f"  Ball rolling keys added: {len(frames)} frames")
+
+
 # ── Preview mode ────────────────────────────────────────────────────────
 
 def apply_preview(meta: dict, frames: list, mapping: dict):
@@ -411,7 +409,8 @@ def _smoke_test_sequencer_api(actors: dict, total_output_frames: int, package_pa
 # ── Sequence mode ───────────────────────────────────────────────────────
 
 def create_sequence(meta: dict, frames: list, mapping: dict, replace_existing: bool = False,
-                    anim_cfg: dict = None, package_path: str = None, sequences_cfg: list = None):
+                    package_path: str = None, sequences_cfg: list = None,
+                    ball_rolling_cfg: dict = None):
     """Create Level Sequence assets with keyframed transforms.
 
     If sequences_cfg is provided, creates one sequence per entry, each with
@@ -561,9 +560,10 @@ def create_sequence(meta: dict, frames: list, mapping: dict, replace_existing: b
 
         print(f"  Total transform keys: {total_transform_keys}")
 
-        # ── Ball rolling (if config provided) ───────────────────────────
-        _add_ball_rolling(anim_cfg, frames, seq, source_step, playback_fps,
-                          total_output_frames, actor_bindings)
+        # ── Ball rolling ──────────────────────────────────────────────
+        if ball_rolling_cfg and ball_rolling_cfg.get("enabled", True):
+            _add_ball_rolling(frames, seq, source_step, playback_fps,
+                              actor_bindings, ball_rolling_cfg)
 
         # ── Save & open ────────────────────────────────────────────────
         saved = unreal.EditorAssetLibrary.save_loaded_asset(seq, only_if_is_dirty=False)
@@ -589,48 +589,6 @@ def create_sequence(meta: dict, frames: list, mapping: dict, replace_existing: b
     print(f"Package path: {pkg_path}")
 
 
-
-def _add_ball_rolling(anim_cfg, frames, seq, source_step, playback_fps,
-                       total_output_frames, actor_bindings=None):
-    """Add ball rolling rotation keys if animation config enables it."""
-    import unreal
-
-    if not anim_cfg or not anim_cfg.get("ball", {}).get("enabled", True):
-        return
-
-    ball_cfg = anim_cfg["ball"]
-    num_steps = len(frames)
-
-    # Find ball's channel map from actor_bindings
-    cmap_ref = None
-    if actor_bindings and "BALL" in actor_bindings:
-        _, _channels, _section = actor_bindings["BALL"]
-        cmap_ref = _build_channel_map(_channels)
-
-    if not cmap_ref or "Rotation.X" not in cmap_ref:
-        return
-
-    ball_positions = []
-    for frame in frames:
-        bpos = frame["ball"]["position_m"]
-        ball_positions.append((bpos[0], bpos[1], bpos[2]))
-
-    rotations = compute_ball_rotation_quat(
-        ball_positions,
-        ball_cfg["radius_m"],
-        ball_cfg.get("minimum_move_distance_m", 0.0001),
-        ball_cfg.get("roll_sign", 1.0),
-    )
-
-    if "Rotation.X" not in cmap_ref:
-        return
-
-    for fi in range(num_steps):
-        kf = int(round(fi * source_step * playback_fps))
-        r, p, y = rotations[fi]
-        add_double_channel_key(cmap_ref["Rotation.X"], kf, r)
-        add_double_channel_key(cmap_ref["Rotation.Y"], kf, p)
-        add_double_channel_key(cmap_ref["Rotation.Z"], kf, y)
 
 
 def _build_entity_binding(sequence, entity_id, actor, total_output_frames):
@@ -719,11 +677,6 @@ def main():
         args.replace_existing if args.replace_existing
         else cfg_defaults.get("replace_existing", False)
     )
-    anim_config_path = Path(
-        args.animation_config if args.animation_config
-        else cfg_defaults.get("animation_config", "")
-    ) if (args.animation_config or cfg_defaults.get("animation_config")) else None
-
     if not episode_dir or not episode_dir.exists():
         print(f"ERROR: Episode directory not found: {episode_dir}", file=sys.stderr)
         sys.exit(1)
@@ -741,14 +694,6 @@ def main():
     print(f"  Source step: {source_step}s")
     print(f"  Field: {meta['field']['length_m']}m x {meta['field']['width_m']}m")
 
-    # Load animation config if provided
-    anim_cfg = None
-    if anim_config_path:
-        if not anim_config_path.exists():
-            print(f"ERROR: Animation config not found: {anim_config_path}", file=sys.stderr)
-            sys.exit(1)
-        anim_cfg = load_animation_config(anim_config_path)
-
     if mode in ("preview", "both"):
         print("\n--- Preview mode: setting actor transforms ---")
         apply_preview(meta, frames, mapping)
@@ -757,7 +702,8 @@ def main():
         print("\n--- Sequence mode: creating Level Sequence ---")
         seq_pkg = cfg_defaults.get("sequence_package_path") or DEFAULT_SEQUENCE_PACKAGE_PATH
         seq_list = cfg_defaults.get("sequences") or None
-        create_sequence(meta, frames, mapping, replace_existing, anim_cfg, seq_pkg, seq_list)
+        ball_rolling_cfg = cfg_defaults.get("ball_rolling", None)
+        create_sequence(meta, frames, mapping, replace_existing, seq_pkg, seq_list, ball_rolling_cfg)
 
     print("\nDone.")
 

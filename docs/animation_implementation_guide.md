@@ -1,6 +1,10 @@
-# 动画系统实施指南
+# 动画系统实施指南（废弃）
 
-所有 UE 资产创建操作必须在 **Unreal Editor** 内完成。本文档为 UE Editor 内操作的完整步骤。
+**⚠️ 本文档已废弃。请使用 `v2_abp_implementation.md`。**
+
+本文档中的 `BP_FutsalPlayer` 设计不再使用。正确做法是只创建 ABP 和 Blend Space，挂载到已有 Actor 上。
+
+保留此文档仅作参考。
 
 ---
 

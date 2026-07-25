@@ -1,9 +1,9 @@
 {
-  "enabled": true,
+  "enabled": false,
   "animations": {
-    "idle": "/Game/Characters/Animations/Idle",
-    "walk": "/Game/Characters/Animations/Walk_Fwd",
-    "run": "/Game/Characters/Animations/Run_Fwd"
+    "idle": "/Game/Characters/Mannequins/Anims/Unarmed/MM_Idle",
+    "walk": "/Game/Characters/Mannequins/Anims/Unarmed/Walk/MF_Unarmed_Walk_Fwd",
+    "run": "/Game/Characters/Mannequins/Anims/Unarmed/Jog/MF_Unarmed_Jog_Fwd"
   },
   "locomotion": {
     "idle_max_speed_mps": 0.20,

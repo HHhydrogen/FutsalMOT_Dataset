@@ -5,11 +5,38 @@
   "comment_mapping": "Actor 映射文件（必须）",
   "mapping": "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/ue/actor_mapping.example.json",
 
+  "comment_sequence_package_path": "Sequence 保存的 UE 包路径",
+  "sequence_package_path": "/Game/FutsalMOT/Sequences",
+
+  "comment_sequences": "要生成的 Sequence 列表，每项指定名称和绑定的摄像机 Actor",
+  "sequences": [
+    {
+      "name": "LS_Cam_01",
+      "camera_actor": "CineCam_01",
+      "comment": "摄像机视角 1"
+    },
+    {
+      "name": "LS_Cam_02",
+      "camera_actor": "CineCam_02",
+      "comment": "摄像机视角 2"
+    },
+    {
+      "name": "LS_Cam_03",
+      "camera_actor": "CineCam_03",
+      "comment": "摄像机视角 3"
+    },
+    {
+      "name": "LS_Cam_04",
+      "camera_actor": "CineCam_04",
+      "comment": "摄像机视角 4"
+    }
+  ],
+
   "comment_animation_config": "动画配置文件（可选，不填则只导入 Transform）",
   "animation_config": "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/ue/animation_config.local.json",
 
   "comment_mode": "运行模式：preview / sequence / both",
-  "mode": "both",
+  "mode": "sequence",
 
   "comment_replace_existing": "是否覆盖已有 Sequence（true=覆盖，false=报错）",
   "replace_existing": true

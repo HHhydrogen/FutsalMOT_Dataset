@@ -5,11 +5,12 @@ Two modes (default: both):
   --preview    Set actor transforms directly in the level (Editor preview).
   --sequence   Create / overwrite a Level Sequence asset with keyframed transforms.
 
-Usage (in Unreal Editor Python Console) — using config file:
-    py "D:/path/to/code/ue/import_grf_episode.py" --config "D:/path/to/code/ue_import_config.json"
+Usage (in Unreal Editor Python Console):
+    # 最简单（参数在 ue_import_config.json 中）
+    py "D:/path/to/code/ue/import_grf_episode.py"
 
-Or with explicit CLI flags (config values are overridden by CLI flags):
-    py "D:/path/to/code/ue/import_grf_episode.py" --episode "D:/path/to/outputs/episode_0001" --mapping "D:/path/to/code/ue/actor_mapping.example.json" --replace-existing
+    # 临时覆盖部分参数
+    py "D:/path/to/code/ue/import_grf_episode.py" --episode "D:/path/to/other_episode" --replace-existing
 
 Dependencies:
     - unreal (UE built-in module)
@@ -30,7 +31,7 @@ M_TO_CM = 100.0
 SPEED_THRESHOLD_CM = 5.0  # cm/s, below this keep previous yaw
 BALL_Z_OFFSET_CM = 2.0  # offset so GRF ball_z (~0.11 * 100) + offset ≈ 13cm
 PLAYER_Z_CM = 90.0  # fixed ground level for player actors
-SEQUENCE_PACKAGE_PATH = "/Game/GRF/Sequences"
+DEFAULT_SEQUENCE_PACKAGE_PATH = "/Game/FutsalMOT/Sequences"
 EXPECTED_CHANNEL_NAMES = [
     "Location.X", "Location.Y", "Location.Z",
     "Rotation.X", "Rotation.Y", "Rotation.Z",
@@ -66,11 +67,9 @@ def _parse_args():
     )
     parser.add_argument(
         "--config", type=str, default=None,
-        help="Path to import config JSON. All parameters can be set here; CLI flags override config values."
+        help="Deprecated: config is auto-loaded from ue_import_config.json next to this script."
     )
     parsed = parser.parse_args()
-    if not parsed.config and not (parsed.episode and parsed.mapping):
-        parser.error("Either --config or both --episode and --mapping are required.")
     return parsed
 
 
@@ -139,7 +138,7 @@ def build_yaw(dx: float, dy: float, prev_yaw: float) -> float:
     speed = math.sqrt(dx * dx + dy * dy)
     if speed < SPEED_THRESHOLD_CM:
         return prev_yaw
-    return math.degrees(math.atan2(dx, dy))
+    return math.degrees(math.atan2(dy, dx))
 
 
 def _pos_m_to_cm(pos_m: list) -> tuple:
@@ -493,10 +492,10 @@ def compute_ball_rotation_quat(
         # else: airborne, keep current rotation (already set above)
 
         current_quat = unreal.MathLibrary.quat_normalized(current_quat)
-        euler = unreal.MathLibrary.quat_to_euler(current_quat)
-        roll = _unwind_angle(prev_roll, euler.x)
-        pitch = _unwind_angle(prev_pitch, euler.y)
-        yaw = _unwind_angle(prev_yaw, euler.z)
+        rotator = unreal.MathLibrary.quat_rotator(current_quat)
+        roll = _unwind_angle(prev_roll, rotator.roll)
+        pitch = _unwind_angle(prev_pitch, rotator.pitch)
+        yaw = _unwind_angle(prev_yaw, rotator.yaw)
         rotations.append((roll, pitch, yaw))
         prev_roll, prev_pitch, prev_yaw = roll, pitch, yaw
 
@@ -636,16 +635,17 @@ def apply_preview(meta: dict, frames: list, mapping: dict):
 
 # ── Smoke test ──────────────────────────────────────────────────────────
 
-def _smoke_test_sequencer_api(actors: dict, total_output_frames: int):
+def _smoke_test_sequencer_api(actors: dict, total_output_frames: int, package_path: str = None):
     """Create a throwaway sequence and validate add_key accepts FrameNumber.
 
     Returns (temp_sequence, channel_name_map) or raises on failure.
     """
     import unreal
 
+    pkg = package_path or DEFAULT_SEQUENCE_PACKAGE_PATH
     seq_factory = unreal.LevelSequenceFactoryNew()
     asset_tools = unreal.AssetToolsHelpers.get_asset_tools()
-    temp_seq = asset_tools.create_asset("_TEMP_SMOKE", SEQUENCE_PACKAGE_PATH, None, seq_factory)
+    temp_seq = asset_tools.create_asset("_TEMP_SMOKE", pkg, None, seq_factory)
     if not temp_seq:
         raise RuntimeError("Failed to create smoke test sequence.")
 
@@ -679,336 +679,305 @@ def _smoke_test_sequencer_api(actors: dict, total_output_frames: int):
 # ── Sequence mode ───────────────────────────────────────────────────────
 
 def create_sequence(meta: dict, frames: list, mapping: dict, replace_existing: bool = False,
-                    anim_cfg: dict = None):
-    """Create a Level Sequence asset with keyframed transforms."""
+                    anim_cfg: dict = None, package_path: str = None, sequences_cfg: list = None):
+    """Create Level Sequence assets with keyframed transforms.
+
+    If sequences_cfg is provided, creates one sequence per entry, each with
+    the same player/ball data plus a camera binding.
+    """
     import unreal
 
     actors = _find_all_actors(mapping)
     if not actors:
         return
 
-    episode_id = meta.get("episode_id", "episode_0000")
+    pkg_path = package_path or DEFAULT_SEQUENCE_PACKAGE_PATH
     num_steps = meta["timing"]["num_steps"]
     source_step = meta["timing"]["source_step_seconds"]
     playback_fps = int(meta["timing"].get("playback_fps", 30))
-
-    # Log Unreal version
-    unreal.log(f"Unreal version: {unreal.SystemLibrary.get_engine_version()}")
-
-    # Total output frames at display rate
     total_output_frames = int(math.ceil(num_steps * source_step * playback_fps))
 
-    # ── Handle existing asset ──────────────────────────────────────────
-    sequence_asset_path = f"{SEQUENCE_PACKAGE_PATH}/SEQ_{episode_id}"
-    if unreal.EditorAssetLibrary.does_asset_exist(sequence_asset_path):
-        if not replace_existing:
-            raise RuntimeError(
-                f"Level Sequence already exists: {sequence_asset_path}. "
-                f"Run again with --replace-existing."
-            )
-        deleted = unreal.EditorAssetLibrary.delete_asset(sequence_asset_path)
-        if not deleted:
-            raise RuntimeError(
-                f"Failed to delete existing Level Sequence: {sequence_asset_path}"
-            )
-        print(f"  Deleted existing: {sequence_asset_path}")
+    unreal.log(f"Unreal version: {unreal.SystemLibrary.get_engine_version()}")
 
-    # ── Ensure directory ────────────────────────────────────────────────
-    if not unreal.EditorAssetLibrary.does_directory_exist(SEQUENCE_PACKAGE_PATH):
-        unreal.EditorAssetLibrary.make_directory(SEQUENCE_PACKAGE_PATH)
+    # Ensure package directory
+    if not unreal.EditorAssetLibrary.does_directory_exist(pkg_path):
+        unreal.EditorAssetLibrary.make_directory(pkg_path)
 
-    # ── Create sequence ────────────────────────────────────────────────
-    seq_factory = unreal.LevelSequenceFactoryNew()
-    asset_tools = unreal.AssetToolsHelpers.get_asset_tools()
-    sequence = asset_tools.create_asset(f"SEQ_{episode_id}", SEQUENCE_PACKAGE_PATH, None, seq_factory)
-    if not sequence:
-        raise RuntimeError(f"Failed to create Level Sequence asset at {sequence_asset_path}")
+    # Smoke test once
+    temp_seq, _ = _smoke_test_sequencer_api(actors, total_output_frames, pkg_path)
+    unreal.EditorAssetLibrary.delete_asset(f"{pkg_path}/_TEMP_SMOKE")
 
-    # ── Timeline settings ──────────────────────────────────────────────
-    display_rate = unreal.FrameRate(numerator=playback_fps, denominator=1)
-    sequence.set_display_rate(display_rate)
-    sequence.set_playback_start(0)
-    sequence.set_playback_end(total_output_frames)
-    print(f"  Timeline: {total_output_frames} frames @ {playback_fps} FPS")
+    # Determine which sequences to create
+    if sequences_cfg:
+        seq_list = sequences_cfg
+    else:
+        seq_list = [{"name": f"SEQ_{meta.get('episode_id', 'episode_0000')}"}]
 
-    # ── Smoke test on a temporary sequence before batch writing ─────────
-    temp_seq, _ = _smoke_test_sequencer_api(actors, total_output_frames)
-    # Clean up temp sequence
-    unreal.EditorAssetLibrary.delete_asset(f"{SEQUENCE_PACKAGE_PATH}/_TEMP_SMOKE")
+    for seq_entry in seq_list:
+        seq_name = seq_entry["name"]
+        camera_actor_name = seq_entry.get("camera_actor")
+        sequence_asset_path = f"{pkg_path}/{seq_name}"
 
-    # ── Process each actor: transform tracks ────────────────────────────
-    total_transform_keys = 0
-    bindings_count = 0
-    player_positions = {}  # {entity_id: [(x_m, y_m), ...]} for speed calc
-    actor_bindings = {}    # {entity_id: binding} for animation tracks
-    actor_cmaps = {}       # {entity_id: channel_map} for ball rotation
+        print(f"\n--- Creating Sequence: {seq_name} ---")
 
-    for entity_id, actor in actors.items():
-        binding, channels, section = _build_entity_binding(
-            sequence, entity_id, actor, total_output_frames,
-        )
-        bindings_count += 1
-        actor_bindings[entity_id] = binding
-        cmap = _build_channel_map(channels)
-        actor_cmaps[entity_id] = cmap
-
-        prev_yaws = {}
-        previous_pos = None
-        player_positions[entity_id] = []
-
-        for fi, frame in enumerate(frames):
-            frame_time = fi * source_step
-            key_frame_index = int(round(frame_time * playback_fps))
-
-            if entity_id == "BALL":
-                ball_pos = frame["ball"]["position_m"]
-                px, py, pz = _pos_m_to_cm(ball_pos)
-                pz += BALL_Z_OFFSET_CM
-                add_double_channel_key(cmap["Location.X"], key_frame_index, px)
-                add_double_channel_key(cmap["Location.Y"], key_frame_index, py)
-                add_double_channel_key(cmap["Location.Z"], key_frame_index, pz)
-                if fi == 0:
-                    add_double_channel_key(cmap["Scale.X"], 0, 0.5)
-                    add_double_channel_key(cmap["Scale.Y"], 0, 0.5)
-                    add_double_channel_key(cmap["Scale.Z"], 0, 0.5)
-            else:
-                for player_data in frame["players"]:
-                    if player_data["id"] != entity_id:
-                        continue
-                    px_m = player_data["position_m"][0]
-                    py_m = player_data["position_m"][1]
-                    px, py, _ = _pos_m_to_cm(player_data["position_m"])
-                    player_positions[entity_id].append((px_m, py_m))
-                    add_double_channel_key(cmap["Location.X"], key_frame_index, px)
-                    add_double_channel_key(cmap["Location.Y"], key_frame_index, py)
-                    add_double_channel_key(cmap["Location.Z"], key_frame_index, PLAYER_Z_CM)
-
-                    # Yaw from delta
-                    if previous_pos is not None:
-                        dx = px - previous_pos[0]
-                        dy = py - previous_pos[1]
-                        prev_yaw = prev_yaws.get(entity_id, 0.0)
-                        yaw = build_yaw(dx, dy, prev_yaw)
-                    else:
-                        yaw = 0.0
-                    prev_yaws[entity_id] = yaw
-                    previous_pos = (px, py)
-                    add_double_channel_key(cmap["Rotation.Z"], key_frame_index, yaw)
-
-        # ── Verify key counts ──────────────────────────────────────────
-        actual_loc_x = cmap["Location.X"].get_num_keys()
-        actual_loc_y = cmap["Location.Y"].get_num_keys()
-        actual_loc_z = cmap["Location.Z"].get_num_keys()
-        expected = num_steps  # one key per GRF step
-        for name, count in [("Location.X", actual_loc_x), ("Location.Y", actual_loc_y),
-                            ("Location.Z", actual_loc_z)]:
-            if count != expected:
+        # Delete existing
+        if unreal.EditorAssetLibrary.does_asset_exist(sequence_asset_path):
+            if not replace_existing:
                 raise RuntimeError(
-                    f"{entity_id} {name}: expected {expected} keys, got {count}"
+                    f"Level Sequence already exists: {sequence_asset_path}. "
+                    f"Run again with --replace-existing."
                 )
-        total_transform_keys += actual_loc_x + actual_loc_y + actual_loc_z
+            unreal.EditorAssetLibrary.delete_asset(sequence_asset_path)
+            print(f"  Deleted existing: {sequence_asset_path}")
 
-        if entity_id != "BALL":
-            actual_rot = cmap["Rotation.Z"].get_num_keys()
-            if actual_rot != expected:
-                raise RuntimeError(
-                    f"{entity_id} Rotation.Z: expected {expected} keys, got {actual_rot}"
-                )
-            total_transform_keys += actual_rot
-
-    print(f"  Actor bindings: {bindings_count}")
-    print(f"  Total transform keys written: {total_transform_keys}")
-
-    # ── Animation tracks (if config provided) ──────────────────────────
-    total_sections = 0
-    animation_ok = False
-
-    if anim_cfg and anim_cfg.get("enabled", True):
-        anims = anim_cfg["animations"]
-        loco = anim_cfg["locomotion"]
-
-        print("\n--- Player locomotion animation ---")
-        for entity_id in actors:
-            if entity_id == "BALL":
-                continue
-            binding = actor_bindings[entity_id]
-            positions = player_positions.get(entity_id, [])
-            if len(positions) < 2:
-                print(f"  {entity_id}: insufficient positions ({len(positions)})")
-                continue
-
-            speeds = compute_speeds_mps(positions, source_step)
-            speeds = smooth_values(speeds, loco["smoothing_window"])
-
-            min_speed = min(speeds)
-            mean_speed = sum(speeds) / len(speeds)
-            max_speed = max(speeds)
-            print(f"  {entity_id}: min={min_speed:.2f} mean={mean_speed:.2f} max={max_speed:.2f} m/s")
-
-            segments = classify_states(speeds, loco, source_step, playback_fps)
-
-            # Build segment count display
-            state_counts = {"idle": 0, "walk": 0, "run": 0}
-            for seg in segments:
-                state_counts[seg.state] = state_counts.get(seg.state, 0) + 1
-            print(f"    segments: idle={state_counts.get('idle', 0)} walk={state_counts.get('walk', 0)} run={state_counts.get('run', 0)}")
-
-            # Create animation track
-            anim_track = binding.add_track(unreal.MovieSceneSkeletalAnimationTrack)
-
-            for seg in segments:
-                start_frame = int(round(seg.source_start * source_step * playback_fps))
-                end_frame = int(round(seg.source_end_exclusive * source_step * playback_fps))
-                if seg.source_end_exclusive == num_steps:
-                    end_frame = total_output_frames
-
-                section = anim_track.add_section()
-                section.set_range(start_frame, end_frame)
-
-                asset_path = anims[seg.state]
-                anim_asset = unreal.load_asset(asset_path)
-                if not anim_asset:
-                    raise RuntimeError(f"Failed to load animation: {asset_path}")
-
-                # Set animation via params
-                params = section.get_editor_property("params")
-                params.set_editor_property("animation", anim_asset)
-                params.set_editor_property("force_custom_mode", True)
-                params.set_editor_property("skip_anim_notifiers", True)
-
-                play_rate = compute_play_rate(seg, loco)
-                play_rate_variant = unreal.MovieSceneTimeWarpVariant()
-                play_rate_variant.set_fixed_play_rate(float(play_rate))
-                params.set_editor_property("play_rate", play_rate_variant)
-                section.set_editor_property("params", params)
-
-                total_sections += 1
-
-        print(f"  Animation tracks created: {bindings_count - (1 if 'BALL' in actors else 0)}")
-        print(f"  Animation sections created: {total_sections}")
-        animation_ok = True
-
-    # ── Ball rolling (if config provided) ──────────────────────────────
-    ball_rolling_ok = False
-    if anim_cfg and anim_cfg.get("ball", {}).get("enabled", True) and "BALL" in actors:
-        ball_cfg = anim_cfg["ball"]
-        cmap = actor_cmaps["BALL"]
-
-        # Collect ball positions in meters
-        ball_positions = []
-        for frame in frames:
-            bpos = frame["ball"]["position_m"]
-            ball_positions.append((bpos[0], bpos[1], bpos[2]))
-
-        rotations = compute_ball_rotation_quat(
-            ball_positions,
-            ball_cfg["radius_m"],
-            ball_cfg.get("minimum_move_distance_m", 0.0001),
-            ball_cfg.get("roll_sign", 1.0),
+        # Create new sequence
+        seq = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
+            seq_name, pkg_path, None, unreal.LevelSequenceFactoryNew()
         )
+        if not seq:
+            raise RuntimeError(f"Failed to create Level Sequence: {sequence_asset_path}")
 
-        # Count rolling/stationary/airborne
-        rolling_frames = 0
-        stationary_frames = 0
-        airborne_frames = 0
-        for i, frame in enumerate(frames):
-            bz = frame["ball"]["position_m"][2]
-            if bz > ball_cfg["radius_m"] + 0.03:
-                airborne_frames += 1
-            elif i > 0:
-                bpos = frame["ball"]["position_m"]
-                bpos_prev = frames[i - 1]["ball"]["position_m"]
-                dist = math.hypot(bpos[0] - bpos_prev[0], bpos[1] - bpos_prev[1])
-                if dist > ball_cfg.get("minimum_move_distance_m", 0.0001):
-                    rolling_frames += 1
-                else:
-                    stationary_frames += 1
+        display_rate = unreal.FrameRate(numerator=playback_fps, denominator=1)
+        seq.set_display_rate(display_rate)
+        seq.set_playback_start(0)
+        seq.set_playback_end(total_output_frames)
+        print(f"  Timeline: {total_output_frames} frames @ {playback_fps} FPS")
+
+        # ── Bind all actors (players + ball) ────────────────────────────
+        actor_bindings = {}
+        for entity_id, actor in actors.items():
+            binding, channels, section = _build_entity_binding(
+                seq, entity_id, actor, total_output_frames,
+            )
+            actor_bindings[entity_id] = (binding, channels, section)
+
+        # ── Bind camera if specified ────────────────────────────────────
+        camera_binding = None
+        if camera_actor_name:
+            cam_actor = find_actor(camera_actor_name)
+            if not cam_actor:
+                print(f"  WARNING: Camera actor '{camera_actor_name}' not found, skipping camera binding")
             else:
-                stationary_frames += 1
+                camera_binding = seq.add_possessable(cam_actor)
+                print(f"  Camera bound: {camera_actor_name}")
 
-        # Total horizontal travel
-        total_horizontal = 0.0
-        for i in range(1, len(ball_positions)):
-            dx = ball_positions[i][0] - ball_positions[i - 1][0]
-            dy = ball_positions[i][1] - ball_positions[i - 1][1]
-            total_horizontal += math.hypot(dx, dy)
+                # Camera is bound as possessable. UE 5.8 Python API does not expose
+                # CameraCutTrack creation — manually set camera in Sequencer:
+                # right-click camera track → "Set as Camera Cut".
+                unreal.log(f"  Camera bound: {camera_actor_name} (set as Camera Cut manually in Sequencer)")
 
-        # Accumulated roll
-        if len(rotations) > 1:
-            last_roll, last_pitch, last_yaw = rotations[-1]
-            accumulated_roll = math.sqrt(last_roll**2 + last_pitch**2 + last_yaw**2)
-        else:
-            accumulated_roll = 0.0
+        # ── Write transform keys for each actor ─────────────────────────
+        total_transform_keys = 0
+        for entity_id, actor in actors.items():
+            binding, channels, section = actor_bindings[entity_id]
+            cmap = _build_channel_map(channels)
 
-        # Write rotation keys to Rotation.X/Y/Z channels
-        if "Rotation.X" in cmap:
-            for fi in range(len(frames)):
+            prev_yaws = {}
+            previous_pos = None
+
+            for fi, frame in enumerate(frames):
                 frame_time = fi * source_step
                 kf = int(round(frame_time * playback_fps))
-                r, p, y = rotations[fi]
-                add_double_channel_key(cmap["Rotation.X"], kf, r)
-                add_double_channel_key(cmap["Rotation.Y"], kf, p)
-                add_double_channel_key(cmap["Rotation.Z"], kf, y)
 
-        print(f"\n--- Ball rolling ---")
-        print(f"  Ball radius: {ball_cfg['radius_m']:.3f} m")
-        print(f"  Rolling frames: {rolling_frames}")
-        print(f"  Stationary frames: {stationary_frames}")
-        print(f"  Airborne frames: {airborne_frames}")
-        print(f"  Horizontal travel: {total_horizontal:.2f} m")
-        print(f"  Accumulated roll: {accumulated_roll:.1f} degrees")
-        ball_rolling_ok = True
+                if entity_id == "BALL":
+                    ball_pos = frame["ball"]["position_m"]
+                    px, py, pz = _pos_m_to_cm(ball_pos)
+                    pz += BALL_Z_OFFSET_CM
+                    add_double_channel_key(cmap["Location.X"], kf, px)
+                    add_double_channel_key(cmap["Location.Y"], kf, py)
+                    add_double_channel_key(cmap["Location.Z"], kf, pz)
+                    if fi == 0:
+                        add_double_channel_key(cmap["Scale.X"], 0, 0.5)
+                        add_double_channel_key(cmap["Scale.Y"], 0, 0.5)
+                        add_double_channel_key(cmap["Scale.Z"], 0, 0.5)
+                else:
+                    for player_data in frame["players"]:
+                        if player_data["id"] != entity_id:
+                            continue
+                        px, py, _ = _pos_m_to_cm(player_data["position_m"])
+                        add_double_channel_key(cmap["Location.X"], kf, px)
+                        add_double_channel_key(cmap["Location.Y"], kf, py)
+                        add_double_channel_key(cmap["Location.Z"], kf, PLAYER_Z_CM)
 
-    # ── Final validation ───────────────────────────────────────────────
-    if animation_ok:
-        for entity_id in actors:
-            if entity_id == "BALL":
-                continue
-            binding = actor_bindings.get(entity_id)
-            if not binding:
-                raise RuntimeError(f"Missing binding for {entity_id}")
-            # Should have 1 transform track
-            tracks = binding.get_tracks()
-            transform_tracks = [t for t in tracks if t.get_class().get_name() == "MovieScene3DTransformTrack"]
-            anim_tracks = [t for t in tracks if t.get_class().get_name() == "MovieSceneSkeletalAnimationTrack"]
-            if len(transform_tracks) < 1:
-                raise RuntimeError(f"{entity_id}: missing TransformTrack")
-            if len(anim_tracks) < 1:
-                raise RuntimeError(f"{entity_id}: missing SkeletalAnimationTrack")
-            # Animation track should have at least 1 section
-            anim_sections = anim_tracks[0].get_sections()
-            if len(anim_sections) < 1:
-                raise RuntimeError(f"{entity_id}: AnimationTrack has no sections")
+                        if previous_pos is not None:
+                            dx = px - previous_pos[0]
+                            dy = py - previous_pos[1]
+                            prev_yaw = prev_yaws.get(entity_id, 0.0)
+                            yaw = build_yaw(dx, dy, prev_yaw)
+                        else:
+                            yaw = 0.0
+                        prev_yaws[entity_id] = yaw
+                        previous_pos = (px, py)
+                        add_double_channel_key(cmap["Rotation.Z"], kf, yaw)
 
-    print()
-    if animation_ok or ball_rolling_ok:
-        print("GRF UE ANIMATION IMPORT PASS")
+            # Verify key counts
+            actual_loc_x = cmap["Location.X"].get_num_keys()
+            actual_loc_y = cmap["Location.Y"].get_num_keys()
+            actual_loc_z = cmap["Location.Z"].get_num_keys()
+            expected = num_steps
+            for n, c in [("Location.X", actual_loc_x), ("Location.Y", actual_loc_y),
+                         ("Location.Z", actual_loc_z)]:
+                if c != expected:
+                    raise RuntimeError(f"{entity_id} {n}: expected {expected} keys, got {c}")
+            total_transform_keys += actual_loc_x + actual_loc_y + actual_loc_z
 
-    # ── Save ───────────────────────────────────────────────────────────
-    saved = unreal.EditorAssetLibrary.save_loaded_asset(sequence, only_if_is_dirty=False)
-    if not saved:
-        raise RuntimeError(f"Failed to save Level Sequence: {sequence_asset_path}")
-    print(f"  Sequence saved: {sequence_asset_path}")
+            if entity_id != "BALL":
+                actual_rot = cmap["Rotation.Z"].get_num_keys()
+                if actual_rot != expected:
+                    raise RuntimeError(f"{entity_id} Rotation.Z: expected {expected} keys, got {actual_rot}")
+                total_transform_keys += actual_rot
 
-    # ── Open in Sequencer ──────────────────────────────────────────────
-    try:
-        unreal.LevelSequenceEditorBlueprintLibrary.open_level_sequence(sequence)
-        print("  Sequence opened in Sequencer.")
-    except Exception as exc:
-        unreal.log(f"Warning: could not open Level Sequence in Sequencer: {exc}")
+        print(f"  Total transform keys: {total_transform_keys}")
 
-    # ── Final report ───────────────────────────────────────────────────
+        # ── Animation tracks (if config provided and enabled) ───────────
+        _add_animation_tracks(anim_cfg, actors, frames, seq, actor_bindings,
+                              source_step, playback_fps, total_output_frames)
+
+        # ── Ball rolling (if config provided) ───────────────────────────
+        _add_ball_rolling(anim_cfg, frames, seq, source_step, playback_fps,
+                          total_output_frames, actor_bindings)
+
+        # ── Save & open ────────────────────────────────────────────────
+        saved = unreal.EditorAssetLibrary.save_loaded_asset(seq, only_if_is_dirty=False)
+        if not saved:
+            raise RuntimeError(f"Failed to save: {sequence_asset_path}")
+        print(f"  Saved: {sequence_asset_path}")
+
+        try:
+            unreal.LevelSequenceEditorBlueprintLibrary.open_level_sequence(seq)
+            print("  Opened in Sequencer.")
+        except Exception as exc:
+            unreal.log(f"Warning: could not open in Sequencer: {exc}")
+
+    # ── Summary ─────────────────────────────────────────────────────────
     player_count = sum(1 for eid in actors if eid != "BALL")
-    ball_count = 1 if "BALL" in actors else 0
     print()
     print("GRF UE IMPORT PASS")
-    print(f"Sequence asset: {sequence_asset_path}")
-    print(f"Display rate: {playback_fps} FPS")
-    print(f"Playback frames: 0-{total_output_frames}")
-    print(f"Bindings: {bindings_count}")
-    print(f"Player bindings: {player_count}")
-    print(f"Ball bindings: {ball_count}")
-    print(f"Total transform keys: {total_transform_keys}")
+    print(f"Sequences created: {len(seq_list)}")
+    for s in seq_list:
+        cam = s.get("camera_actor", "none")
+        print(f"  {pkg_path}/{s['name']} (camera: {cam})")
+    print(f"Players: {player_count}, Ball: {'BALL' in actors}")
+    print(f"Package path: {pkg_path}")
+
+
+def _add_animation_tracks(anim_cfg, actors, frames, seq, actor_bindings,
+                           source_step, playback_fps, total_output_frames):
+    """Add Skeletal Animation Tracks for each player if enabled in config."""
+    import unreal
+
+    if not anim_cfg or not anim_cfg.get("enabled", True):
+        return
+
+    anims = anim_cfg["animations"]
+    loco = anim_cfg["locomotion"]
+    total_sections = 0
+    num_steps = len(frames)
+
+    print("\n--- Player locomotion animation ---")
+    for entity_id in actors:
+        if entity_id == "BALL":
+            continue
+        _binding, _channels, _section = actor_bindings.get(entity_id, (None, None, None))
+        if not _binding:
+            continue
+
+        binding = _binding
+
+        # Collect positions
+        positions = []
+        for frame in frames:
+            for pd in frame["players"]:
+                if pd["id"] == entity_id:
+                    positions.append((pd["position_m"][0], pd["position_m"][1]))
+                    break
+
+        if len(positions) < 2:
+            print(f"  {entity_id}: insufficient positions ({len(positions)})")
+            continue
+
+        speeds = compute_speeds_mps(positions, source_step)
+        speeds = smooth_values(speeds, loco["smoothing_window"])
+        segments = classify_states(speeds, loco, source_step, playback_fps)
+
+        state_counts = {"idle": 0, "walk": 0, "run": 0}
+        for seg in segments:
+            state_counts[seg.state] = state_counts.get(seg.state, 0) + 1
+        print(f"  {entity_id}: idle={state_counts['idle']} walk={state_counts['walk']} run={state_counts['run']}")
+
+        anim_track = binding.add_track(unreal.MovieSceneSkeletalAnimationTrack)
+
+        for seg in segments:
+            start_frame = int(round(seg.source_start * source_step * playback_fps))
+            end_frame = int(round(seg.source_end_exclusive * source_step * playback_fps))
+            if seg.source_end_exclusive == num_steps:
+                end_frame = total_output_frames
+
+            section = anim_track.add_section()
+            section.set_range(start_frame, end_frame)
+
+            asset_path = anims[seg.state]
+            anim_asset = unreal.load_asset(asset_path)
+            if not anim_asset:
+                raise RuntimeError(f"Failed to load animation: {asset_path}")
+
+            params = section.get_editor_property("params")
+            params.set_editor_property("animation", anim_asset)
+            params.set_editor_property("force_custom_mode", True)
+            params.set_editor_property("skip_anim_notifiers", True)
+
+            play_rate = compute_play_rate(seg, loco)
+            play_rate_variant = unreal.MovieSceneTimeWarpVariant()
+            play_rate_variant.set_fixed_play_rate(float(play_rate))
+            params.set_editor_property("play_rate", play_rate_variant)
+            section.set_editor_property("params", params)
+
+            total_sections += 1
+
+    print(f"  Animation sections created: {total_sections}")
+
+
+def _add_ball_rolling(anim_cfg, frames, seq, source_step, playback_fps,
+                       total_output_frames, actor_bindings=None):
+    """Add ball rolling rotation keys if animation config enables it."""
+    import unreal
+
+    if not anim_cfg or not anim_cfg.get("ball", {}).get("enabled", True):
+        return
+
+    ball_cfg = anim_cfg["ball"]
+    num_steps = len(frames)
+
+    # Find ball's channel map from actor_bindings
+    cmap_ref = None
+    if actor_bindings and "BALL" in actor_bindings:
+        _, _channels, _section = actor_bindings["BALL"]
+        cmap_ref = _build_channel_map(_channels)
+
+    if not cmap_ref or "Rotation.X" not in cmap_ref:
+        return
+
+    ball_positions = []
+    for frame in frames:
+        bpos = frame["ball"]["position_m"]
+        ball_positions.append((bpos[0], bpos[1], bpos[2]))
+
+    rotations = compute_ball_rotation_quat(
+        ball_positions,
+        ball_cfg["radius_m"],
+        ball_cfg.get("minimum_move_distance_m", 0.0001),
+        ball_cfg.get("roll_sign", 1.0),
+    )
+
+    if "Rotation.X" not in cmap_ref:
+        return
+
+    for fi in range(num_steps):
+        kf = int(round(fi * source_step * playback_fps))
+        r, p, y = rotations[fi]
+        add_double_channel_key(cmap_ref["Rotation.X"], kf, r)
+        add_double_channel_key(cmap_ref["Rotation.Y"], kf, p)
+        add_double_channel_key(cmap_ref["Rotation.Z"], kf, y)
 
 
 def _build_entity_binding(sequence, entity_id, actor, total_output_frames):
@@ -1071,16 +1040,12 @@ def _apply_player_frame(actors: dict, frame: dict, prev_yaws: dict, prev_positio
 def main():
     args = _parse_args()
 
-    # Load config file (if provided) as defaults
+    # Load config from hardcoded path (next to this script)
     cfg_defaults = {}
-    if args.config:
-        cfg_path = Path(args.config)
-        if not cfg_path.exists():
-            print(f"ERROR: Config file not found: {cfg_path}", file=sys.stderr)
-            sys.exit(1)
+    cfg_path = Path(__file__).resolve().parent.parent / "ue_import_config.json"
+    if cfg_path.exists():
         with open(cfg_path) as f:
             raw = json.load(f)
-        # Strip comment_* keys, keep only real parameters
         for k, v in raw.items():
             if not k.startswith("comment_"):
                 cfg_defaults[k] = v
@@ -1142,7 +1107,9 @@ def main():
 
     if mode in ("sequence", "both"):
         print("\n--- Sequence mode: creating Level Sequence ---")
-        create_sequence(meta, frames, mapping, replace_existing, anim_cfg)
+        seq_pkg = cfg_defaults.get("sequence_package_path") or DEFAULT_SEQUENCE_PACKAGE_PATH
+        seq_list = cfg_defaults.get("sequences") or None
+        create_sequence(meta, frames, mapping, replace_existing, anim_cfg, seq_pkg, seq_list)
 
     print("\nDone.")
 

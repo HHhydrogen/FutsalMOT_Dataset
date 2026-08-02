@@ -537,6 +537,60 @@ def _ensure_custom_depth_stencil_enabled() -> None:
     )
 
 
+def _inspect_pie_actor_stencil() -> None:
+    """MRQ PIE 渲染期间调用：检查 PIE 世界里 actor 组件的 stencil 状态。
+
+    用于确认运行时在编辑器 actor 上设的 bRenderCustomDepth / CustomDepthStencilValue
+    是否真的带入了 MRQ 的 PIE 渲染世界。若 PIE 里是 False/0，说明值没带进去，
+    需换写入方式（Sequence 属性轨道 / 关卡保存等）。
+    """
+    import unreal
+
+    gw = None
+    for getter in (
+        lambda: getattr(unreal.EditorLevelLibrary, "get_game_world", lambda: None)(),
+        lambda: unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_game_world(),
+        lambda: unreal.get_editor_subsystem(unreal.LevelEditorSubsystem).get_game_world(),
+    ):
+        try:
+            gw = getter()
+            if gw is not None:
+                break
+        except Exception:
+            continue
+    if gw is None:
+        print("  [MRQ 诊断] 无法获取 PIE/game world")
+        return
+    actors = None
+    for getter in (
+        lambda: unreal.GameplayStatics.get_all_actors_of_class(gw, unreal.Actor),
+        lambda: unreal.SystemLibrary.get_all_actors_of_class(gw, unreal.Actor),
+    ):
+        try:
+            actors = getter()
+            if actors is not None:
+                break
+        except Exception:
+            continue
+    if actors is None:
+        print("  [MRQ 诊断] 无法枚举 PIE actor（GameplayStatics/SystemLibrary 均失败）")
+        return
+    found = 0
+    for a in actors:
+        label = a.get_actor_label() or a.get_name()
+        if "Player_L0" not in label and "Ball_01" not in label:
+            continue
+        for comp in a.get_components_by_class(unreal.SkeletalMeshComponent):
+            try:
+                rd = comp.get_editor_property("render_custom_depth")
+                sv = comp.get_editor_property("custom_depth_stencil_value")
+                print(f"  [MRQ 诊断] PIE {label} mesh: render_custom_depth={rd}, stencil={sv}")
+                found += 1
+            except Exception:
+                pass
+    print(f"  [MRQ 诊断] PIE stencil 检查完成（找到 {found} 个组件）")
+
+
 def _save_current_level() -> None:
     """保存当前关卡，把 actor 上运行时设置的 stencil 值写入磁盘。
 
@@ -1203,6 +1257,7 @@ class _AsyncRenderPipeline:
             "stable_ticks": 0,
             "start": time.monotonic(),
             "seen_rendering": False,
+            "inspected": False,
         }
 
         def _on_tick(_delta):
@@ -1219,6 +1274,10 @@ class _AsyncRenderPipeline:
             st["last_total"] = total
             if rendering is True:
                 st["seen_rendering"] = True
+                if not st.get("inspected"):
+                    st["inspected"] = True
+                    # 检查 PIE 世界里 stencil 值是否生效（诊断 mask 全 0 的根因）
+                    _inspect_pie_actor_stencil()
             elapsed = time.monotonic() - st["start"]
 
             if rendering is False and present:

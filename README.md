@@ -8,24 +8,31 @@
 
 ```
 code/
-├── src/grf_ue_bridge/          # Python CLI 包 — 在 .venv 中运行
-│   ├── cli.py                  #   grf-ue export / validate 命令入口
-│   ├── config.py               #   ExportConfig 模型
-│   ├── grf_runner.py           #   运行 GRF 环境，采集原始观测数据
-│   ├── exporter.py             #   将 EpisodeResult 导出为 meta.json + frames.jsonl
-│   ├── coordinate_transform.py #   GRF 归一化坐标 → UE 米坐标
-│   ├── validator.py            #   验证导出的 episode 数据完整性
-│   └── schema.py               #   数据模型定义
-├── ue/                         # UE Python 脚本 — 在 Unreal Editor 内运行
-│   └── import_grf_episode.py   #   读取 JSONL 并生成 Level Sequence
+├── src/grf_ue_bridge/            # Python CLI 包 — 在 .venv 中运行
+│   ├── cli.py                    #   grf-ue export/validate/validate-annotations/annotate-overlay
+│   ├── config.py                 #   ExportConfig 模型
+│   ├── grf_runner.py             #   运行 GRF 环境，采集原始观测数据
+│   ├── exporter.py               #   将 EpisodeResult 导出为 meta.json + frames.jsonl
+│   ├── coordinate_transform.py   #   GRF 归一化坐标 → UE 米坐标
+│   ├── validator.py              #   验证导出的 episode 数据完整性
+│   ├── annotation_validator.py   #   验证导出的 CV 标注目录
+│   └── schema.py                 #   数据模型定义
+├── ue/                           # UE Python 脚本 — 在 Unreal Editor 内运行
+│   ├── import_grf_episode.py     #   读取 JSONL，生成 Level Sequence / 编排标注导出
+│   ├── annotation_exporter.py    #   UE 内运行：读 Camera 标定与 Actor bounds 生成标注
+│   ├── camera_projection.py      #   纯数学：相机投影（pytest 可测）
+│   ├── annotation_utils.py       #   纯数学：bbox 裁剪 / track_id 映射
+│   ├── dataset_export.py         #   纯 Python：JSONL / MOT 序列化与原子写入
+│   ├── scene_apply.py            #   UE 侧共享的 actor 变换辅助
+│   └── actor_mapping.example.json
 ├── configs/
-│   └── mvp_builtin_5v5.json    # 示例导出配置 (5v5, 300 步, built-in AI)
-├── outputs/                    # 导出数据存放目录
-├── tests/                      # pytest 测试
-├── external_sources.lock.json  # 外部仓库 commit 锁定
-├── ue_import_config.json       # UE 导入配置（自动加载）
-├── pyproject.toml              # Python 包定义
-└── README.md                   # 本文件
+│   └── mvp_builtin_5v5.json      # 示例导出配置 (5v5, 300 步, built-in AI)
+├── outputs/                      # 导出数据存放目录
+├── tests/                        # pytest 测试
+├── external_sources.lock.json    # 外部仓库 commit 锁定
+├── ue_import_config.json         # UE 导入/标注配置（自动加载）
+├── pyproject.toml                # Python 包定义
+└── README.md                     # 本文件
 ```
 
 ---
@@ -150,6 +157,7 @@ py "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/ue/import_grf_episode
 | `preview`      | 直接在关卡中逐帧设置 Actor 位置/旋转（不创建资产）            |
 | `sequence`     | 创建/覆盖 Level Sequence 资产，所有数据烘焙进 Transform Track |
 | `both`（默认） | 先 preview 后 sequence                                        |
+| `annotations`  | 导出 CV Ground-Truth 标注（见下文「CV Dataset Annotation Export」） |
 
 ### 转换规则
 
@@ -177,6 +185,152 @@ py "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/ue/import_grf_episode
 
 ---
 
+## CV Dataset Annotation Export
+
+在 Level Sequence / Camera 回放之上，脚本可以导出 **CV Ground-Truth 标注**：每个可见球员/球获得 2D bounding box、稳定 track_id、team/role 等，逐 Camera 独立输出。
+
+### 支持范围（MVP）
+
+- 球员 2D bbox（来自 Actor/Mesh 世界空间 AABB 的 8 角点投影，**非固定尺寸**——远处球员 bbox 更小、近处更大，符合透视）
+- 稳定 track_id（`L0..L4 → 1..5`，`R0..R4 → 6..10`，`BALL → 100`）
+- team / role / is_goalkeeper（取自 meta.json 的 entities）
+- 足球 2D bbox（class = `ball`，基于球 Actor 的真实 bounds）
+- 每个 Camera 独立标注
+- frame index（1 基，与图片文件名一致）
+- 是否进入画面（`in_frame`）、是否被图像边界裁切（`truncated`）
+- 原始 3D/world 信息（`world_position`，米）
+- Camera metadata（内参 fx/fy/cx/cy + 外参 location/rotation + FOV/焦距/传感器）
+- 内部 JSONL + MOTChallenge 导出
+
+暂不支持：pose / segmentation / depth / occlusion visibility（见「限制」）。
+
+### 运行方式
+
+在 Unreal Editor Python Console 中：
+
+```python
+py "D:/.../code/ue/import_grf_episode.py" --mode annotations
+```
+
+脚本读取 `ue_import_config.json` 中的 `annotation_export` 配置段，常用字段：
+
+| 字段 | 默认值 | 说明 |
+|------|--------|------|
+| `enabled` | `true` | 是否启用标注导出 |
+| `output_dir` | — | 标注输出根目录 |
+| `image_width/height` | `1920/1080` | 标注对应的渲染分辨率 |
+| `cameras` | — | 要导出的 Camera actor 名称列表 |
+| `frame_start/frame_end` | `0/null` | 0 基 GRF step 范围（开区间） |
+| `include_ball` | `false` | MOT 导出是否包含球 |
+| `mot_visibility_mode` | `unoccluded` | MOT visibility 策略 |
+| `ball_scale` | `null` | 球 actor 缩放覆盖（`null`=不覆盖，保持关卡实际 scale） |
+| `ball_radius_m` | `null` | 球半径（米）；设置后球 bbox 直接用该半径生成，不依赖 mesh bounds（`0.11`=GRF 球半径） |
+
+### 输出目录
+
+```
+<output_dir>/
+└── episode_0001/
+    └── Camera_01/
+        ├── camera.json        # 相机标定（每 camera 一次）
+        ├── annotations.jsonl  # 内部标注，每帧一行
+        ├── img1/              # RGB 帧目录（本阶段不渲染，见「帧同步」）
+        ├── gt/gt.txt          # MOTChallenge 标注
+        └── seqinfo.ini        # MOT 序列信息
+```
+
+### 内部 annotation schema（annotations.jsonl）
+
+每行一个 frame：
+
+```json
+{
+  "episode_id": "episode_0001",
+  "camera_id": "Camera_01",
+  "frame_index": 1,
+  "source_step": 0,
+  "time_seconds": 0.0,
+  "objects": [
+    {
+      "entity_id": "L0",
+      "track_id": 1,
+      "class": "player",
+      "team": "left",
+      "role": "goalkeeper",
+      "is_goalkeeper": true,
+      "world_position": [-1.23, 0.45, 0.9],
+      "in_frame": true,
+      "truncated": false,
+      "visibility": null,
+      "raw_bbox_xywh": [100.0, 200.0, 120.0, 430.0],
+      "raw_bbox_xyxy": [100.0, 200.0, 220.0, 630.0],
+      "bbox_xywh": [100.0, 200.0, 120.0, 430.0],
+      "bbox_xyxy": [100.0, 200.0, 220.0, 630.0]
+    }
+  ]
+}
+```
+
+字段说明：
+
+- `frame_index`（1 基）= MOT 帧号 = 图片文件名 `000001.png`；`source_step`（0 基）= frames.jsonl 行号。
+- `bbox_xywh` / `bbox_xyxy` 是**裁剪到图像内**的合法 bbox；`raw_bbox_*` 是投影原始值（可能越出图像边界）。
+- `in_frame`：bbox 与图像矩形有非零面积交集；完全在相机后方 → `false`。
+- `truncated`：in_frame 且 raw bbox 有部分超出图像边界。
+- `visibility`：第一版不建模遮挡，恒为 `null`。
+- bbox 单位为像素，坐标原点为图像左上角。
+
+### Camera metadata（camera.json）
+
+包含 `intrinsics`（width/height/fx/fy/cx/cy）、`extrinsics`（world_location_m、world_rotation_deg、forward/right/up）、`focal_length_mm`、`sensor_size_mm`、`horizontal/vertical_fov_deg` 及坐标系/单位说明。内参来自 CineCamera 的真实焦距与传感器尺寸（filmback 缺失时回退用 `current_fov`）。
+
+坐标系约定：Unreal 世界为左手系 X 前 Y 右 Z 上；相机空间 X=前向、Y=右向、Z=上向；图像原点左上、x 右 y 下。投影 `u=cx+fx*(y_cam/x_cam)`、`v=cy-fy*(z_cam/x_cam)`。
+
+### MOTChallenge 导出（gt/gt.txt + seqinfo.ini）
+
+每行 `frame,id,x,y,w,h,conf,class,visibility`：
+
+- `frame` 从 1 开始；`x/y/w/h` 为整数像素，满足 `x,y≥0`、`w,h≥1`、`x+w≤W`、`y+h≤H`。
+- `conf` = 1。
+- `class`：球员 = 1（MOT16/17 pedestrian），球 = 100（自定义，仅 `include_ball=true` 时出现）。
+- `visibility`：由 `mot_visibility_mode` 控制——`unoccluded`（默认，写 1.0，即"未建模遮挡"的假设）或 `truncation`（裁剪面积/原始面积，仅反映边界截断，**不是**真实遮挡）。
+- 不在画面中的对象不会写入 gt.txt。
+
+### track ID 定义
+
+确定性映射，一个 episode 内不变：`L0..L4 → 1..5`、`R0..R4 → 6..10`、`BALL → 100`。
+
+### BALL 处理
+
+内部标注始终包含球（class=`ball`，track_id=100）。标准 player MOT 导出默认不含球（`include_ball=false`），需要时可开启。
+
+注意：球的 bbox 默认来自球 mesh 的真实世界 bounds。若球 mesh 资产的包围盒数据异常（例如渲染正常但 bounds 偏大），可设置 `annotation_export.ball_radius_m`（如 `0.11`=GRF 球半径），标注将直接用该半径生成球 bbox，不再依赖 mesh bounds。
+
+### 帧同步规则
+
+GRF step（0 基）→ `time_seconds = step × source_step_seconds`（0.1s）→ Sequence 帧 = `round(time_seconds × playback_fps)`（30 FPS）→ 标注 `frame_index = step + 1` → 图片 `img1/000001.png`。
+
+**标注的 frame N 与将来渲染的 `000N.png` 表示同一时刻**（同一 Level Sequence time 下的 actor/camera 变换）。`img1/` 目录已建立，本阶段不生成假的 RGB 文件；渲染管线接入后，把对应分辨率的 RGB 放入 `img1/` 即可与标注对齐。
+
+### 调试可视化
+
+```powershell
+uv sync --extra overlay   # 安装 pillow（可选）
+uv run grf-ue annotate-overlay outputs/dataset/episode_0001/Camera_01 --include-ball
+```
+
+把 bbox + entity_id + track_id 画到 `img1/` 的 RGB 帧上，输出到 `debug/000001_bbox.png`。没有 RGB 时跳过。
+
+### 验证
+
+```powershell
+uv run grf-ue validate-annotations outputs/dataset
+```
+
+检查 bbox 合法性、frame_index 连续性、entity↔track 双向一致、MOT 行合法、resolution 一致等。
+
+---
+
 ## 常见问题
 
 | 现象                  | 解决                                                        |
@@ -194,14 +348,22 @@ uv run pytest
 
 # 仅测试某个模块
 uv run pytest tests/test_validator.py -v
+
+# 验证 CV 标注输出目录
+uv run grf-ue validate-annotations outputs/dataset
+
+# 调试可视化（需要 pillow，可选依赖）
+uv sync --extra overlay
+uv run grf-ue annotate-overlay outputs/dataset/episode_0001/Camera_01 --include-ball
 ```
 
 ## 当前阶段
 
-GRF → JSONL → Unreal Engine 最小回放验证已跑通。以下功能**暂不包含**：
+GRF → JSONL → Unreal Engine 回放与 CV 标注导出已跑通。以下功能**暂不包含**：
 
-- MOT 标注生成
 - 批量 episode 生成
 - GRF_MARL 预训练策略接入
 - 事件系统
 - 旧版行为克隆 / PPO
+- 自动 RGB/MRQ 批量渲染（`img1/` 已建立契约，图片由外部渲染后对齐）
+- pose keypoints / semantic / instance segmentation / depth / occlusion visibility

@@ -15,6 +15,9 @@ dependencies = [
     "typer",
 ]
 
+[project.optional-dependencies]
+overlay = ["pillow"]  # 用于 grf-ue annotate-overlay 调试可视化
+
 [project.scripts]
 grf-ue = "grf_ue_bridge.cli:app"
 

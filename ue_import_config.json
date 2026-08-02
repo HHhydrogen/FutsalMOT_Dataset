@@ -44,5 +44,27 @@
     "radius_m": 0.11,
     "minimum_move_distance_m": 0.0001,
     "roll_sign": 1.0
+  },
+
+  "comment_annotation_export": "CV 标注导出配置（--mode annotations 时使用）",
+  "annotation_export": {
+    "enabled": true,
+    "output_dir": "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/outputs/dataset",
+    "image_width": 1920,
+    "image_height": 1080,
+    "cameras": ["CineCam_01", "CineCam_02", "CineCam_03", "CineCam_04"],
+    "frame_start": 0,
+    "frame_end": null,
+    "export_internal_jsonl": true,
+    "export_mot": true,
+    "include_ball": false,
+    "mot_visibility_mode": "unoccluded",
+    "ball_scale": null,
+    "ball_radius_m": 0.11,
+    "comment_output_dir": "输出为 <output_dir>/<episode_id>/<camera_id>/{camera.json, annotations.jsonl, img1/, gt/gt.txt, seqinfo.ini}",
+    "comment_frame_end": "开区间；null 表示到最后一帧。frame_start/frame_end 均为 0 基 GRF step",
+    "comment_mot_visibility_mode": "unoccluded=写 1.0（未建模遮挡）；truncation=裁剪面积/原始面积（仅边界截断）",
+    "comment_ball_scale": "球 actor 缩放覆盖（null=不覆盖，保持关卡实际 scale）",
+    "comment_ball_radius_m": "球半径（米）；设置后球 bbox 直接用该半径生成，不依赖 mesh bounds。0.11=GRF 球半径"
   }
 }

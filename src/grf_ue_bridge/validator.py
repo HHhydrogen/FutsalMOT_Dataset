@@ -47,7 +47,8 @@ def validate_episode(episode_dir: Path) -> int:
         return 1
 
     try:
-        with open(meta_path) as f:
+        # 显式 UTF-8：meta.json 可能包含中文字段（如 coordinate_transform 说明）
+        with open(meta_path, encoding="utf-8") as f:
             meta = json.load(f)
     except json.JSONDecodeError as e:
         errors.append(f"meta.json is not valid JSON: {e}")

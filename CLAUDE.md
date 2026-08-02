@@ -30,6 +30,8 @@ uv run grf-ue export --config configs/mvp_builtin_5v5.json --output outputs/epis
 uv run grf-ue validate outputs/episode_0001
 uv run pytest                             # 运行全部测试
 uv run pytest tests/test_validator.py -v  # 运行单个测试文件
+uv run grf-ue validate-annotations outputs/dataset   # 验证 CV 标注目录
+uv sync --extra overlay && uv run grf-ue annotate-overlay outputs/dataset/episode_0001/Camera_01  # debug 可视化
 ```
 
 P2 脚本**在 Unreal Editor 内**（Python Console）运行，绝不在 .venv 中运行：
@@ -63,6 +65,20 @@ py "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/ue/import_grf_episode
   - `sequence` — 创建/覆盖 Level Sequence 资产，为球员和球写入关键帧的 Location/Rotation 轨道；`both`（默认）两者都执行。
 - `actor_mapping.example.json` — 实体 ID → UE actor 标签映射（必须与关卡中的 actor 标签一致）。
 - 导入约定：米→厘米（×100），球员 Z 固定为 `PLAYER_Z_CM = 90`，球 Z `+ BALL_Z_OFFSET_CM = 2`，Yaw 由位置增量计算并带低速滞回（`SPEED_THRESHOLD_CM = 5.0`）。球的滚动旋转按帧通过四元数累加实现（在 `ue_import_config.json` 的 `ball_rolling` 段配置）。
+
+### CV 标注导出（annotation exporter）
+
+在 Level Sequence 之上，`import_grf_episode.py --mode annotations` 导出 CV Ground-Truth 标注（详见 README「CV Dataset Annotation Export」）。模块职责：
+
+- `ue/camera_projection.py`（纯，pytest 可测）— 相机内参换算（FOV/焦距）、外参、world→camera→pixel 投影、3D box 投影与近平面裁剪。
+- `ue/annotation_utils.py`（纯）— bbox 转换/裁剪/in_frame/truncated、track_id 映射（`L0..L4→1..5`、`R0..R4→6..10`、`BALL→100`）。
+- `ue/dataset_export.py`（纯）— JSONL/MOT/seqinfo/camera.json 序列化与原子写入；`load_episode`/`load_mapping`。
+- `ue/scene_apply.py`（UE 侧）— preview 与 annotation 共享的 actor 变换/查找辅助（与 Level Sequence bake 一致）。
+- `ue/annotation_exporter.py`（UE 侧）— 读 CineCamera 标定与 Actor 世界 AABB，逐帧生成标注。
+- `src/grf_ue_bridge/annotation_validator.py` — `grf-ue validate-annotations`。
+- `grf-ue annotate-overlay` — debug 可视化（需 pillow，可选依赖）。
+
+关键点：bbox 来自 Actor 世界 AABB 的 8 角点投影（非固定尺寸）；`visibility` 第一版恒为 `null`。帧同步：GRF step → `time=step×0.1` → Sequence 帧 `round(time×playback_fps)` → 标注 `frame_index=step+1` → 图片 `img1/000001.png`。
 
 ### Sequencer API 注意事项（已内建在脚本中——请保留）
 

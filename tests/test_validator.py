@@ -10,9 +10,10 @@ from grf_ue_bridge.validator import validate_episode
 def _write_episode(meta: dict, frames: list[dict]) -> Path:
     """写入一个临时 episode 目录并返回其路径。"""
     tmp = Path(tempfile.mkdtemp())
-    with open(tmp / "meta.json", "w") as f:
+    # 与真实 exporter 一致，显式 UTF-8 写入
+    with open(tmp / "meta.json", "w", encoding="utf-8") as f:
         json.dump(meta, f)
-    with open(tmp / "frames.jsonl", "w") as f:
+    with open(tmp / "frames.jsonl", "w", encoding="utf-8") as f:
         for frame in frames:
             f.write(json.dumps(frame) + "\n")
     return tmp
@@ -59,6 +60,15 @@ class TestValidator:
     def test_missing_meta(self):
         tmp = Path(tempfile.mkdtemp())
         assert validate_episode(tmp) == 1
+
+    def test_meta_with_chinese_coordinate_note(self):
+        # 回归测试：meta.json 含中文字段（coordinate_transform 说明），
+        # 读取必须显式 UTF-8，否则中文 Windows 默认 GBK 会解码失败
+        meta = _default_meta(2)
+        meta["coordinate_transform"] = {"ball_z_note": "球的 z 原样透传（Z_FIELD_SCALE=1）"}
+        frames = [_make_frame(i) for i in range(2)]
+        path = _write_episode(meta, frames)
+        assert validate_episode(path) == 0
 
     def test_wrong_schema(self):
         meta = _default_meta(5)

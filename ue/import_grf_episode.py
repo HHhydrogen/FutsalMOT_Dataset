@@ -1,9 +1,11 @@
 """
 Unreal Engine Python 脚本 —— 把 GRF-UE episode 导入到 Level Sequence。
 
-两种模式（默认 both）：
+模式（默认 both）：
   --preview    直接在关卡中设置 actor 变换（编辑器预览）。
   --sequence   创建 / 覆盖带关键帧变换的 Level Sequence 资产。
+  --both       先 preview 后 sequence。
+  --annotations 导出 CV Ground-Truth 标注（见 ue/annotation_exporter.py）。
 
 用法（在 Unreal Editor Python Console 中执行）：
     # 最简单（参数在 ue_import_config.json 中）
@@ -11,6 +13,9 @@ Unreal Engine Python 脚本 —— 把 GRF-UE episode 导入到 Level Sequence�
 
     # 临时覆盖部分参数
     py "D:/path/to/code/ue/import_grf_episode.py" --episode "D:/path/to/other_episode" --replace-existing
+
+    # 只导出 CV 标注
+    py "D:/path/to/code/ue/import_grf_episode.py" --mode annotations
 
 依赖：
     - unreal（UE 内置模块）
@@ -20,16 +25,40 @@ Unreal Engine Python 脚本 —— 把 GRF-UE episode 导入到 Level Sequence�
 """
 
 import argparse
+import importlib
 import json
 import math
 import re
 import sys
 from pathlib import Path
 
-M_TO_CM = 100.0
-SPEED_THRESHOLD_CM = 5.0  # cm/s，低于该速度保持上一次的 yaw
-BALL_Z_OFFSET_CM = 2.0  # 偏移，使 GRF 球 z（~0.11 * 100）+ 偏移 ≈ 13cm
-PLAYER_Z_CM = 90.0  # 球员 actor 的固定地面高度
+# 保证在 UE 中运行时能 import 同目录的模块（scene_apply / dataset_export / ...）
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+# UE Python 会话内，已 import 过的 ue/ 模块会缓存在 sys.modules 中；多次执行
+# 本脚本时需先强制重载，否则会运行到磁盘上已修改但会话里仍是旧版本的代码。
+_UE_MODULE_NAMES = (
+    "camera_projection", "annotation_utils", "dataset_export",
+    "scene_apply", "annotation_exporter",
+)
+for _name in _UE_MODULE_NAMES:
+    if _name in sys.modules:
+        importlib.reload(sys.modules[_name])
+
+from scene_apply import (  # noqa: E402
+    BALL_Z_OFFSET_CM,
+    M_TO_CM,
+    PLAYER_Z_CM,
+    SPEED_THRESHOLD_CM,
+    apply_preview,
+    build_yaw,
+    find_actor,
+    find_all_actors,
+    pos_m_to_cm,
+)
+from dataset_export import load_episode, load_mapping  # noqa: E402
+from annotation_exporter import export_annotations  # noqa: E402
+
 DEFAULT_SEQUENCE_PACKAGE_PATH = "/Game/FutsalMOT/Sequences"
 EXPECTED_CHANNEL_NAMES = [
     "Location.X", "Location.Y", "Location.Z",
@@ -53,7 +82,7 @@ def _parse_args():
         help="actor 映射 JSON 文件路径"
     )
     parser.add_argument(
-        "--mode", choices=["preview", "sequence", "both"], default="both",
+        "--mode", choices=["preview", "sequence", "both", "annotations"], default="both",
         help="执行模式"
     )
     parser.add_argument(
@@ -66,79 +95,6 @@ def _parse_args():
     )
     parsed = parser.parse_args()
     return parsed
-
-
-# ── 加载辅助函数 ────────────────────────────────────────────────────────
-
-def load_episode(episode_dir: Path):
-    """从 episode 目录加载 meta.json 和 frames.jsonl。"""
-    with open(episode_dir / "meta.json") as f:
-        meta = json.load(f)
-    frames = []
-    with open(episode_dir / "frames.jsonl") as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                frames.append(json.loads(line))
-    return meta, frames
-
-
-def load_mapping(path: Path) -> dict:
-    """加载 actor 映射 JSON。"""
-    with open(path) as f:
-        return json.load(f)
-
-
-# ── Actor 辅助函数 ─────────────────────────────────────────────────────
-
-def _get_actor_subsystem():
-    """获取 EditorActorSubsystem。"""
-    import unreal
-    return unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
-
-
-def find_actor(name: str):
-    """按标签或名称（不区分大小写）查找 UE actor。"""
-    import unreal
-    subsystem = _get_actor_subsystem()
-    actors = subsystem.get_all_level_actors()
-    for actor in actors:
-        actor_name = actor.get_actor_label() or actor.get_name()
-        if actor_name.lower() == name.lower():
-            return actor
-        if name.lower() in actor_name.lower():
-            return actor
-    return None
-
-
-def _find_all_actors(mapping: dict) -> dict:
-    """在映射中找到所有 actor。返回 {entity_id: actor} 字典。"""
-    actors = {}
-    for entity_id, actor_name in mapping.items():
-        actor = find_actor(actor_name)
-        if actor:
-            actors[entity_id] = actor
-            print(f"  Found: {entity_id} -> {actor_name}")
-        else:
-            print(f"  WARNING: Not found: {entity_id} -> {actor_name}")
-    if not actors:
-        print("ERROR: No actors found. Check your actor mapping and level.")
-    return actors
-
-
-# ── 数学工具 ───────────────────────────────────────────────────────────
-
-def build_yaw(dx: float, dy: float, prev_yaw: float) -> float:
-    """根据位移增量计算 yaw，并带低速滞回。"""
-    speed = math.sqrt(dx * dx + dy * dy)
-    if speed < SPEED_THRESHOLD_CM:
-        return prev_yaw
-    return math.degrees(math.atan2(dy, dx))
-
-
-def _pos_m_to_cm(pos_m: list) -> tuple:
-    """把 [x, y, z] 米转换为 (x_cm, y_cm, z_cm)。"""
-    return (pos_m[0] * M_TO_CM, pos_m[1] * M_TO_CM, pos_m[2] * M_TO_CM)
 
 
 # ── Sequence 关键帧辅助函数 ─────────────────────────────────────────────
@@ -340,29 +296,6 @@ def _add_ball_rolling(frames, sequence, source_step, playback_fps,
     print(f"  Ball rolling keys added: {len(frames)} frames")
 
 
-# ── 预览模式 ────────────────────────────────────────────────────────────
-
-def apply_preview(meta: dict, frames: list, mapping: dict):
-    """在关卡中逐帧设置 actor 变换。"""
-    actors = _find_all_actors(mapping)
-    if not actors:
-        return
-
-    num_steps = meta["timing"]["num_steps"]
-    prev_yaws = {}
-    prev_positions = {}
-
-    for frame in frames:
-        step = frame["step"]
-        _apply_ball_frame(actors, frame)
-        _apply_player_frame(actors, frame, prev_yaws, prev_positions)
-
-        if step > 0 and step % 50 == 0:
-            print(f"  Preview: {step}/{num_steps}")
-
-    print(f"Preview complete: {num_steps} frames applied.")
-
-
 # ── 冒烟测试 ───────────────────────────────────────────────────────────
 
 def _smoke_test_sequencer_api(actors: dict, total_output_frames: int, package_path: str = None):
@@ -418,7 +351,7 @@ def create_sequence(meta: dict, frames: list, mapping: dict, replace_existing: b
     """
     import unreal
 
-    actors = _find_all_actors(mapping)
+    actors = find_all_actors(mapping)
     if not actors:
         return
 
@@ -512,7 +445,7 @@ def create_sequence(meta: dict, frames: list, mapping: dict, replace_existing: b
 
                 if entity_id == "BALL":
                     ball_pos = frame["ball"]["position_m"]
-                    px, py, pz = _pos_m_to_cm(ball_pos)
+                    px, py, pz = pos_m_to_cm(ball_pos)
                     pz += BALL_Z_OFFSET_CM
                     add_double_channel_key(cmap["Location.X"], kf, px)
                     add_double_channel_key(cmap["Location.Y"], kf, py)
@@ -525,7 +458,7 @@ def create_sequence(meta: dict, frames: list, mapping: dict, replace_existing: b
                     for player_data in frame["players"]:
                         if player_data["id"] != entity_id:
                             continue
-                        px, py, _ = _pos_m_to_cm(player_data["position_m"])
+                        px, py, _ = pos_m_to_cm(player_data["position_m"])
                         add_double_channel_key(cmap["Location.X"], kf, px)
                         add_double_channel_key(cmap["Location.Y"], kf, py)
                         add_double_channel_key(cmap["Location.Z"], kf, PLAYER_Z_CM)
@@ -605,47 +538,6 @@ def _build_entity_binding(sequence, entity_id, actor, total_output_frames):
     return binding, channels, transform_section
 
 
-# ── 预览辅助函数（共享，模块顶层不依赖 unreal）──────────────────────
-
-def _apply_ball_frame(actors: dict, frame: dict):
-    """根据帧数据设置球 actor 的位置。"""
-    import unreal
-    if "BALL" not in actors:
-        return
-    ball_pos = frame["ball"]["position_m"]
-    px, py, pz = _pos_m_to_cm(ball_pos)
-    actors["BALL"].set_actor_location(
-        unreal.Vector(px, py, pz + BALL_Z_OFFSET_CM), False, False
-    )
-
-
-def _apply_player_frame(actors: dict, frame: dict, prev_yaws: dict, prev_positions: dict):
-    """根据帧数据设置球员 actor 的位置与旋转。"""
-    import unreal
-    for player_data in frame["players"]:
-        pid = player_data["id"]
-        if pid not in actors:
-            continue
-        px, py, _ = _pos_m_to_cm(player_data["position_m"])
-        pos_cm = unreal.Vector(px, py, PLAYER_Z_CM)
-
-        prev_pos = prev_positions.get(pid)
-        if prev_pos is not None:
-            dx = pos_cm.x - prev_pos.x
-            dy = pos_cm.y - prev_pos.y
-            prev_yaw = prev_yaws.get(pid, 0.0)
-            yaw = build_yaw(dx, dy, prev_yaw)
-        else:
-            yaw = 0.0
-
-        prev_yaws[pid] = yaw
-        prev_positions[pid] = pos_cm
-
-        actors[pid].set_actor_location_and_rotation(
-            pos_cm, unreal.Rotator(0.0, 0.0, yaw), False, False
-        )
-
-
 # ── 入口 ───────────────────────────────────────────────────────────────
 
 def main():
@@ -683,6 +575,19 @@ def main():
     if not mapping_path or not mapping_path.exists():
         print(f"ERROR: Mapping file not found: {mapping_path}", file=sys.stderr)
         sys.exit(1)
+
+    # annotations 模式：只导出 CV 标注，不做 preview / sequence
+    if mode == "annotations":
+        ann_cfg = cfg_defaults.get("annotation_export") or {}
+        if ann_cfg.get("enabled", True) is False:
+            print("annotation_export.enabled = false，跳过标注导出")
+            return
+        output_dir = Path(
+            ann_cfg.get("output_dir") or (episode_dir.parent / "dataset")
+        )
+        export_annotations(episode_dir, mapping_path, output_dir, ann_cfg)
+        print("\nDone.")
+        return
 
     meta, frames = load_episode(episode_dir)
     mapping = load_mapping(mapping_path)

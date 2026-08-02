@@ -80,7 +80,7 @@ py "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/ue/import_grf_episode
 - `src/grf_ue_bridge/annotation_validator.py` — `grf-ue validate-annotations`。
 - `grf-ue annotate-overlay` — debug 可视化（需 pillow，可选依赖）。
 
-关键点：球员 bbox 来自 CapsuleComponent（稳定人形尺寸），球可用 `ball_radius_m` 覆盖 mesh bounds；`visibility` 第一版恒为 `null`。帧同步：GRF step → `time=step×0.1` → Sequence 帧 `round(time×playback_fps)` → 标注 `frame_index=step+1` → 图片 `img1/000001.png`。MRQ 渲染以 `frame_rate` 渲染全范围后按该映射取帧对齐。
+关键点：球员 bbox 基于 CapsuleComponent 并经 `annotation_export.player_bbox.width_scale`（默认 0.7）横向收窄贴合身体——SkeletalMesh 无可用 bounds API，胶囊 70cm 宽比真人肩宽(~50cm)宽，需缩放消余量；球可用 `ball_radius_m` 覆盖 mesh bounds；`visibility` 第一版恒为 `null`。帧同步：GRF step → `time=step×0.1` → Sequence 帧 `round(time×playback_fps)` → 标注 `frame_index=step+1` → 图片 `img1/000001.png`。MRQ 渲染以 `frame_rate` 渲染全范围后按该映射取帧对齐。
 
 ### Sequencer API 注意事项（已内建在脚本中——请保留）
 

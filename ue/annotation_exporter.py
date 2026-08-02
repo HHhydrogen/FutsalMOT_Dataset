@@ -333,6 +333,7 @@ def build_object_annotation(
     image_width: int,
     image_height: int,
     ball_radius_m: float = None,
+    player_bbox: dict = None,
 ) -> dict:
     """为一个 actor 构造 CV 标注 dict。
 
@@ -341,6 +342,11 @@ def build_object_annotation(
 
     球：若传入 ball_radius_m，直接用该半径生成球 bbox（不依赖 mesh bounds），
     用于球 mesh 资产包围盒数据异常的情况。
+
+    球员（player_bbox 非空）：球员身体是 SkeletalMesh，UE Python 无可用
+    bounds API，bbox 来自 CapsuleComponent（radius=35 → 70cm 宽，比真人肩宽
+    ~50cm 宽）。player_bbox.width_scale 把横向半宽缩为 radius×scale 以消除
+    肢体外余量；height_scale 缩纵向半高。默认各 1.0（保持胶囊原尺寸）。
     """
     if entity_id == "BALL" and ball_radius_m is not None:
         loc = actor.get_actor_location()
@@ -349,6 +355,10 @@ def build_object_annotation(
         extent_cm = (r_cm, r_cm, r_cm)
     else:
         origin_cm, extent_cm = get_world_bounds(actor)
+        if entity_id != "BALL" and player_bbox:
+            ws = float(player_bbox.get("width_scale", 1.0))
+            hs = float(player_bbox.get("height_scale", 1.0))
+            extent_cm = (extent_cm[0] * ws, extent_cm[1] * ws, extent_cm[2] * hs)
     origin_m = tuple(v * CM_TO_M for v in origin_cm)
     extent_m = tuple(v * CM_TO_M for v in extent_cm)
     corners = world_bbox_corners(origin_m, extent_m)
@@ -443,6 +453,7 @@ def export_annotations(
     export_internal_jsonl = bool(cfg.get("export_internal_jsonl", True))
     ball_scale = cfg.get("ball_scale")  # None = 不覆盖球的 scale
     ball_radius_m = cfg.get("ball_radius_m")  # None = 用 mesh bounds；否则用该半径生成球 bbox
+    player_bbox = cfg.get("player_bbox") or {}  # 球员 bbox 相对胶囊的缩放（默认 1.0 = 胶囊原尺寸）
     mot_frame_rate = int(meta["timing"].get("playback_fps", 30))
     source_step_seconds = float(meta["timing"].get("source_step_seconds", 0.1))
     episode_id = meta.get("episode_id") or episode_dir.name
@@ -494,6 +505,7 @@ def export_annotations(
                     build_object_annotation(
                         entity_id, actor, entity_info, intrinsics, extrinsics,
                         image_width, image_height, ball_radius_m=ball_radius_m,
+                        player_bbox=player_bbox,
                     )
                 )
             per_camera_objects[name].append(objects)

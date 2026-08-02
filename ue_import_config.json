@@ -62,6 +62,7 @@
     "ball_scale": null,
     "ball_radius_m": 0.11,
     "player_bbox": {
+      "source": "capsule",
       "width_scale": 0.7,
       "height_scale": 1.0
     },
@@ -78,7 +79,7 @@
     "comment_mot_visibility_mode": "unoccluded=写 1.0（未建模遮挡）；truncation=裁剪面积/原始面积（仅边界截断）",
     "comment_ball_scale": "球 actor 缩放覆盖（null=不覆盖，保持关卡实际 scale）",
     "comment_ball_radius_m": "球半径（米）；设置后球 bbox 直接用该半径生成，不依赖 mesh bounds。0.11=GRF 球半径",
-    "comment_player_bbox": "球员 bbox 相对胶囊体的缩放：胶囊 r=35→70cm 宽，比真人肩宽(~50cm)宽，横向余量明显；width_scale=0.7→≈49cm 贴合身体（可按视觉微调，越小越紧、可能露臂）；height_scale 一般保持 1.0。SkeletalMesh 无可用 bounds API，故基于胶囊缩放",
+    "comment_player_bbox": "球员 bbox 数据源：source='mesh'=用 SkeletalMesh.get_bounds() 模型参考姿势边界（严格贴合模型、随朝向旋转而变；若参考姿势手臂张开则侧面可能偏宽）；source='capsule'=用胶囊缩放（radius=35→70cm 宽，比真人肩宽~50cm 宽，width_scale 收窄消余量，height_scale 一般 1.0）。两种可用 annotate-overlay 目视对比后选一种",
     "comment_render_rgb": "MRQ 自动渲染 RGB（--mode full / render 时使用）；分辨率/帧率默认复用 image_width/image_height 与 playback_fps；渲染前需为每个 Sequence 手动设置 Camera Cut"
   }
 }

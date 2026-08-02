@@ -61,6 +61,28 @@ def _v3(v):
     return (float(v.x), float(v.y), float(v.z))
 
 
+def _component_world_transform(comp):
+    """用 get_world_location/rotation/scale 构造组件世界 Transform。
+
+    UE Python 里 get_component_to_world_transform() 在 SkeletalMeshComponent 上
+    不存在（仅部分类可用），改用三个 get_world_* 方法构造，兼容所有组件。
+    """
+    import unreal
+
+    loc = comp.get_world_location()
+    rot = comp.get_world_rotation()
+    scale = None
+    m = getattr(comp, "get_world_scale", None)
+    if m is not None:
+        try:
+            scale = m()
+        except Exception:
+            scale = None
+    if scale is None:
+        scale = unreal.Vector(1.0, 1.0, 1.0)
+    return unreal.Transform(location=loc, rotation=rot, scale3d=scale)
+
+
 def _mesh_world_bounds(actor):
     """用 actor 网格组件（Skeletal/Static Mesh）的本地 bounds 换算世界 AABB。
 
@@ -80,7 +102,7 @@ def _mesh_world_bounds(actor):
         return None
     try:
         local_origin, local_extent = comp.get_local_bounds()
-        world_tf = comp.get_component_to_world_transform()
+        world_tf = _component_world_transform(comp)
         lo, le = _v3(local_origin), _v3(local_extent)
         xs, ys, zs = [], [], []
         for sx in (-1.0, 1.0):
@@ -102,6 +124,67 @@ def _mesh_world_bounds(actor):
     origin = ((min(xs) + max(xs)) / 2.0, (min(ys) + max(ys)) / 2.0, (min(zs) + max(zs)) / 2.0)
     extent = ((max(xs) - min(xs)) / 2.0, (max(ys) - min(ys)) / 2.0, (max(zs) - min(zs)) / 2.0)
     return origin, extent
+
+
+def mesh_asset_world_bounds(actor):
+    """用 SkeletalMesh 资产的 get_bounds()（模型参考姿势边界）换算世界 AABB。
+
+    SkeletalMeshComponent 在 UE Python 没有 get_local_bounds / get_bounds 可用
+    （get_actor_bounds 又因并入灯光等大组件而偏大），但 SkeletalMesh **资产**有
+    get_bounds()，返回 BoxSphereBounds{origin, box_extent, sphere_radius}，即模型
+    参考姿势的几何边界。把它按组件世界变换换算成世界 AABB，得到贴合模型的 bbox。
+
+    注意：这是参考姿势边界（如手臂张开则 X 向较宽），随角色朝向旋转而变；若角色
+    渲染姿势与参考姿势不一致，可能偏大/偏小。返回 (origin_cm, extent_cm) 或 None。
+    """
+    import unreal
+
+    comps = actor.get_components_by_class(unreal.SkeletalMeshComponent)
+    if not comps:
+        return None
+    comp = comps[0]
+    getter = getattr(comp, "get_skeletal_mesh_asset", None)
+    mesh = getter() if getter is not None else getattr(comp, "skeletal_mesh", None)
+    if mesh is None:
+        return None
+    try:
+        b = mesh.get_bounds()  # BoxSphereBounds
+        lo = (float(b.origin.x), float(b.origin.y), float(b.origin.z))
+        le = (float(b.box_extent.x), float(b.box_extent.y), float(b.box_extent.z))
+        world_tf = _component_world_transform(comp)
+        xs, ys, zs = [], [], []
+        for sx in (-1.0, 1.0):
+            for sy in (-1.0, 1.0):
+                for sz in (-1.0, 1.0):
+                    p = unreal.MathLibrary.transform_location(
+                        world_tf,
+                        unreal.Vector(lo[0] + sx * le[0], lo[1] + sy * le[1], lo[2] + sz * le[2]),
+                    )
+                    xs.append(float(p.x))
+                    ys.append(float(p.y))
+                    zs.append(float(p.z))
+    except Exception:
+        return None
+    origin = ((min(xs) + max(xs)) / 2.0, (min(ys) + max(ys)) / 2.0, (min(zs) + max(zs)) / 2.0)
+    extent = ((max(xs) - min(xs)) / 2.0, (max(ys) - min(ys)) / 2.0, (max(zs) - min(zs)) / 2.0)
+    return origin, extent
+
+
+def player_world_bounds(actor, player_bbox: dict):
+    """球员 bbox 数据源（player_bbox.source）：
+
+      "mesh"（默认）  —— 用 SkeletalMesh.get_bounds() 模型边界（贴合模型，随朝向变）。
+      "capsule"       —— 用 CapsuleComponent 并乘 width_scale/height_scale 缩放。
+    mesh 不可用时回退到 capsule 缩放。返回 (origin_cm, extent_cm)。
+    """
+    if (player_bbox or {}).get("source", "mesh") == "mesh":
+        mb = mesh_asset_world_bounds(actor)
+        if mb is not None:
+            return mb
+    origin_cm, extent_cm = get_world_bounds(actor)
+    ws = float((player_bbox or {}).get("width_scale", 1.0))
+    hs = float((player_bbox or {}).get("height_scale", 1.0))
+    return origin_cm, (extent_cm[0] * ws, extent_cm[1] * ws, extent_cm[2] * hs)
 
 
 def get_world_bounds(actor):
@@ -343,22 +426,20 @@ def build_object_annotation(
     球：若传入 ball_radius_m，直接用该半径生成球 bbox（不依赖 mesh bounds），
     用于球 mesh 资产包围盒数据异常的情况。
 
-    球员（player_bbox 非空）：球员身体是 SkeletalMesh，UE Python 无可用
-    bounds API，bbox 来自 CapsuleComponent（radius=35 → 70cm 宽，比真人肩宽
-    ~50cm 宽）。player_bbox.width_scale 把横向半宽缩为 radius×scale 以消除
-    肢体外余量；height_scale 缩纵向半高。默认各 1.0（保持胶囊原尺寸）。
+    球员（player_bbox 非空）：按 player_bbox.source 选择 bbox 数据源——
+      "mesh"（默认）：用 SkeletalMesh.get_bounds() 模型边界（严格贴合模型参考姿势）。
+      "capsule"：用 CapsuleComponent 乘 width_scale/height_scale 缩放
+        （胶囊 radius=35 → 70cm 宽，比真人肩宽 ~50cm 宽，width_scale 收窄消余量）。
     """
     if entity_id == "BALL" and ball_radius_m is not None:
         loc = actor.get_actor_location()
         r_cm = float(ball_radius_m) * 100.0
         origin_cm = (float(loc.x), float(loc.y), float(loc.z))
         extent_cm = (r_cm, r_cm, r_cm)
+    elif entity_id != "BALL" and player_bbox:
+        origin_cm, extent_cm = player_world_bounds(actor, player_bbox)
     else:
         origin_cm, extent_cm = get_world_bounds(actor)
-        if entity_id != "BALL" and player_bbox:
-            ws = float(player_bbox.get("width_scale", 1.0))
-            hs = float(player_bbox.get("height_scale", 1.0))
-            extent_cm = (extent_cm[0] * ws, extent_cm[1] * ws, extent_cm[2] * hs)
     origin_m = tuple(v * CM_TO_M for v in origin_cm)
     extent_m = tuple(v * CM_TO_M for v in extent_cm)
     corners = world_bbox_corners(origin_m, extent_m)

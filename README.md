@@ -225,10 +225,11 @@ py "D:/.../code/ue/import_grf_episode.py" --mode annotations
 | `mot_visibility_mode` | `unoccluded` | MOT visibility 策略 |
 | `ball_scale` | `null` | 球 actor 缩放覆盖（`null`=不覆盖，保持关卡实际 scale） |
 | `ball_radius_m` | `null` | 球半径（米）；设置后球 bbox 直接用该半径生成，不依赖 mesh bounds（`0.11`=GRF 球半径） |
-| `player_bbox.width_scale` | `0.7` | 球员 bbox 横向半宽 = 胶囊 radius × scale。胶囊 r=35→70cm 宽，比真人肩宽(~50cm)宽；0.7→≈49cm 贴合身体（可按视觉微调，越小越紧、可能露臂） |
-| `player_bbox.height_scale` | `1.0` | 球员 bbox 纵向半高 = 胶囊 half_height × scale。一般保持 1.0 |
+| `player_bbox.source` | `mesh` | 球员 bbox 数据源：`mesh`=用 `SkeletalMesh.get_bounds()` 模型边界；`capsule`=胶囊缩放 |
+| `player_bbox.width_scale` | `0.7` | 仅 `capsule` 模式：球员 bbox 横向半宽 = 胶囊 radius × scale。胶囊 r=35→70cm 宽，比真人肩宽(~50cm)宽；0.7→≈49cm 贴合身体 |
+| `player_bbox.height_scale` | `1.0` | 仅 `capsule` 模式：球员 bbox 纵向半高 = 胶囊 half_height × scale |
 
-> 说明：球员身体是 SkeletalMesh，UE Python 没有可用的 mesh bounds API（`get_local_bounds`/`get_actor_bounds` 均不可用/偏大），故球员 bbox 基于 CapsuleComponent 并缩放消除肢体外余量。调 `player_bbox` 后需重新 `--mode annotations` 并 `annotate-overlay` 目视校验。
+> 说明：球员身体是 SkeletalMesh，SkeletalMeshComponent 在 UE Python 没有可用的 bounds API（`get_local_bounds`/`get_actor_bounds` 不可用/偏大），但 **SkeletalMesh 资产有 `get_bounds()`**（模型参考姿势边界），`source="mesh"` 即用它的世界换算作为 bbox，严格贴合模型。参考姿势可能手臂张开（侧面偏宽）、且随角色朝向旋转而变，若视觉效果不理想可切 `capsule` 模式缩放胶囊。两种模式切换后需重新 `--mode annotations` 并 `annotate-overlay` 目视对比。
 
 ### 输出目录
 

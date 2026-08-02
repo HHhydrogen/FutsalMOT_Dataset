@@ -471,13 +471,6 @@ def _build_mrq_job(
                 "请把 [MRQ 诊断] 输出贴回。"
             )
 
-        # 诊断：打印 config 现有设置类（确认是否含渲染 pass）
-        try:
-            existing = config.get_all_settings()
-            names = sorted(type(s).__name__ for s in existing) if existing else []
-            print(f"  [MRQ] config 设置类: {names}")
-        except Exception:
-            pass
     except Exception as e:
         _print_mrq_members(config, "config")
         _print_mrq_members(job, "job")
@@ -537,60 +530,6 @@ def _ensure_custom_depth_stencil_enabled() -> None:
     )
 
 
-def _inspect_pie_actor_stencil() -> None:
-    """MRQ PIE 渲染期间调用：检查 PIE 世界里 actor 组件的 stencil 状态。
-
-    用于确认运行时在编辑器 actor 上设的 bRenderCustomDepth / CustomDepthStencilValue
-    是否真的带入了 MRQ 的 PIE 渲染世界。若 PIE 里是 False/0，说明值没带进去，
-    需换写入方式（Sequence 属性轨道 / 关卡保存等）。
-    """
-    import unreal
-
-    gw = None
-    for getter in (
-        lambda: getattr(unreal.EditorLevelLibrary, "get_game_world", lambda: None)(),
-        lambda: unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_game_world(),
-        lambda: unreal.get_editor_subsystem(unreal.LevelEditorSubsystem).get_game_world(),
-    ):
-        try:
-            gw = getter()
-            if gw is not None:
-                break
-        except Exception:
-            continue
-    if gw is None:
-        print("  [MRQ 诊断] 无法获取 PIE/game world")
-        return
-    actors = None
-    for getter in (
-        lambda: unreal.GameplayStatics.get_all_actors_of_class(gw, unreal.Actor),
-        lambda: unreal.SystemLibrary.get_all_actors_of_class(gw, unreal.Actor),
-    ):
-        try:
-            actors = getter()
-            if actors is not None:
-                break
-        except Exception:
-            continue
-    if actors is None:
-        print("  [MRQ 诊断] 无法枚举 PIE actor（GameplayStatics/SystemLibrary 均失败）")
-        return
-    found = 0
-    for a in actors:
-        label = a.get_actor_label() or a.get_name()
-        if "Player_L0" not in label and "Ball_01" not in label:
-            continue
-        for comp in a.get_components_by_class(unreal.SkeletalMeshComponent):
-            try:
-                rd = comp.get_editor_property("render_custom_depth")
-                sv = comp.get_editor_property("custom_depth_stencil_value")
-                print(f"  [MRQ 诊断] PIE {label} mesh: render_custom_depth={rd}, stencil={sv}")
-                found += 1
-            except Exception:
-                pass
-    print(f"  [MRQ 诊断] PIE stencil 检查完成（找到 {found} 个组件）")
-
-
 def _save_current_level() -> None:
     """保存当前关卡，把 actor 上运行时设置的 stencil 值写入磁盘。
 
@@ -635,9 +574,8 @@ def create_stencil_to_color_material(
     asset_path = f"{package_path}/{asset_name}"
     if unreal.EditorAssetLibrary.does_asset_exist(asset_path) and not force:
         if _material_is_valid(asset_path):
-            print(f"  [MRQ] 复用已有 stencil→颜色 材质: {asset_path}")
-            return asset_path
-        print("  [MRQ] 已有材质校验未通过（domain/SceneTexture 纹理不对），就地重建")
+            return asset_path  # 复用已有正确材质
+        # 校验未通过（domain/SceneTexture 纹理不对），就地重建
     if not unreal.EditorAssetLibrary.does_directory_exist(package_path):
         unreal.EditorAssetLibrary.make_directory(package_path)
     # 存在时就地清空表达式重建（避免 delete+create_asset 触发"覆写现有Object"对话框）
@@ -658,46 +596,34 @@ def create_stencil_to_color_material(
             return None
     try:
         mat.set_editor_property("material_domain", unreal.MaterialDomain.MD_POST_PROCESS)
-        print("  [MRQ] 材质 domain = PostProcess")
         stex = unreal.MaterialEditingLibrary.create_material_expression(
             mat, unreal.MaterialExpressionSceneTexture, -400.0, 0.0
         )
-        print(f"  [MRQ] 已创建 SceneTexture 节点: {type(stex).__name__}")
         tid = getattr(unreal.SceneTextureId, "PPI_CUSTOM_STENCIL", None)
-        if tid is not None:
+        if tid is None:
+            print("  WARNING: 未找到 SceneTextureId.PPI_CUSTOM_STENCIL")
+        else:
             # 属性名是 scene_texture_id（不是 texture_id）——UE 5.8 实测
             stex.set_editor_property("scene_texture_id", tid)
-            print("  [MRQ] 用 SceneTextureId.PPI_CUSTOM_STENCIL（scene_texture_id）")
-        else:
-            print("  WARNING: 未找到 SceneTextureId.PPI_CUSTOM_STENCIL")
-        try:
-            readback = stex.get_editor_property("scene_texture_id")
-            print(f"  [MRQ] SceneTexture scene_texture_id 读回: {readback}")
-        except Exception as e:
-            print(f"  WARNING: 读回 scene_texture_id 失败: {e}")
-        # CustomStencil.R / 255.0 → Emissive。
-        # 直接 CustomStencil → Emissive 会把 stencil 值(0~255)塞进 Emissive(0~1)导致
-        # 1~11 全部饱和成白色；先除以 255 归一化，PNG 输出时 R 通道 ≈ stencil 值。
+        # CustomStencil.R / 255.0 → Emissive。直接输出会把 stencil 值(0~255)塞进
+        # Emissive(0~1) 导致饱和，先除以 255 归一化。
         const255 = unreal.MaterialEditingLibrary.create_material_expression(
             mat, unreal.MaterialExpressionConstant, -200.0, -100.0
         )
         try:
             const255.set_editor_property("r", 255.0)
-        except Exception as e:
-            print(f"  WARNING: 设置 Constant 值失败: {e}")
+        except Exception:
+            pass
         divide = unreal.MaterialEditingLibrary.create_material_expression(
             mat, unreal.MaterialExpressionDivide, -200.0, 0.0
         )
-        # stex.R -> divide.A
         unreal.MaterialEditingLibrary.connect_material_expressions(stex, "R", divide, "A")
-        # const255 -> divide.B（输出名兜底 "" / Out）
         for out_name in ("", "Out", "output"):
             try:
                 unreal.MaterialEditingLibrary.connect_material_expressions(const255, out_name, divide, "B")
                 break
             except Exception:
                 continue
-        # divide -> 材质 EmissiveColor（post-process 材质主输出）
         try:
             unreal.MaterialEditingLibrary.connect_material_property(
                 divide, "Out", unreal.MaterialProperty.MP_EMISSIVE_COLOR
@@ -706,12 +632,10 @@ def create_stencil_to_color_material(
             unreal.MaterialEditingLibrary.connect_material_property(
                 divide, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR
             )
-        print("  [MRQ] 已连接 SceneTexture.R / 255 -> 材质 EmissiveColor")
         unreal.EditorAssetLibrary.save_loaded_asset(mat)
-        print(f"  [MRQ] 已创建/重建 stencil→颜色 材质: {asset_path}")
         return asset_path
-    except Exception as e:
-        print("  ERROR: 创建 stencil 材质失败，完整 traceback：")
+    except Exception:
+        print("  ERROR: 创建 stencil 材质失败：")
         traceback.print_exc()
         return None
 
@@ -905,11 +829,9 @@ def _configure_mask_job(
     else:
         config.find_or_add_setting_by_class(unreal.MoviePipelineImageSequenceOutput_PNG)
 
-    # 确保 Custom Depth-Stencil 在本次 MRQ 渲染期间开启（r.CustomDepth=3 = Enable with
-    # Stencil）。编辑器里的控制台命令不会自动带入 PIE，必须写在 job 的控制台变量里。
-    _enable_custom_depth_in_job(config)
-
     if mask_source == "post_process_material":
+        # stencil 方案需要渲染期间开启 Custom Depth-Stencil（r.CustomDepth=3）
+        _enable_custom_depth_in_job(config)
         if not post_process_material:
             raise RuntimeError(
                 "post_process_material 未设置：请填 stencil→颜色 材质资产路径"
@@ -1064,12 +986,7 @@ def _set_console_entry(entry_struct, name: str, value) -> bool:
 
 
 def _configure_object_id_pass(pass_setting) -> None:
-    """best-effort 配置 MoviePipelineObjectIdRenderPass：IdType=Actor + stencil 模式。
-
-    不同 UE 版本属性名 / 枚举值不同，全部 try/except 兜底，并在最后打印可用成员
-    便于校准。若某个版本没有 stencil 开关，输出可能是自动 hash ID（需按输出校准
-    decode，或用 post_process_material）。
-    """
+    """配置 MoviePipelineObjectIdRenderPass：IdType=Actor（逐 actor 分组）。"""
     import unreal
 
     id_type_enum = getattr(unreal, "MoviePipelineObjectIdPassIdType", None)
@@ -1083,15 +1000,6 @@ def _configure_object_id_pass(pass_setting) -> None:
                 except Exception:
                     pass
                 break
-    # 打印该 pass 的可用成员，便于确认 stencil 开关属性名
-    try:
-        names = sorted(
-            n for n in dir(pass_setting) if not n.startswith("_")
-            and any(k in n.lower() for k in ("stencil", "id", "identifier", "type", "material"))
-        )
-        print(f"  [MRQ] ObjectId pass 相关成员: {names[:40]}")
-    except Exception:
-        pass
 
 
 def _submit_render(subsystem, executor) -> bool:
@@ -1187,15 +1095,6 @@ class _AsyncRenderPipeline:
         self.jobs = prepared
 
         self.executor = executor
-        # 诊断：打印 executor 上可用的 delegate/渲染相关成员，便于按 UE 版本适配
-        try:
-            names = sorted(
-                n for n in dir(executor)
-                if any(k in n.lower() for k in ("delegate", "finished", "errored", "render"))
-            )
-            print("  [MRQ] executor 相关成员:", names)
-        except Exception:
-            pass
 
         # 绑定 delegate：MRQ 完成 / 出错时驱动后续阶段（而非同步等待）
         for delegate_name, cb in (
@@ -1291,7 +1190,6 @@ class _AsyncRenderPipeline:
             "stable_ticks": 0,
             "start": time.monotonic(),
             "seen_rendering": False,
-            "inspected": False,
         }
 
         def _on_tick(_delta):
@@ -1308,10 +1206,6 @@ class _AsyncRenderPipeline:
             st["last_total"] = total
             if rendering is True:
                 st["seen_rendering"] = True
-                if not st.get("inspected"):
-                    st["inspected"] = True
-                    # 检查 PIE 世界里 stencil 值是否生效（诊断 mask 全 0 的根因）
-                    _inspect_pie_actor_stencil()
             elapsed = time.monotonic() - st["start"]
 
             if rendering is False and present:
@@ -1497,27 +1391,26 @@ def render_sequences(
 
     mask_cfg = annotation_cfg.get("instance_mask") or {}
     mask_enabled = bool(mask_cfg.get("enabled", False))
-    mask_source = mask_cfg.get("mask_source", "post_process_material")
+    mask_source = mask_cfg.get("mask_source", "object_id_pass")
     post_process_material = mask_cfg.get("post_process_material")
     if mask_enabled:
-        _ensure_custom_depth_stencil_enabled()
-        if mapping_path is not None and Path(mapping_path).exists():
-            mapping = load_mapping(Path(mapping_path))
-            actors = find_all_actors(mapping)
-            _assign_custom_stencil(actors)
-            _save_current_level()  # 持久化 stencil 值，确保 PIE 渲染能读到
-        else:
-            print("  WARNING: instance_mask.enabled=true 但未提供有效 mapping_path，无法设置 stencil")
-        if mask_source == "post_process_material" and not post_process_material:
-            # 自动创建 stencil→颜色 post-process 材质（SceneTexture:SceneStencil）
-            post_process_material = create_stencil_to_color_material()
-            if post_process_material:
-                print(f"  [MRQ] 自动创建 stencil→颜色 材质: {post_process_material}")
+        if mask_source == "post_process_material":
+            # stencil 方案（fallback，实测本 5.8 不可用）需要 custom depth + actor stencil 值
+            _ensure_custom_depth_stencil_enabled()
+            if mapping_path is not None and Path(mapping_path).exists():
+                mapping = load_mapping(Path(mapping_path))
+                actors = find_all_actors(mapping)
+                _assign_custom_stencil(actors)
+                _save_current_level()
             else:
-                print(
-                    "  WARNING: 自动创建材质失败。请手动在编辑器建 'SceneTexture(SceneStencil)"
-                    " → EmissiveColor' 的 post-process 材质，填 instance_mask.post_process_material。"
-                )
+                print("  WARNING: instance_mask.enabled=true 但未提供有效 mapping_path，无法设置 stencil")
+            if not post_process_material:
+                post_process_material = create_stencil_to_color_material()
+                if post_process_material:
+                    print(f"  [MRQ] 自动创建 stencil→颜色 材质: {post_process_material}")
+                else:
+                    print("  WARNING: 自动创建 stencil 材质失败，请手动建材质并填 post_process_material")
+        # object_id_pass（默认）：Object ID + Cryptomatte EXR，无需 custom stencil
     else:
         print("instance_mask.enabled = false，跳过 mask 渲染（仅 RGB）")
 

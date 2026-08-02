@@ -24,7 +24,7 @@ code/
 │   ├── annotation_exporter.py    #   UE 内运行：读 Camera 标定与 Actor bounds 生成标注
 │   ├── render_episode.py         #   MRQ 异步渲染 RGB + Instance-ID Mask
 │   ├── instance_mask.py          #   纯 numpy：mask 解码 / bbox / 轮廓 / 多边形（pytest 可测）
-│   ├── debug_mask_pass.py        #   UE 探针：确认 MRQ mask pass 与解码参数
+│   ├── debug_object_id_exr.py    #   诊断：检查 Cryptomatte EXR 的 manifest/通道
 │   ├── camera_projection.py      #   纯数学：相机投影（pytest 可测）
 │   ├── annotation_utils.py       #   纯数学：bbox 裁剪 / track_id / mask_id 映射
 │   ├── dataset_export.py         #   纯 Python：JSONL / MOT 序列化与原子写入
@@ -245,7 +245,7 @@ uv run grf-ue annotate-masks G:/FutsalMOT_Dataset [--include-ball]
 | `player_bbox.height_scale` | `1.0` | 仅 `capsule` 模式：球员 bbox 纵向半高 = 胶囊 half_height × scale |
 | `instance_mask.enabled` | `true` | 是否在渲染时同步输出 Instance-ID Mask（`mask/`） |
 | `instance_mask.mask_source` | `object_id_pass` | `object_id_pass`（默认）=MoviePipelineObjectIdRenderPass + multilayer EXR（Cryptomatte，UE 5.8 实测可用），渲染后由 `grf-ue cryptomatte-to-mask` 转成 mask/；`post_process_material`=DeferredPass + stencil→颜色 post-process 材质（**实测本 5.8 不可用**，渲染全 0） |
-| `instance_mask.mask_channel` | `r` | mask PNG 中携带实例 ID 的通道（r/g/b/a/gray），用 `debug_mask_pass.py` 校准 |
+| `instance_mask.mask_channel` | `r` | mask PNG 中携带实例 ID 的通道（r/g/b/a/gray） |
 | `instance_mask.id_scale` / `id_offset` | `1.0` / `0.0` | 解码参数：像素值量化 = `round((v - id_offset) / id_scale)` |
 | `instance_mask.polygon_tolerance_px` | `1.0` | YOLO segmentation 多边形 RDP 简化容差（像素） |
 | `instance_mask.max_polygon_points` | `64` | 每个实例多边形最大点数（超出均匀抽样） |

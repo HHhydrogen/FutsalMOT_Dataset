@@ -71,6 +71,25 @@ PIE 里有 stencil 值(1~11) + custom depth 开启(r.CustomDepth=3) + 材质读 
 
 ---
 
+## ✅ 已解决（2026-08-03 更新）
+
+**根因**：UE 5.8 里 MRQ 的 custom depth/stencil 路线在本项目不可用——即使 PIE 里 stencil 值正确、`r.CustomDepth=3`、材质读 `PPI_CUSTOM_STENCIL`，`additional_post_process_materials` 输出的 mask 仍全 0；且 `MoviePipelinePostProcessPass` 在 UE 5.8 是结构体（非独立 render pass），无法作为独立 pass 使用。
+
+**解决方案（已跑通）**：改用 UE 原生 **Object ID Pass + multilayer EXR/Cryptomatte**。
+- `mask_source="object_id_pass"`：mask job = `MoviePipelineObjectIdRenderPass`（`id_type=ACTOR`）+ EXR(multilayer)。
+- 实测编码：manifest 在 EXR header `cryptomatte/*/manifest`（`{actor_label: "hex_id"}`）；实体 ID 是 float32，存于 `RGBA` 层 R 通道，`hex_id` = 该 float32 位模式的大端十六进制。
+- 新增 `grf-ue cryptomatte-to-mask`：把 `render_mask/*.exr` 转成 `mask/{frame}.png`（每个实体像素 = mask_id 1~11，背景 0），与现有 `annotate-masks` / validator 契约一致。
+
+**端到端验证（episode_smoke，3 帧，Camera_01）**：
+- mask 灰度值 = `[0,1,2,...,11]`（11 个实体全部命中）。
+- `annotate-masks` → 3/3 帧 bbox_source=instance_mask；每实体 bbox 由 mask 可见像素算出（R0 最近 77×160、球最小 6×12）。
+- `validate-annotations` → PASSED。
+- MOT gt.txt / YOLO det / YOLO seg / overlay 均正常。
+
+**后续正式流程**：UE `--mode full`（object_id_pass 渲 EXR）→ P1 `grf-ue cryptomatte-to-mask` → `grf-ue annotate-masks` → `grf-ue validate-annotations`。
+
+---
+
 ### 一句话结论
 
-P1 标注管线完整可用；UE 侧卡在「custom depth/stencil 值已进 PIE、开关正确、材质读对纹理，但 MRQ 渲染出的 mask 仍是全 0」，需从「MRQ 附加 post-process pass 是否渲染 custom depth」继续排查，或切到不依赖 stencil 的颜色材质方案。
+custom stencil + post-process 材质在 UE 5.8/MRQ 不可用（mask 全 0）；改用 **Object ID Pass + Cryptomatte EXR** 已完全跑通，P1 转换器 `cryptomatte-to-mask` 与现有标注管线无缝衔接。

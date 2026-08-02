@@ -10,6 +10,7 @@ dependencies = [
     "gfootball>=2.10.2",
     "gym<0.26",
     "numpy",
+    "openexr",  # 读取 Object ID Pass 的 Cryptomatte multilayer EXR
     "pillow",  # 读取 mask PNG（annotate-masks）/ annotate-overlay 调试可视化
     "pydantic",
     "six>=1.17.0",

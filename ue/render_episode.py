@@ -899,7 +899,11 @@ def _configure_mask_job(
         output.frame_rate = unreal.FrameRate(frame_rate, 1)
     except Exception:
         pass
-    config.find_or_add_setting_by_class(unreal.MoviePipelineImageSequenceOutput_PNG)
+    # 输出格式：object_id_pass（Cryptomatte）用 multilayer EXR；post_process_material 用 PNG
+    if mask_source == "object_id_pass":
+        _add_exr_output(config)
+    else:
+        config.find_or_add_setting_by_class(unreal.MoviePipelineImageSequenceOutput_PNG)
 
     # 确保 Custom Depth-Stencil 在本次 MRQ 渲染期间开启（r.CustomDepth=3 = Enable with
     # Stencil）。编辑器里的控制台命令不会自动带入 PIE，必须写在 job 的控制台变量里。
@@ -911,22 +915,28 @@ def _configure_mask_job(
                 "post_process_material 未设置：请填 stencil→颜色 材质资产路径"
                 "（或确认 create_stencil_to_color_material 自动创建成功）"
             )
-        deferred = config.find_or_add_setting_by_class(unreal.MoviePipelineDeferredPassBase)
         mat = unreal.load_asset(post_process_material)
         if mat is None:
             raise RuntimeError(
                 f"post_process_material 资产不存在: {post_process_material}"
             )
+        # DeferredPassBase：负责场景渲染，custom depth/stencil 在此写入。
+        config.find_or_add_setting_by_class(unreal.MoviePipelineDeferredPassBase)
+        # 独立 MoviePipelinePostProcessPass：直接输出材质结果（读取 custom stencil）。
+        # 不再用 additional_post_process_materials（结构体数组）——它输出的
+        # FinalImageM_StencilToID.* 实测全 0，怀疑其不在带 custom depth 的通道里渲染。
+        pp_cls = getattr(unreal, "MoviePipelinePostProcessPass", None)
+        if pp_cls is None:
+            raise RuntimeError("MoviePipelinePostProcessPass 不存在")
         try:
-            # additional_post_process_materials 是 MoviePipelinePostProcessPass 结构体数组
-            #（元素含 material + enabled），不能直接放 Material 对象
-            pp = unreal.MoviePipelinePostProcessPass()
-            pp.set_editor_property("material", mat)
-            pp.set_editor_property("enabled", True)
-            deferred.set_editor_property("additional_post_process_materials", [pp])
-            print(f"  [MRQ] mask pass: 附加 stencil→颜色 材质 {post_process_material}")
+            pp_pass = config.find_or_add_setting_by_class(pp_cls)
+            pp_pass.set_editor_property("material", mat)
+            pp_pass.set_editor_property("enabled", True)
+            print(
+                f"  [MRQ] mask pass: 独立 MoviePipelinePostProcessPass + {post_process_material}"
+            )
         except Exception as e:
-            raise RuntimeError(f"设置 additional_post_process_materials 失败: {e}")
+            raise RuntimeError(f"配置 MoviePipelinePostProcessPass 失败: {e}")
     else:
         # 默认 object_id_pass：MoviePipelineObjectIdRenderPass
         added = False
@@ -954,6 +964,30 @@ def _configure_mask_job(
     if not _set_job_config(job, config):
         _print_mrq_members(job, "job")
         raise RuntimeError("无法把 mask job 配置挂到 job")
+
+
+def _add_exr_output(config) -> None:
+    """为 mask job 添加 multilayer EXR 输出（Object ID / Cryptomatte 需要）。"""
+    import unreal
+
+    added = False
+    for cls_name in ("MoviePipelineImageSequenceOutput_EXR", "MoviePipelineImageSequenceOutput_OpenEXR"):
+        cls = getattr(unreal, cls_name, None)
+        if cls is None:
+            continue
+        try:
+            exr = config.find_or_add_setting_by_class(cls)
+            try:
+                exr.set_editor_property("multilayer", True)
+                print("  [MRQ] EXR 输出: multilayer=True")
+            except Exception:
+                pass
+            added = True
+            break
+        except Exception as e:
+            print(f"  [MRQ] 添加 {cls_name} 失败: {e}")
+    if not added:
+        raise RuntimeError("无法添加 EXR 输出（MoviePipelineImageSequenceOutput_EXR）")
 
 
 def _enable_custom_depth_in_job(config) -> None:

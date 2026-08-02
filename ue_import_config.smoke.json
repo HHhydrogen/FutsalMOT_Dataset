@@ -1,6 +1,6 @@
 {
-  "comment_episode": "smoke test：只渲 Camera_01，验证 Instance-ID Mask",
-  "episode": "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/outputs/episode_demo",
+  "comment_episode": "smoke test：3 步极小 episode，只渲 Camera_01，验证 Instance-ID Mask",
+  "episode": "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/outputs/episode_smoke",
 
   "mapping": "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/ue/actor_mapping.example.json",
 
@@ -49,7 +49,7 @@
     },
     "instance_mask": {
       "enabled": true,
-      "mask_source": "post_process_material",
+      "mask_source": "object_id_pass",
       "mask_channel": "r",
       "id_scale": 1.0,
       "id_offset": 0.0,

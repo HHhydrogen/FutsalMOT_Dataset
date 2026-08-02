@@ -214,5 +214,66 @@ def annotate_masks(
     typer.echo("ANNOTATE MASKS DONE")
 
 
+@app.command()
+def cryptomatte_to_mask(
+    annotation_dir: Path = typer.Argument(
+        ...,
+        help="标注输出目录（含多个 camera 子目录，每个含 render_mask/*.exr）",
+    ),
+    mapping: Path = typer.Option(
+        None, "--mapping", help="actor 映射 JSON；缺省读 ue_import_config.json",
+    ),
+    episode: Path = typer.Option(
+        None, "--episode", help="episode 目录（读时序）；缺省读 ue_import_config.json",
+    ),
+):
+    """把 Object ID Pass 的 Cryptomatte multilayer EXR 转为 mask/{frame}.png（mask_id 值）。
+
+    转换后即可用 `grf-ue annotate-masks` 生成 mask-primary bbox/分割标注。
+    """
+    import json as _json
+
+    from .cryptomatte import convert_render_mask_dir  # 先 import（会补 ue/ 到 sys.path）
+    from dataset_export import load_episode, load_mapping  # noqa: E402
+
+    cfg = {}
+    cfg_path = Path(__file__).resolve().parent.parent.parent / "ue_import_config.json"
+    if cfg_path.exists():
+        raw = _json.load(open(cfg_path, encoding="utf-8"))
+        cfg = {k: v for k, v in raw.items() if not k.startswith("comment_")}
+    mapping_path = mapping or Path(cfg.get("mapping", ""))
+    episode_path = episode or Path(cfg.get("episode", ""))
+    if not mapping_path.exists() or not episode_path.exists():
+        typer.echo(
+            "需要 --mapping 与 --episode（或 ue_import_config.json 中的映射/episode）",
+            err=True,
+        )
+        raise typer.Exit(1)
+    meta, _frames = load_episode(episode_path)
+    num_steps = int(meta["timing"]["num_steps"])
+    step_sec = float(meta["timing"]["source_step_seconds"])
+    fps = int(meta["timing"].get("playback_fps", 30))
+    mapping_dict = load_mapping(mapping_path)
+
+    cam_dirs = sorted(d.parent for d in annotation_dir.rglob("camera.json"))
+    if not cam_dirs:
+        typer.echo(f"ERROR: {annotation_dir} 下没有 camera 子目录", err=True)
+        raise typer.Exit(1)
+    total_ok = 0
+    for cam in cam_dirs:
+        rmask = cam / "render_mask"
+        mdir = cam / "mask"
+        if not rmask.exists():
+            typer.echo(f"  SKIP {cam.name}: 无 render_mask/")
+            continue
+        status, per = convert_render_mask_dir(rmask, mapping_dict, mdir, num_steps, step_sec, fps)
+        typer.echo(f"  [{status.upper()}] {cam.name}: {len(per)} 帧 mask 已生成")
+        if status == "success":
+            total_ok += 1
+    typer.echo(f"cryptomatte-to-mask 完成（{total_ok}/{len(cam_dirs)} camera）")
+    if total_ok == 0:
+        raise typer.Exit(1)
+
+
 if __name__ == "__main__":
     app()

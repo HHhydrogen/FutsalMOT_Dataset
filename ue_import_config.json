@@ -83,7 +83,7 @@
     "comment_render_rgb": "MRQ 自动渲染 RGB（--mode full / render 时使用）；分辨率/帧率默认复用 image_width/image_height 与 playback_fps；渲染前需为每个 Sequence 手动设置 Camera Cut",
     "instance_mask": {
       "enabled": true,
-      "mask_source": "post_process_material",
+      "mask_source": "object_id_pass",
       "mask_channel": "r",
       "id_scale": 1.0,
       "id_offset": 0.0,

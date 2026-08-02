@@ -98,6 +98,7 @@ dependencies = [
     { name = "gfootball" },
     { name = "gym" },
     { name = "numpy" },
+    { name = "openexr" },
     { name = "pillow" },
     { name = "pydantic" },
     { name = "six" },
@@ -114,6 +115,7 @@ requires-dist = [
     { name = "gfootball", specifier = ">=2.10.2" },
     { name = "gym", specifier = "<0.26" },
     { name = "numpy" },
+    { name = "openexr" },
     { name = "pillow" },
     { name = "pydantic" },
     { name = "six", specifier = ">=1.17.0" },
@@ -225,6 +227,25 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/cf/4c/c73f828fdbcd37eaf21d08fa852544a3ca7c2dbb3ea76873d64f2ea413d1/opencv_python-5.0.0.93-cp37-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:c8de2dec111122a02e8beb28e16c31904992dfd6186560b142a92c71403c1039", size = 73783032, upload-time = "2026-07-02T06:55:03.415Z" },
     { url = "https://files.pythonhosted.org/packages/e2/4b/edaf83b996ca5a1a3d8ccad485706b9c6d4742b13b9c4586bf1c1e7d9423/opencv_python-5.0.0.93-cp37-abi3-win32.whl", hash = "sha256:4b4b1a34c79bf8d3738e3cfe9a9e67b51a79663f6b692cbdad8c31f570da4157", size = 35564734, upload-time = "2026-07-02T05:49:57.704Z" },
     { url = "https://files.pythonhosted.org/packages/21/f0/9fa6e85cb10c8eb36a0222d27e50fe381b86ce49a55446bf39f491727564/opencv_python-5.0.0.93-cp37-abi3-win_amd64.whl", hash = "sha256:f90ba04b8f73bc5c3814037699739f0156f597338a98f05956c684e7c3ca10d2", size = 44000345, upload-time = "2026-07-02T05:49:54.971Z" },
+]
+
+[[package]]
+name = "openexr"
+version = "3.4.13"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ac/c4/11e2377b53c195136e76186c98ea1756a92d4fba01f241bc8741868d6833/openexr-3.4.13.tar.gz", hash = "sha256:ae5135e39ff0b9086a56e02f3d8b5cf52c5ca7cfcde5e57080b1c12c82e3ec8a", size = 25618192, upload-time = "2026-06-19T19:13:46.099Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b9/ef/cd31d0cee00976b2aa6eba97a1d4f25ebc48d6842dab409948a1ba2602d3/openexr-3.4.13-cp39-cp39-macosx_10_15_universal2.whl", hash = "sha256:605b0d82343c0089ca2bd3265dbbac762e573a0ab26181c03ff610ae65792c15", size = 2112430, upload-time = "2026-06-19T19:13:29.809Z" },
+    { url = "https://files.pythonhosted.org/packages/89/7e/49442c35ad0ad21ac1141c133ec7e53a7e51471b3dc13398c535730335e2/openexr-3.4.13-cp39-cp39-macosx_10_15_x86_64.whl", hash = "sha256:155c6a1b214230412ec6d02ec3900d2f56654371c1211969dbe374e3636ba12e", size = 1120008, upload-time = "2026-06-19T19:13:31.644Z" },
+    { url = "https://files.pythonhosted.org/packages/54/3a/982f7da01dba048f9bb96f72f47b9a6bd37a8c0d324a019f5958644372f7/openexr-3.4.13-cp39-cp39-macosx_11_0_arm64.whl", hash = "sha256:cf9ce046053b1e7fe40ec1dd07888241852dc772523df0d59b62c5db781d2be1", size = 1000278, upload-time = "2026-06-19T19:13:33.735Z" },
+    { url = "https://files.pythonhosted.org/packages/82/65/468f9de9602736ae56a47cffcecf07eee9e6e05c4141408a42e23fc52a68/openexr-3.4.13-cp39-cp39-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:e59b07e7cb65182c328435d9911977543a95a6d23c07549c6b33b2c4df0fb4a7", size = 1149357, upload-time = "2026-06-19T19:13:35.978Z" },
+    { url = "https://files.pythonhosted.org/packages/82/4c/f0be7780a4fb2ffe4ad0ece53fc5daaa1cb80200f7d5aa50e31fec919db6/openexr-3.4.13-cp39-cp39-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:23832a0c9e81f824890316d084698a1e824f438589587a9170a426d97ecbad56", size = 1276820, upload-time = "2026-06-19T19:13:38.09Z" },
+    { url = "https://files.pythonhosted.org/packages/00/7a/06d44dd8813482a614ca723dc22bf8bfc2ea4cd512d31b28809b89dbc8f8/openexr-3.4.13-cp39-cp39-musllinux_1_2_aarch64.whl", hash = "sha256:57880660814997b562760904e47e6fcb420c040d34e60b1a84b1e7f971a42391", size = 2133910, upload-time = "2026-06-19T19:13:40.161Z" },
+    { url = "https://files.pythonhosted.org/packages/03/ef/dc374ded65cdc97620d19a4990e5e9823b647fa53e1e30bc565b200c21a0/openexr-3.4.13-cp39-cp39-musllinux_1_2_x86_64.whl", hash = "sha256:faaf2c1237c15d49d1dd7179886c352954091ea031f0cdccf3aec7c21c43d60a", size = 2314152, upload-time = "2026-06-19T19:13:42.047Z" },
+    { url = "https://files.pythonhosted.org/packages/6f/78/3bec6a7eef203443d55429fb10983e91b014e457da34e846fc1d4642fde6/openexr-3.4.13-cp39-cp39-win_amd64.whl", hash = "sha256:70f8290e77319f30ba1f75a960d7e9011a20859d8ffa2b7c4d6f3b44acc589e5", size = 720733, upload-time = "2026-06-19T19:13:43.815Z" },
 ]
 
 [[package]]

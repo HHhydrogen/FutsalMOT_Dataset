@@ -15,8 +15,9 @@ MRQ Python API 在不同 UE 版本命名/结构不同，本模块用多级 fallb
 
 重要：渲染必须异步。提交 MRQ 后立即返回，后续阶段（复制 RGB / 写完成标记）由
 Movie Render Queue 的 finished/error delegate 回调驱动，并有 slate post-tick
-watchdog 兜底（实测 UE 5.8 finished delegate 可能不触发）。PIE 渲染窗口需要
-编辑器主线程持续 tick 才能推进，任何 time.sleep / Event.wait 同步阻塞都会卡死渲染。
+watchdog 兜底。delegate 回调须用与委托一致的显式签名（不能用 *args），否则
+UE 5.8 绑定会报 "incorrect number of arguments" 而失败。PIE 渲染窗口需要编辑器
+主线程持续 tick 才能推进，任何 time.sleep / Event.wait 同步阻塞都会卡死渲染。
 """
 
 import shutil
@@ -539,6 +540,7 @@ class _AsyncRenderPipeline:
                 continue
             try:
                 delegate.add_callable(cb)
+                print(f"  已绑定 {delegate_name}")
             except Exception as e:
                 print(f"  WARNING: 绑定 {delegate_name} 失败: {e}")
 
@@ -559,17 +561,17 @@ class _AsyncRenderPipeline:
 
     # ── delegate 回调（游戏线程触发，可安全访问 unreal 与文件系统）──
 
-    def _on_finished(self, *args):
-        """MRQ 整批渲染结束。args 兼容不同 UE 版本，通常为 (executor, success)。"""
+    def _on_finished(self, executor, success):
+        """MRQ 整批渲染结束。签名与 on_executor_finished_delegate 一致：(executor, success)。
+
+        UE 5.8 的 delegate 绑定会检查回调签名：必须是显式参数，不能用 *args（变参
+        计为 0 个形参，报 "Callable has the incorrect number of arguments
+        (expected 2, got 0)"，导致绑定失败、回调永不触发）。
+        """
         if self.finished:
             return
         try:
-            success = True
-            if len(args) > 1:
-                try:
-                    success = bool(args[1])
-                except Exception:
-                    success = True
+            print(f"  [MRQ] on_executor_finished_delegate 回调触发（success={success}）")
             if not success:
                 self._finalize(failed=True, reason="MRQ finished 委托报告 success=False")
                 return
@@ -580,20 +582,22 @@ class _AsyncRenderPipeline:
             print(f"  [MRQ 回调异常] _on_finished: {e}")
             traceback.print_exc()
 
-    def _on_errored(self, *args):
-        """MRQ 渲染出错（不中断最终收尾，成败由 finished 委托决定）。"""
+    def _on_errored(self, executor, pipeline, is_fatal, errors):
+        """MRQ 渲染出错（不中断最终收尾，成败由 finished 委托决定）。
+
+        签名与 on_executor_errored_delegate 一致：
+        (executor, pipeline, is_fatal, errors)。errors 为 MRQ 控制台输出条目列表。
+        """
         try:
-            parts = []
-            for a in args[1:]:
-                try:
-                    s = str(a)
-                    if s:
-                        parts.append(s)
-                except Exception:
-                    pass
-            if parts:
-                self.error_messages.append(" | ".join(parts))
-                print(f"  [MRQ 错误] {' | '.join(parts)}")
+            try:
+                entries = list(errors)
+            except TypeError:
+                entries = [errors]
+            parts = [str(e) for e in entries if str(e)]
+            if not parts:
+                parts.append(str(errors))
+            self.error_messages.append(" | ".join(parts))
+            print(f"  [MRQ 错误] {' | '.join(parts)}")
         except Exception as e:
             print(f"  [MRQ 回调异常] _on_errored: {e}")
             traceback.print_exc()
@@ -603,8 +607,9 @@ class _AsyncRenderPipeline:
     def _start_completion_watchdog(self):
         """注册 slate post-tick 兜底：finished delegate 不触发时也能收尾。
 
-        实测（UE 5.8）MRQ 渲染能完成、PNG 已输出，但 on_executor_finished_delegate
-        未触发回调。watchdog 每编辑帧 tick 一次，全部为非阻塞轮询（绝不 sleep），
+        兜底：delegate 绑定须用显式签名，若绑定失败（UE 5.8 拒绝 *args 变参，
+        报 "incorrect number of arguments"），finished 回调不触发，由 watchdog
+        完成收尾。watchdog 每编辑帧 tick 一次，全部为非阻塞轮询（绝不 sleep），
         判定条件（满足其一即收尾）：
           1. executor 不再渲染 且 所有 camera 的目标帧已输出；
           2. is_rendering API 不可用 且 目标帧齐全 且 文件数 ~20s 无变化；
@@ -637,10 +642,12 @@ class _AsyncRenderPipeline:
             elapsed = time.monotonic() - st["start"]
 
             if rendering is False and present:
+                print("  [MRQ] watchdog：executor 不再渲染且目标帧齐全，开始收尾")
                 self._copy_and_finalize()
                 return False
             if rendering is None and present and st["stable_ticks"] >= 1200:
-                self._copy_and_finalize()  # ~20s 无变化，兜底收尾
+                print("  [MRQ] watchdog：文件数稳定兜底，开始收尾")
+                self._copy_and_finalize()
                 return False
             if elapsed > 1800.0:
                 print("  WARNING: MRQ 渲染等待超时（30 分钟），按当前文件收尾")

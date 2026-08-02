@@ -49,7 +49,7 @@
   "comment_annotation_export": "CV 标注导出配置（--mode annotations 时使用）",
   "annotation_export": {
     "enabled": true,
-    "output_dir": "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/outputs/dataset",
+    "output_dir": "G:/FutsalMOT_Dataset",
     "image_width": 1920,
     "image_height": 1080,
     "cameras": ["CineCam_01", "CineCam_02", "CineCam_03", "CineCam_04"],
@@ -69,7 +69,7 @@
       "file_name_format": "{frame_number}",
       "zero_pad_frame_numbers": 6
     },
-    "comment_output_dir": "输出为 <output_dir>/<episode_id>/<camera_id>/{camera.json, annotations.jsonl, img1/, gt/gt.txt, seqinfo.ini}",
+    "comment_output_dir": "输出为 <output_dir>/<episode_id>/<camera_id>/{camera.json, annotations.jsonl, img1/, gt/gt.txt, seqinfo.ini}；必须放在 UE Content 之外（含 img1/ 与 MRQ render/ 的 PNG），否则 UE 会把 PNG 当 Texture2D 资产自动导入",
     "comment_frame_end": "开区间；null 表示到最后一帧。frame_start/frame_end 均为 0 基 GRF step",
     "comment_mot_visibility_mode": "unoccluded=写 1.0（未建模遮挡）；truncation=裁剪面积/原始面积（仅边界截断）",
     "comment_ball_scale": "球 actor 缩放覆盖（null=不覆盖，保持关卡实际 scale）",

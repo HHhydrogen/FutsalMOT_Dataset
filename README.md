@@ -328,7 +328,7 @@ py "D:/.../code/ue/import_grf_episode.py" --mode render
 
 **异步执行**：渲染是**异步**的——脚本把所有 Sequence 加入同一个 MRQ queue 并提交后**立即返回**，不阻塞编辑器主线程（MRQ 的 PIE 渲染窗口需要编辑器主线程持续 tick 才能推进，任何 `time.sleep`/`Event.wait` 同步阻塞都会让渲染卡死）。渲染完成后自动把渲染帧复制到各 camera 的 `img1/`，并写完成标记 `<output_dir>/<episode_id>/render_summary.json`（记录 `status`：`success` / `partial` / `failed`、各 camera 帧数与 annotation 帧数一致性）。渲染期间请保持编辑器运行；完成后查看控制台汇总与 `render_summary.json`。
 
-**完成检测**：正常路径由 MRQ 的 `on_executor_finished_delegate` 回调驱动收尾；部分 UE 版本该 delegate 不触发（UE 5.8 实测如此），因此脚本同时注册了一个 **slate post-tick watchdog**——每编辑帧非阻塞检查（不再渲染 且 目标帧齐全 / 文件数长期稳定 / 30 分钟硬超时），命中即完成同样的收尾。两条路径幂等，只收尾一次。
+**完成检测**：正常路径由 MRQ 的 `on_executor_finished_delegate` 回调驱动收尾（回调须用与委托一致的显式签名——UE 5.8 会拒绝 `*args` 变参并报 "incorrect number of arguments"）。脚本同时注册了一个 **slate post-tick watchdog** 兜底——每编辑帧非阻塞检查（不再渲染 且 目标帧齐全 / 文件数长期稳定 / 30 分钟硬超时），命中即完成同样的收尾。两条路径幂等，只收尾一次。
 
 渲染使用 UE 的 **Movie Render Queue（MRQ）**，通过 `annotation_export.render_rgb` 配置：
 
@@ -358,7 +358,7 @@ uv run python ue/recover_render.py
 
 ```powershell
 uv sync --extra overlay   # 安装 pillow（可选）
-uv run grf-ue annotate-overlay outputs/dataset/episode_0001/Camera_01 --include-ball
+uv run grf-ue annotate-overlay G:/FutsalMOT_Dataset/episode_0001/Camera_01 --include-ball
 ```
 
 把 bbox + entity_id + track_id 画到 `img1/` 的 RGB 帧上，输出到 `debug/000001_bbox.png`。没有 RGB 时跳过。
@@ -366,7 +366,7 @@ uv run grf-ue annotate-overlay outputs/dataset/episode_0001/Camera_01 --include-
 ### 验证
 
 ```powershell
-uv run grf-ue validate-annotations outputs/dataset
+uv run grf-ue validate-annotations G:/FutsalMOT_Dataset
 ```
 
 检查 bbox 合法性、frame_index 连续性、entity↔track 双向一致、MOT 行合法、resolution 一致等。
@@ -392,11 +392,11 @@ uv run pytest
 uv run pytest tests/test_validator.py -v
 
 # 验证 CV 标注输出目录
-uv run grf-ue validate-annotations outputs/dataset
+uv run grf-ue validate-annotations G:/FutsalMOT_Dataset
 
 # 调试可视化（需要 pillow，可选依赖）
 uv sync --extra overlay
-uv run grf-ue annotate-overlay outputs/dataset/episode_0001/Camera_01 --include-ball
+uv run grf-ue annotate-overlay G:/FutsalMOT_Dataset/episode_0001/Camera_01 --include-ball
 ```
 
 ## 当前阶段

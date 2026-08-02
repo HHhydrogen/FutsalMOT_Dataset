@@ -30,8 +30,8 @@ uv run grf-ue export --config configs/mvp_builtin_5v5.json --output outputs/epis
 uv run grf-ue validate outputs/episode_0001
 uv run pytest                             # 运行全部测试
 uv run pytest tests/test_validator.py -v  # 运行单个测试文件
-uv run grf-ue validate-annotations outputs/dataset   # 验证 CV 标注目录
-uv sync --extra overlay && uv run grf-ue annotate-overlay outputs/dataset/episode_0001/Camera_01  # debug 可视化
+uv run grf-ue validate-annotations G:/FutsalMOT_Dataset   # 验证 CV 标注目录（数据集在 UE Content 之外）
+uv sync --extra overlay && uv run grf-ue annotate-overlay G:/FutsalMOT_Dataset/episode_0001/Camera_01  # debug 可视化
 ```
 
 P2 脚本**在 Unreal Editor 内**（Python Console）运行，绝不在 .venv 中运行：

@@ -1,25 +1,25 @@
-"""Configuration model for GRF episode export."""
+"""GRF episode 导出的配置模型。"""
 
 from pydantic import BaseModel, Field
 
 
 class ExportConfig(BaseModel):
-    """Configuration for a single GRF episode export."""
+    """单个 GRF episode 导出的配置。"""
 
-    scenario: str = Field(..., description="GRF scenario name, e.g. '5_vs_5'")
-    seed: int = Field(42, description="Random seed for reproducibility")
-    num_steps: int = Field(300, description="Number of steps to run")
-    playback_fps: int = Field(30, description="Target Unreal Engine playback FPS")
-    field_length_m: float = Field(40.0, description="UE field length in meters")
-    field_width_m: float = Field(20.0, description="UE field width in meters")
-    render: bool = Field(False, description="Whether to render game frames")
-    write_video: bool = Field(False, description="Whether to write video dumps")
+    scenario: str = Field(..., description="GRF 场景名，例如 '5_vs_5'")
+    seed: int = Field(42, description="随机种子，用于可复现")
+    num_steps: int = Field(300, description="要运行的步数")
+    playback_fps: int = Field(30, description="Unreal Engine 目标回放帧率")
+    field_length_m: float = Field(40.0, description="UE 场地长度（米）")
+    field_width_m: float = Field(20.0, description="UE 场地宽度（米）")
+    render: bool = Field(False, description="是否渲染游戏画面")
+    write_video: bool = Field(False, description="是否录制视频")
     dump_full_raw_observation: bool = Field(
-        False, description="Whether to dump full raw observations for debugging"
+        False, description="是否导出完整原始观测，用于调试"
     )
     number_of_left_players_agent_controls: int = Field(
-        0, description="Number of left players controlled by agent (0 = built-in AI)"
+        0, description="由 agent 控制的左队球员数（0 = 全部内置 AI）"
     )
     number_of_right_players_agent_controls: int = Field(
-        0, description="Number of right players controlled by agent (0 = built-in AI)"
+        0, description="由 agent 控制的右队球员数（0 = 全部内置 AI）"
     )

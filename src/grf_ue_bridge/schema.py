@@ -1,4 +1,4 @@
-"""Data models for the GRF-UE episode format."""
+"""GRF-UE episode 格式的数据模型。"""
 
 from __future__ import annotations
 
@@ -8,17 +8,17 @@ from pydantic import BaseModel, Field
 
 
 class EntityDefinition(BaseModel):
-    """Definition of a single entity (player or ball) in the episode."""
+    """单个实体（球员或球）在 episode 中的定义。"""
 
-    id: str = Field(..., description="Entity identifier, e.g. 'L0', 'R3', 'BALL'")
-    team: Optional[str] = Field(None, description="Team identifier: 'left', 'right', or null for ball")
-    source_index: Optional[int] = Field(None, description="Index within the source observation array")
-    role: Optional[str] = Field(None, description="Player role name if known, e.g. 'goalkeeper'")
-    is_goalkeeper: bool = Field(False, description="Whether this entity is a goalkeeper")
+    id: str = Field(..., description="实体标识，例如 'L0'、'R3'、'BALL'")
+    team: Optional[str] = Field(None, description="队伍标识：'left'、'right'，球为 null")
+    source_index: Optional[int] = Field(None, description="在源观测数组中的下标")
+    role: Optional[str] = Field(None, description="球员角色名（如已知），例如 'goalkeeper'")
+    is_goalkeeper: bool = Field(False, description="该实体是否为守门员")
 
     @classmethod
     def from_grf_role(cls, role_id: int, prefix: str, index: int) -> "EntityDefinition":
-        """Create an EntityDefinition from a GRF role integer."""
+        """根据 GRF 角色整数创建 EntityDefinition。"""
         role_map = {
             0: "goalkeeper",
             1: "center_back",
@@ -44,7 +44,7 @@ class EntityDefinition(BaseModel):
 
 
 class SourceInfo(BaseModel):
-    """Information about the source environment and code."""
+    """关于源环境与代码的信息。"""
 
     environment: str = "google_research_football"
     scenario: str = ""
@@ -55,43 +55,41 @@ class SourceInfo(BaseModel):
 
 
 class TimingInfo(BaseModel):
-    """Timing information for the episode."""
+    """episode 的时序信息。"""
 
-    source_step_seconds: float = Field(..., description="Duration of one GRF step in seconds")
-    playback_fps: int = Field(30, description="Target playback FPS")
-    num_steps: int = Field(300, description="Number of steps in this episode")
+    source_step_seconds: float = Field(..., description="单个 GRF 步的时长（秒）")
+    playback_fps: int = Field(30, description="目标回放帧率")
+    num_steps: int = Field(300, description="本 episode 的步数")
 
 
 class FieldInfo(BaseModel):
-    """Field dimensions and coordinate system."""
+    """场地尺寸与坐标系。"""
 
-    length_m: float = Field(40.0, description="Field length in meters")
-    width_m: float = Field(20.0, description="Field width in meters")
-    origin: str = Field("center", description="Coordinate origin location")
+    length_m: float = Field(40.0, description="场地长度（米）")
+    width_m: float = Field(20.0, description="场地宽度（米）")
+    origin: str = Field("center", description="坐标原点位置")
     x_range_m: List[float] = Field(default_factory=lambda: [-20.0, 20.0])
     y_range_m: List[float] = Field(default_factory=lambda: [-10.0, 10.0])
 
 
 class CoordinateTransformNote(BaseModel):
-    """Documentation of the coordinate transform applied."""
+    """所应用的坐标变换的说明。"""
 
-    grf_normalized_range: str = "[-1, 1] for pitch-local x/y; z is engine units (Z_FIELD_SCALE=1)"
+    grf_normalized_range: str = "场地局部坐标的 x/y 为 [-1, 1]；z 为引擎单位（Z_FIELD_SCALE=1）"
     conversion: str = (
-        "meter_x = grf_x * half_field_length; "
-        "meter_y = grf_y * half_field_width; "
-        "meter_z = grf_z (passed through, Z_FIELD_SCALE=1)"
+        "meter_x = grf_x * half_field_length；"
+        "meter_y = grf_y * half_field_width；"
+        "meter_z = grf_z（原样透传，Z_FIELD_SCALE=1）"
     )
-    player_z: str = "fixed to 0"
+    player_z: str = "固定为 0"
     ball_z_note: str = (
-        "GRF ball_z is passed through directly because Z_FIELD_SCALE=1 "
-        "and engine Z is already in approximate meters. "
-        "Source grf_ball_z values: [x, y, z] from GRF observation are "
-        "recorded in meta.coordinate_transform for reference."
+        "GRF 的球 z 直接透传，因为 Z_FIELD_SCALE=1 且引擎 z 已近似为米。"
+        "GRF 观测中的源球 z 值 [x, y, z] 会记录在 meta.coordinate_transform 中供参考。"
     )
 
 
 class Meta(BaseModel):
-    """Top-level metadata for a GRF-UE episode."""
+    """GRF-UE episode 的顶层元数据。"""
 
     schema_: str = Field("grf_ue_episode", alias="schema")
     version: int = 1
@@ -108,24 +106,24 @@ class Meta(BaseModel):
 
 
 class BallFrame(BaseModel):
-    """Ball state at a single frame."""
+    """单帧中球的状态。"""
 
-    position_m: List[float] = Field(..., description="Ball position in meters [x, y, z]")
+    position_m: List[float] = Field(..., description="球的米坐标 [x, y, z]")
     source_grf_position: List[float] = Field(
         default_factory=lambda: [0.0, 0.0, 0.0],
-        description="Raw GRF observation position [grf_x, grf_y, grf_z] for reference",
+        description="原始 GRF 观测位置 [grf_x, grf_y, grf_z]，供参考",
     )
 
 
 class PlayerFrame(BaseModel):
-    """Player state at a single frame."""
+    """单帧中球员的状态。"""
 
-    id: str = Field(..., description="Entity identifier matching EntityDefinition.id")
-    position_m: List[float] = Field(..., description="Player position in meters [x, y, z]")
+    id: str = Field(..., description="实体标识，与 EntityDefinition.id 对应")
+    position_m: List[float] = Field(..., description="球员的米坐标 [x, y, z]")
 
 
 class Frame(BaseModel):
-    """A single frame of episode data."""
+    """episode 数据中的单个帧。"""
 
     step: int = Field(..., ge=0)
     time_seconds: float = Field(..., ge=0.0)
@@ -135,7 +133,7 @@ class Frame(BaseModel):
 
 
 def create_ball_entity() -> EntityDefinition:
-    """Create the ball entity definition."""
+    """创建球的实体定义。"""
     return EntityDefinition(
         id="BALL",
         team=None,

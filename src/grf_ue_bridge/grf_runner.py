@@ -1,4 +1,4 @@
-"""Run a Google Research Football environment and collect raw observations."""
+"""运行 Google Research Football 环境并采集原始观测。"""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import numpy as np
 
 @dataclass
 class StepSnapshot:
-    """Captured state from one environment step."""
+    """一个环境步中捕获的状态。"""
 
     step: int
     observation: Dict[str, Any]
@@ -21,7 +21,7 @@ class StepSnapshot:
 
 @dataclass
 class EpisodeResult:
-    """Complete episode data collected from GRF."""
+    """从 GRF 采集到的完整 episode 数据。"""
 
     scenario: str
     seed: int
@@ -31,27 +31,27 @@ class EpisodeResult:
     snapshots: List[StepSnapshot] = field(default_factory=list)
 
 
-_BUILTIN_AI_ACTION_INDEX = 19  # action_builtin_ai in action_set='v2'
+_BUILTIN_AI_ACTION_INDEX = 19  # action_set='v2' 中的 action_builtin_ai
 
 
 def create_env(scenario: str, seed: int, render: bool = False, **kwargs):
-    """Create a GRF environment with built-in AI only.
+    """创建一个仅使用内置 AI 的 GRF 环境。
 
-    Uses action_set='v2' and controls 1 left player with builtin_ai
-    actions, so all players use built-in AI while we get observations.
+    使用 action_set='v2'，并只控制 1 名左队球员（动作恒为 builtin_ai），
+    这样所有球员都使用内置 AI，而我们仍能拿到完整观测。
 
     Args:
-        scenario: GRF scenario name (e.g. '5_vs_5').
-        seed: Random seed.
-        render: Whether to render.
-        **kwargs: Additional args passed to create_environment.
+        scenario: GRF 场景名（例如 '5_vs_5'）。
+        seed: 随机种子。
+        render: 是否渲染。
+        **kwargs: 传给 create_environment 的额外参数。
 
     Returns:
-        A GRF environment instance.
+        一个 GRF 环境实例。
     """
     from gfootball.env import create_environment
 
-    # Remove user-supplied control-player kwargs (we force builtin_ai mode)
+    # 移除用户传入的控制球员相关参数（我们强制使用 builtin_ai 模式）
     force_kwargs = {
         "number_of_left_players_agent_controls": 1,
         "number_of_right_players_agent_controls": 0,
@@ -81,21 +81,20 @@ def run_episode(
     builtin_ai_action_index: int = _BUILTIN_AI_ACTION_INDEX,
     **kwargs,
 ) -> EpisodeResult:
-    """Run one episode in a GRF environment and record all steps.
+    """在 GRF 环境中运行一个 episode 并记录所有步。
 
-    All players are controlled by built-in AI. One left player is nominally
-    controlled by us but receives the builtin_ai action, so behaviour is
-    identical to full built-in AI gameplay.
+    所有球员都由内置 AI 控制。我们名义上控制 1 名左队球员，但给它发送
+    builtin_ai 动作，因此行为与完全内置 AI 对局一致。
 
     Args:
-        scenario: GRF scenario name (e.g. '5_vs_5').
-        seed: Random seed.
-        render: Whether to render.
-        builtin_ai_action_index: Action index for built-in AI (19 for v2).
-        **kwargs: Additional args passed to create_environment.
+        scenario: GRF 场景名（例如 '5_vs_5'）。
+        seed: 随机种子。
+        render: 是否渲染。
+        builtin_ai_action_index: 内置 AI 的动作索引（v2 为 19）。
+        **kwargs: 传给 create_environment 的额外参数。
 
     Returns:
-        EpisodeResult containing all captured snapshots.
+        包含所有捕获快照的 EpisodeResult。
     """
     env = create_env(scenario, seed, render, **kwargs)
     obs = env.reset()
@@ -105,11 +104,11 @@ def run_episode(
     steps_left_at_start = 0
 
     for step in range(num_steps):
-        # Use builtin_ai action for all controlled players
+        # 对所有受控球员使用 builtin_ai 动作
         actions = [builtin_ai_action_index] * len(obs)
 
         obs, rew, done, info = env.step(actions)
-        ob = obs[0]  # observation for the controlled player
+        ob = obs[0]  # 受控球员的观测
 
         if step == 0:
             steps_left_at_start = int(ob["steps_left"])
@@ -143,9 +142,9 @@ def run_episode(
 
 
 def _extract_observation(raw_obs: dict) -> Dict[str, Any]:
-    """Extract and convert relevant fields from raw observation.
+    """从原始观测中提取并转换相关字段。
 
-    Converts numpy arrays to lists for JSON serialization.
+    将 numpy 数组转换为列表以便 JSON 序列化。
     """
     result: Dict[str, Any] = {}
     for key in [

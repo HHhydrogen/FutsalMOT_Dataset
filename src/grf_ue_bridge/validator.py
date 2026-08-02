@@ -1,4 +1,4 @@
-"""Validate exported GRF-UE episode data."""
+"""验证导出的 GRF-UE episode 数据。"""
 
 from __future__ import annotations
 
@@ -10,36 +10,36 @@ from typing import List, Tuple
 
 
 class ValidationError(Exception):
-    """Raised when validation fails."""
+    """验证失败时抛出。"""
 
     pass
 
 
 def validate_episode(episode_dir: Path) -> int:
-    """Validate an episode directory.
+    """验证一个 episode 目录。
 
-    Checks:
-      1. meta.json exists and is parseable
-      2. schema/version correct
-      3. frames.jsonl exists
-      4. Exactly 300 lines (or matches meta.timing.num_steps)
-      5. Steps are 0..N-1
-      6. Time monotonically increasing
-      7. Exactly 10 players per frame
-      8. IDs exactly L0-L4 and R0-R4
-      9. IDs unique within each frame
-      10. All position values finite
-      11. Coordinates not wildly out of field bounds
-      12. Ball position valid
-      13. owned_player references known player when set
-      14. Metadata num_steps matches actual frame count
+    检查项：
+      1. meta.json 存在且可解析
+      2. schema/version 正确
+      3. frames.jsonl 存在
+      4. 恰好 300 行（或与 meta.timing.num_steps 一致）
+      5. step 为 0..N-1
+      6. 时间单调递增
+      7. 每帧恰好 10 名球员
+      8. ID 恰好为 L0-L4 和 R0-R4
+      9. 每帧内 ID 唯一
+      10. 所有坐标值有限
+      11. 坐标未明显越出场地边界
+      12. 球的位置有效
+      13. 设置 owned_player 时引用已知球员
+      14. meta 中的 num_steps 与实际帧数一致
 
     Returns:
-        0 if valid, 1 if invalid.
+        有效返回 0，无效返回 1。
     """
     errors: List[str] = []
 
-    # ── Check meta.json ────────────────────────────────────────────
+    # ── 检查 meta.json ────────────────────────────────────────
     meta_path = episode_dir / "meta.json"
     if not meta_path.exists():
         errors.append(f"Missing meta.json at {meta_path}")
@@ -54,7 +54,7 @@ def validate_episode(episode_dir: Path) -> int:
         _report(errors)
         return 1
 
-    # Schema and version
+    # Schema 与版本
     if meta.get("schema") != "grf_ue_episode":
         errors.append(f"meta.schema is '{meta.get('schema')}', expected 'grf_ue_episode'")
     if meta.get("version") != 1:
@@ -64,7 +64,7 @@ def validate_episode(episode_dir: Path) -> int:
     expected_steps = timing.get("num_steps", 300)
     source_step = timing.get("source_step_seconds", 0.1)
 
-    # ── Check frames.jsonl ─────────────────────────────────────────
+    # ── 检查 frames.jsonl ─────────────────────────────────────
     frames_path = episode_dir / "frames.jsonl"
     if not frames_path.exists():
         errors.append(f"Missing frames.jsonl at {frames_path}")
@@ -83,7 +83,7 @@ def validate_episode(episode_dir: Path) -> int:
     valid_ids = {f"L{i}" for i in range(5)} | {f"R{i}" for i in range(5)}
     field_length = meta.get("field", {}).get("length_m", 40.0)
     field_width = meta.get("field", {}).get("width_m", 20.0)
-    x_bound = field_length / 2 + 2.0  # allow 2m margin
+    x_bound = field_length / 2 + 2.0  # 允许 2m 余量
     y_bound = field_width / 2 + 2.0
 
     prev_time = -1.0
@@ -92,7 +92,7 @@ def validate_episode(episode_dir: Path) -> int:
         if not line.strip():
             continue
 
-        # Parse JSON
+        # 解析 JSON
         try:
             frame = json.loads(line)
         except json.JSONDecodeError as e:
@@ -113,7 +113,7 @@ def validate_episode(episode_dir: Path) -> int:
                 f"Line {line_idx}: step={step}, expected {expected_step}"
             )
 
-        # Time monotonic
+        # 时间单调递增
         time_sec = frame.get("time_seconds", -1.0)
         if time_sec < prev_time:
             errors.append(
@@ -121,18 +121,18 @@ def validate_episode(episode_dir: Path) -> int:
             )
         prev_time = time_sec
 
-        # Score
+        # 比分
         score = frame.get("score", [])
         if not isinstance(score, list) or len(score) != 2:
             errors.append(f"Line {line_idx}: score must be [int, int]")
 
-        # Ball
+        # 球
         ball = frame.get("ball", {})
         ball_pos = ball.get("position_m", [])
         _validate_position(
             errors, line_idx, ball_pos, "ball.position_m", x_bound, y_bound
         )
-        # Validate source_grf_position if present
+        # 如存在则校验 source_grf_position
         src_pos = ball.get("source_grf_position")
         if src_pos is not None:
             _validate_position(
@@ -140,7 +140,7 @@ def validate_episode(episode_dir: Path) -> int:
                 x_bound, y_bound, finite_only=True
             )
 
-        # Players
+        # 球员
         players = frame.get("players", [])
         if len(players) != 10:
             errors.append(f"Line {line_idx}: expected 10 players, got {len(players)}")
@@ -161,7 +161,7 @@ def validate_episode(episode_dir: Path) -> int:
                 errors, line_idx, pos, f"player[{p_idx}].position_m", x_bound, y_bound
             )
 
-            # Player Z should be 0
+            # 球员 Z 应为 0
             if len(pos) == 3 and abs(pos[2]) > 0.001:
                 errors.append(
                     f"Line {line_idx}, player[{p_idx}]: "
@@ -176,7 +176,7 @@ def validate_episode(episode_dir: Path) -> int:
             if extra:
                 errors.append(f"Line {line_idx}: unexpected player IDs: {sorted(extra)}")
 
-    # ── Report ─────────────────────────────────────────────────────
+    # ── 报告 ──────────────────────────────────────────────────
     if errors:
         _report(errors)
         return 1
@@ -197,11 +197,10 @@ def _validate_position(
     y_bound: float = 100,
     finite_only: bool = False,
 ) -> None:
-    """Validate a position list has 3 finite coordinates within bounds.
+    """校验一个位置列表包含 3 个有限坐标且在边界内。
 
     Args:
-        finite_only: If True, only check finiteness (for source positions
-            that use a different coordinate space).
+        finite_only: 为 True 时只检查有限性（用于采用不同坐标空间的源位置）。
     """
     if not isinstance(pos, list) or len(pos) not in (2, 3):
         errors.append(
@@ -233,7 +232,7 @@ def _validate_position(
 
 
 def _report(errors: List[str]) -> None:
-    """Print validation errors."""
+    """打印验证错误。"""
     print(f"VALIDATOR: Found {len(errors)} error(s)")
     for err in errors[:20]:
         print(f"  ERROR: {err}")

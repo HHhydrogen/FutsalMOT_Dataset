@@ -1,22 +1,22 @@
 """
-Unreal Engine Python script — Import GRF-UE episode into a Level Sequence.
+Unreal Engine Python 脚本 —— 把 GRF-UE episode 导入到 Level Sequence。
 
-Two modes (default: both):
-  --preview    Set actor transforms directly in the level (Editor preview).
-  --sequence   Create / overwrite a Level Sequence asset with keyframed transforms.
+两种模式（默认 both）：
+  --preview    直接在关卡中设置 actor 变换（编辑器预览）。
+  --sequence   创建 / 覆盖带关键帧变换的 Level Sequence 资产。
 
-Usage (in Unreal Editor Python Console):
+用法（在 Unreal Editor Python Console 中执行）：
     # 最简单（参数在 ue_import_config.json 中）
     py "D:/path/to/code/ue/import_grf_episode.py"
 
     # 临时覆盖部分参数
     py "D:/path/to/code/ue/import_grf_episode.py" --episode "D:/path/to/other_episode" --replace-existing
 
-Dependencies:
-    - unreal (UE built-in module)
-    - json, math, pathlib (stdlib)
+依赖：
+    - unreal（UE 内置模块）
+    - json、math、pathlib（标准库）
 
-This script does NOT require gfootball, GRF_MARL, or the .venv.
+本脚本不依赖 gfootball、GRF_MARL 或 .venv。
 """
 
 import argparse
@@ -27,9 +27,9 @@ import sys
 from pathlib import Path
 
 M_TO_CM = 100.0
-SPEED_THRESHOLD_CM = 5.0  # cm/s, below this keep previous yaw
-BALL_Z_OFFSET_CM = 2.0  # offset so GRF ball_z (~0.11 * 100) + offset ≈ 13cm
-PLAYER_Z_CM = 90.0  # fixed ground level for player actors
+SPEED_THRESHOLD_CM = 5.0  # cm/s，低于该速度保持上一次的 yaw
+BALL_Z_OFFSET_CM = 2.0  # 偏移，使 GRF 球 z（~0.11 * 100）+ 偏移 ≈ 13cm
+PLAYER_Z_CM = 90.0  # 球员 actor 的固定地面高度
 DEFAULT_SEQUENCE_PACKAGE_PATH = "/Game/FutsalMOT/Sequences"
 EXPECTED_CHANNEL_NAMES = [
     "Location.X", "Location.Y", "Location.Z",
@@ -38,40 +38,40 @@ EXPECTED_CHANNEL_NAMES = [
 ]
 
 
-# ── Argument parsing ────────────────────────────────────────────────────
+# ── 参数解析 ────────────────────────────────────────────────────────────
 
 def _parse_args():
     parser = argparse.ArgumentParser(
-        description="Import GRF-UE episode into Unreal Engine"
+        description="把 GRF-UE episode 导入到 Unreal Engine"
     )
     parser.add_argument(
         "--episode", default=None,
-        help="Path to episode directory (contains meta.json, frames.jsonl)"
+        help="episode 目录路径（包含 meta.json、frames.jsonl）"
     )
     parser.add_argument(
         "--mapping", default=None,
-        help="Path to actor mapping JSON file"
+        help="actor 映射 JSON 文件路径"
     )
     parser.add_argument(
         "--mode", choices=["preview", "sequence", "both"], default="both",
-        help="Execution mode"
+        help="执行模式"
     )
     parser.add_argument(
         "--replace-existing", action="store_true", default=False,
-        help="Delete and recreate an existing Level Sequence without showing an overwrite dialog"
+        help="删除并重建已存在的 Level Sequence，不弹出覆盖确认对话框"
     )
     parser.add_argument(
         "--config", type=str, default=None,
-        help="Deprecated: config is auto-loaded from ue_import_config.json next to this script."
+        help="已弃用：配置会自动从脚本同级的 ue_import_config.json 加载。"
     )
     parsed = parser.parse_args()
     return parsed
 
 
-# ── Load helpers ────────────────────────────────────────────────────────
+# ── 加载辅助函数 ────────────────────────────────────────────────────────
 
 def load_episode(episode_dir: Path):
-    """Load meta.json and frames.jsonl from an episode directory."""
+    """从 episode 目录加载 meta.json 和 frames.jsonl。"""
     with open(episode_dir / "meta.json") as f:
         meta = json.load(f)
     frames = []
@@ -84,21 +84,21 @@ def load_episode(episode_dir: Path):
 
 
 def load_mapping(path: Path) -> dict:
-    """Load actor mapping JSON."""
+    """加载 actor 映射 JSON。"""
     with open(path) as f:
         return json.load(f)
 
 
-# ── Actor helpers ───────────────────────────────────────────────────────
+# ── Actor 辅助函数 ─────────────────────────────────────────────────────
 
 def _get_actor_subsystem():
-    """Get EditorActorSubsystem."""
+    """获取 EditorActorSubsystem。"""
     import unreal
     return unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
 
 
 def find_actor(name: str):
-    """Find a UE actor by label or name, case-insensitive."""
+    """按标签或名称（不区分大小写）查找 UE actor。"""
     import unreal
     subsystem = _get_actor_subsystem()
     actors = subsystem.get_all_level_actors()
@@ -112,7 +112,7 @@ def find_actor(name: str):
 
 
 def _find_all_actors(mapping: dict) -> dict:
-    """Find all actors in the mapping. Returns {entity_id: actor} dict."""
+    """在映射中找到所有 actor。返回 {entity_id: actor} 字典。"""
     actors = {}
     for entity_id, actor_name in mapping.items():
         actor = find_actor(actor_name)
@@ -126,10 +126,10 @@ def _find_all_actors(mapping: dict) -> dict:
     return actors
 
 
-# ── Maths ───────────────────────────────────────────────────────────────
+# ── 数学工具 ───────────────────────────────────────────────────────────
 
 def build_yaw(dx: float, dy: float, prev_yaw: float) -> float:
-    """Compute yaw from movement delta with low-speed hysteresis."""
+    """根据位移增量计算 yaw，并带低速滞回。"""
     speed = math.sqrt(dx * dx + dy * dy)
     if speed < SPEED_THRESHOLD_CM:
         return prev_yaw
@@ -137,23 +137,23 @@ def build_yaw(dx: float, dy: float, prev_yaw: float) -> float:
 
 
 def _pos_m_to_cm(pos_m: list) -> tuple:
-    """Convert [x, y, z] meters to (x_cm, y_cm, z_cm)."""
+    """把 [x, y, z] 米转换为 (x_cm, y_cm, z_cm)。"""
     return (pos_m[0] * M_TO_CM, pos_m[1] * M_TO_CM, pos_m[2] * M_TO_CM)
 
 
-# ── Sequence key helpers ────────────────────────────────────────────────
+# ── Sequence 关键帧辅助函数 ─────────────────────────────────────────────
 
 def add_double_channel_key(channel, frame_index: int, value: float, *, interpolation=None):
-    """Add a key to a MovieSceneDoubleChannel with proper FrameNumber wrapping.
+    """向 MovieSceneDoubleChannel 添加关键帧，并正确包装 FrameNumber。
 
     Args:
-        channel: The MovieSceneDoubleChannel to add a key to.
-        frame_index: Display-rate frame index (plain int). Wrapped in FrameNumber internally.
-        value: Numeric key value.
-        interpolation: MovieSceneKeyInterpolation enum value. Defaults to LINEAR.
+        channel: 要添加关键帧的 MovieSceneDoubleChannel。
+        frame_index: 显示速率下的帧索引（普通 int）。内部会包装为 FrameNumber。
+        value: 关键帧数值。
+        interpolation: MovieSceneKeyInterpolation 枚举值。默认为 LINEAR。
 
     Raises:
-        ValueError: If channel is None or value is non-finite.
+        ValueError: 当 channel 为 None 或 value 非有限时抛出。
     """
     import unreal
 
@@ -174,7 +174,7 @@ def add_double_channel_key(channel, frame_index: int, value: float, *, interpola
 
 
 def _canonical_channel_name(channel) -> str:
-    """Get channel name with trailing numeric suffix stripped (UE 5.8+ appends _NNN)."""
+    """获取通道名，去掉末尾的数字后缀（UE 5.8+ 会追加 _NNN）。"""
     raw_name = None
     try:
         raw_name = channel.get_editor_property("channel_name")
@@ -189,7 +189,7 @@ def _canonical_channel_name(channel) -> str:
 
 
 def _channel_name(channel) -> str:
-    """Safely get a display name for a channel, tolerant of UE version differences."""
+    """安全地获取通道的显示名，兼容不同 UE 版本。"""
     try:
         name = channel.get_name()
         if isinstance(name, str):
@@ -203,11 +203,11 @@ def _channel_name(channel) -> str:
 
 
 def _build_channel_map(channels) -> dict:
-    """Build a dict mapping canonical channel names (e.g. 'Location.X') to channel objects.
+    """构建“规范通道名（例如 'Location.X'）→ 通道对象”的字典。
 
-    Strips UE 5.8+ numeric suffixes (_NNN) before matching.
-    Falls back to positional indexing with a length check if needed.
-    Logs raw channel names for diagnostics.
+    匹配前先去除 UE 5.8+ 的数字后缀（_NNN）。
+    如有必要，回退到带长度检查的按位置索引。
+    记录原始通道名以便诊断。
     """
     import unreal
     canonical_map = {}
@@ -225,7 +225,7 @@ def _build_channel_map(channels) -> dict:
     if all(n in canonical_map for n in EXPECTED_CHANNEL_NAMES):
         print("  Transform channel name mapping: PASS")
         return canonical_map
-    # Fallback: positional indexing with length check
+    # 回退：按位置索引并做长度检查
     unreal.log("Warning: canonical channel name matching incomplete, using positional fallback")
     return {
         "Location.X": channels[0],
@@ -240,10 +240,10 @@ def _build_channel_map(channels) -> dict:
     }
 
 
-# ── Ball rolling ─────────────────────────────────────────────────────────
+# ── 球滚动 ──────────────────────────────────────────────────────────────
 
 def _unwind_angle(previous, current):
-    """Unwind angle to avoid -180/180 jumps."""
+    """展开角度，避免 -180/180 跳变。"""
     while current - previous > 180.0:
         current -= 360.0
     while current - previous < -180.0:
@@ -257,22 +257,22 @@ def compute_ball_rotation_quat(
     minimum_move_distance_m,
     roll_sign,
 ):
-    """Compute ball rotation per frame using quaternion accumulation.
+    """使用四元数累加计算每帧的球旋转。
 
     Args:
-        ball_positions: list of (x, y, z) in meters.
-        radius_m: ball radius in meters.
-        minimum_move_distance_m: minimum displacement to count as moving.
-        roll_sign: sign multiplier (1.0 or -1.0) for axis correction.
+        ball_positions: 球的米坐标 (x, y, z) 列表。
+        radius_m: 球半径（米）。
+        minimum_move_distance_m: 视为移动的最小位移。
+        roll_sign: 用于修正轴向的符号乘子（1.0 或 -1.0）。
 
     Returns:
-        list of (roll_deg, pitch_deg, yaw_deg) for each frame.
-        First frame is (0, 0, 0).
+        每帧的 (roll_deg, pitch_deg, yaw_deg) 列表。
+        第一帧为 (0, 0, 0)。
     """
     import unreal
 
     current_quat = unreal.MathLibrary.quat_make_from_euler(unreal.Vector(0.0, 0.0, 0.0))
-    rotations = [(0.0, 0.0, 0.0)]  # frame 0
+    rotations = [(0.0, 0.0, 0.0)]  # 第 0 帧
 
     prev_roll, prev_pitch, prev_yaw = 0.0, 0.0, 0.0
 
@@ -284,7 +284,7 @@ def compute_ball_rotation_quat(
         dy = by_cur - by_prev
         distance = math.hypot(dx, dy)
 
-        # Rolling on ground (near radius height)
+        # 地面滚动（高度接近球半径）
         if bz_cur <= radius_m + 0.03 and distance > minimum_move_distance_m:
             angle_degrees = math.degrees(distance / radius_m)
             axis = unreal.Vector(-dy / distance, dx / distance, 0.0)
@@ -309,7 +309,7 @@ def compute_ball_rotation_quat(
 
 def _add_ball_rolling(frames, sequence, source_step, playback_fps,
                        actor_bindings, ball_cfg):
-    """Add ball rolling rotation keys to the ball's transform track."""
+    """向球的变换轨道添加滚动旋转关键帧。"""
     import unreal
 
     if "BALL" not in actor_bindings:
@@ -340,10 +340,10 @@ def _add_ball_rolling(frames, sequence, source_step, playback_fps,
     print(f"  Ball rolling keys added: {len(frames)} frames")
 
 
-# ── Preview mode ────────────────────────────────────────────────────────
+# ── 预览模式 ────────────────────────────────────────────────────────────
 
 def apply_preview(meta: dict, frames: list, mapping: dict):
-    """Set actor transforms frame-by-frame in the level."""
+    """在关卡中逐帧设置 actor 变换。"""
     actors = _find_all_actors(mapping)
     if not actors:
         return
@@ -363,12 +363,12 @@ def apply_preview(meta: dict, frames: list, mapping: dict):
     print(f"Preview complete: {num_steps} frames applied.")
 
 
-# ── Smoke test ──────────────────────────────────────────────────────────
+# ── 冒烟测试 ───────────────────────────────────────────────────────────
 
 def _smoke_test_sequencer_api(actors: dict, total_output_frames: int, package_path: str = None):
-    """Create a throwaway sequence and validate add_key accepts FrameNumber.
+    """创建一个临时 Sequence，验证 add_key 接受 FrameNumber。
 
-    Returns (temp_sequence, channel_name_map) or raises on failure.
+    返回 (temp_sequence, channel_name_map)，失败时抛出异常。
     """
     import unreal
 
@@ -379,7 +379,7 @@ def _smoke_test_sequencer_api(actors: dict, total_output_frames: int, package_pa
     if not temp_seq:
         raise RuntimeError("Failed to create smoke test sequence.")
 
-    # Bind the first actor and create a transform track
+    # 绑定第一个 actor 并创建变换轨道
     first_actor = next(iter(actors.values()))
     binding = temp_seq.add_possessable(first_actor)
     track = binding.add_track(unreal.MovieScene3DTransformTrack)
@@ -387,7 +387,7 @@ def _smoke_test_sequencer_api(actors: dict, total_output_frames: int, package_pa
     channels = section.get_all_channels()
     cmap = _build_channel_map(channels)
 
-    # Add two test keys and remove them via remove_key()
+    # 添加两个测试关键帧，再通过 remove_key() 移除它们
     test_ch = cmap["Location.X"]
     test_key_0 = add_double_channel_key(test_ch, 0, 0.0)
     test_key_1 = add_double_channel_key(test_ch, 1, 100.0)
@@ -406,15 +406,15 @@ def _smoke_test_sequencer_api(actors: dict, total_output_frames: int, package_pa
     return temp_seq, cmap
 
 
-# ── Sequence mode ───────────────────────────────────────────────────────
+# ── Sequence 模式 ───────────────────────────────────────────────────────
 
 def create_sequence(meta: dict, frames: list, mapping: dict, replace_existing: bool = False,
                     package_path: str = None, sequences_cfg: list = None,
                     ball_rolling_cfg: dict = None):
-    """Create Level Sequence assets with keyframed transforms.
+    """创建带关键帧变换的 Level Sequence 资产。
 
-    If sequences_cfg is provided, creates one sequence per entry, each with
-    the same player/ball data plus a camera binding.
+    如果提供了 sequences_cfg，则为每个条目创建一个 Sequence，
+    每个都包含相同的球员/球数据并绑定摄像机。
     """
     import unreal
 
@@ -430,15 +430,15 @@ def create_sequence(meta: dict, frames: list, mapping: dict, replace_existing: b
 
     unreal.log(f"Unreal version: {unreal.SystemLibrary.get_engine_version()}")
 
-    # Ensure package directory
+    # 确保包目录存在
     if not unreal.EditorAssetLibrary.does_directory_exist(pkg_path):
         unreal.EditorAssetLibrary.make_directory(pkg_path)
 
-    # Smoke test once
+    # 冒烟测试一次
     temp_seq, _ = _smoke_test_sequencer_api(actors, total_output_frames, pkg_path)
     unreal.EditorAssetLibrary.delete_asset(f"{pkg_path}/_TEMP_SMOKE")
 
-    # Determine which sequences to create
+    # 决定要创建哪些 Sequence
     if sequences_cfg:
         seq_list = sequences_cfg
     else:
@@ -451,7 +451,7 @@ def create_sequence(meta: dict, frames: list, mapping: dict, replace_existing: b
 
         print(f"\n--- Creating Sequence: {seq_name} ---")
 
-        # Delete existing
+        # 删除已存在的资产
         if unreal.EditorAssetLibrary.does_asset_exist(sequence_asset_path):
             if not replace_existing:
                 raise RuntimeError(
@@ -461,7 +461,7 @@ def create_sequence(meta: dict, frames: list, mapping: dict, replace_existing: b
             unreal.EditorAssetLibrary.delete_asset(sequence_asset_path)
             print(f"  Deleted existing: {sequence_asset_path}")
 
-        # Create new sequence
+        # 创建新的 Sequence
         seq = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
             seq_name, pkg_path, None, unreal.LevelSequenceFactoryNew()
         )
@@ -474,7 +474,7 @@ def create_sequence(meta: dict, frames: list, mapping: dict, replace_existing: b
         seq.set_playback_end(total_output_frames)
         print(f"  Timeline: {total_output_frames} frames @ {playback_fps} FPS")
 
-        # ── Bind all actors (players + ball) ────────────────────────────
+        # ── 绑定所有 actor（球员 + 球）───────────────────────────────
         actor_bindings = {}
         for entity_id, actor in actors.items():
             binding, channels, section = _build_entity_binding(
@@ -482,7 +482,7 @@ def create_sequence(meta: dict, frames: list, mapping: dict, replace_existing: b
             )
             actor_bindings[entity_id] = (binding, channels, section)
 
-        # ── Bind camera if specified ────────────────────────────────────
+        # ── 如指定则绑定摄像机 ────────────────────────────────────────
         camera_binding = None
         if camera_actor_name:
             cam_actor = find_actor(camera_actor_name)
@@ -492,12 +492,12 @@ def create_sequence(meta: dict, frames: list, mapping: dict, replace_existing: b
                 camera_binding = seq.add_possessable(cam_actor)
                 print(f"  Camera bound: {camera_actor_name}")
 
-                # Camera is bound as possessable. UE 5.8 Python API does not expose
-                # CameraCutTrack creation — manually set camera in Sequencer:
-                # right-click camera track → "Set as Camera Cut".
+                # 摄像机以 possessable 方式绑定。UE 5.8 Python API 未暴露
+                # CameraCutTrack 的创建——需在 Sequencer 中手动设置：
+                # 右键摄像机轨道 → "Set as Camera Cut"。
                 unreal.log(f"  Camera bound: {camera_actor_name} (set as Camera Cut manually in Sequencer)")
 
-        # ── Write transform keys for each actor ─────────────────────────
+        # ── 为每个 actor 写入变换关键帧 ──────────────────────────────
         total_transform_keys = 0
         for entity_id, actor in actors.items():
             binding, channels, section = actor_bindings[entity_id]
@@ -541,7 +541,7 @@ def create_sequence(meta: dict, frames: list, mapping: dict, replace_existing: b
                         previous_pos = (px, py)
                         add_double_channel_key(cmap["Rotation.Z"], kf, yaw)
 
-            # Verify key counts
+            # 校验关键帧数量
             actual_loc_x = cmap["Location.X"].get_num_keys()
             actual_loc_y = cmap["Location.Y"].get_num_keys()
             actual_loc_z = cmap["Location.Z"].get_num_keys()
@@ -560,12 +560,12 @@ def create_sequence(meta: dict, frames: list, mapping: dict, replace_existing: b
 
         print(f"  Total transform keys: {total_transform_keys}")
 
-        # ── Ball rolling ──────────────────────────────────────────────
+        # ── 球滚动 ──────────────────────────────────────────────
         if ball_rolling_cfg and ball_rolling_cfg.get("enabled", True):
             _add_ball_rolling(frames, seq, source_step, playback_fps,
                               actor_bindings, ball_rolling_cfg)
 
-        # ── Save & open ────────────────────────────────────────────────
+        # ── 保存并打开 ────────────────────────────────────────────────
         saved = unreal.EditorAssetLibrary.save_loaded_asset(seq, only_if_is_dirty=False)
         if not saved:
             raise RuntimeError(f"Failed to save: {sequence_asset_path}")
@@ -577,7 +577,7 @@ def create_sequence(meta: dict, frames: list, mapping: dict, replace_existing: b
         except Exception as exc:
             unreal.log(f"Warning: could not open in Sequencer: {exc}")
 
-    # ── Summary ─────────────────────────────────────────────────────────
+    # ── 汇总 ─────────────────────────────────────────────────────────
     player_count = sum(1 for eid in actors if eid != "BALL")
     print()
     print("GRF UE IMPORT PASS")
@@ -592,9 +592,9 @@ def create_sequence(meta: dict, frames: list, mapping: dict, replace_existing: b
 
 
 def _build_entity_binding(sequence, entity_id, actor, total_output_frames):
-    """Add a possessable binding + transform track + section for entity_id.
+    """为 entity_id 添加 possessable 绑定 + 变换轨道 + section。
 
-    Returns (binding, channels_list, section) so caller can inspect channels.
+    返回 (binding, channels_list, section)，调用方可检查通道。
     """
     import unreal
     binding = sequence.add_possessable(actor)
@@ -605,10 +605,10 @@ def _build_entity_binding(sequence, entity_id, actor, total_output_frames):
     return binding, channels, transform_section
 
 
-# ── Preview helpers (shared, no unreal dependency at module level) ──────
+# ── 预览辅助函数（共享，模块顶层不依赖 unreal）──────────────────────
 
 def _apply_ball_frame(actors: dict, frame: dict):
-    """Position ball actor from frame data."""
+    """根据帧数据设置球 actor 的位置。"""
     import unreal
     if "BALL" not in actors:
         return
@@ -620,7 +620,7 @@ def _apply_ball_frame(actors: dict, frame: dict):
 
 
 def _apply_player_frame(actors: dict, frame: dict, prev_yaws: dict, prev_positions: dict):
-    """Position and rotate player actors from frame data."""
+    """根据帧数据设置球员 actor 的位置与旋转。"""
     import unreal
     for player_data in frame["players"]:
         pid = player_data["id"]
@@ -646,12 +646,12 @@ def _apply_player_frame(actors: dict, frame: dict, prev_yaws: dict, prev_positio
         )
 
 
-# ── Entry ───────────────────────────────────────────────────────────────
+# ── 入口 ───────────────────────────────────────────────────────────────
 
 def main():
     args = _parse_args()
 
-    # Load config from hardcoded path (next to this script)
+    # 从固定路径加载配置（本脚本同级）
     cfg_defaults = {}
     cfg_path = Path(__file__).resolve().parent.parent / "ue_import_config.json"
     if cfg_path.exists():

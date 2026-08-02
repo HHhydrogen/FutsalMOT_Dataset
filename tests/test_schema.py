@@ -1,4 +1,4 @@
-"""Tests for the schema models."""
+"""schema 模型的测试。"""
 
 from grf_ue_bridge.schema import (
     BallFrame,

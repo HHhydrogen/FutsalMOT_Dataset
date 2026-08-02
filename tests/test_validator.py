@@ -1,4 +1,4 @@
-"""Tests for the episode validator."""
+"""episode 验证器的测试。"""
 
 import json
 import tempfile
@@ -8,7 +8,7 @@ from grf_ue_bridge.validator import validate_episode
 
 
 def _write_episode(meta: dict, frames: list[dict]) -> Path:
-    """Write a temporary episode directory and return its path."""
+    """写入一个临时 episode 目录并返回其路径。"""
     tmp = Path(tempfile.mkdtemp())
     with open(tmp / "meta.json", "w") as f:
         json.dump(meta, f)
@@ -19,7 +19,7 @@ def _write_episode(meta: dict, frames: list[dict]) -> Path:
 
 
 def _make_frame(step: int, **overrides) -> dict:
-    """Create a valid frame with optional overrides."""
+    """创建一个合法的帧，可用 overrides 覆盖字段。"""
     frame = {
         "step": step,
         "time_seconds": step * 0.1,
@@ -27,7 +27,7 @@ def _make_frame(step: int, **overrides) -> dict:
         "ball": {"position_m": [0.0, 0.0, 0.11], "source_grf_position": [0.0, 0.0, 0.11]},
         "players": [],
     }
-    # 5 left + 5 right players
+    # 5 名左队 + 5 名右队球员
     for i in range(5):
         frame["players"].append({"id": f"L{i}", "position_m": [float(-10 + i), 0.0, 0.0]})
     for i in range(5):
@@ -76,7 +76,7 @@ class TestValidator:
 
     def test_wrong_frame_count(self):
         meta = _default_meta(5)
-        frames = [_make_frame(i) for i in range(3)]  # 3 instead of 5
+        frames = [_make_frame(i) for i in range(3)]  # 3 帧而不是 5 帧
         path = _write_episode(meta, frames)
         assert validate_episode(path) == 1
 
@@ -128,6 +128,6 @@ class TestValidator:
 
     def test_wrong_step_number(self):
         meta = _default_meta(3)
-        frames = [_make_frame(i + 1) for i in range(3)]  # steps 1,2,3 instead of 0,1,2
+        frames = [_make_frame(i + 1) for i in range(3)]  # step 为 1,2,3 而不是 0,1,2
         path = _write_episode(meta, frames)
         assert validate_episode(path) == 1

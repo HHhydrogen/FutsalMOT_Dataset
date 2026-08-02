@@ -1,30 +1,29 @@
-"""Coordinate transformation from GRF to UE meters.
+"""GRF 到 UE 米坐标的坐标变换。
 
-GRF Observation Coordinate System
-----------------------------------
-The GRF engine normalizes x/y but not z in the observation:
-  - x: [-1, 1]  (left goal line → right goal line)
-       engine_x = grf_x * X_FIELD_SCALE  (X_FIELD_SCALE = 54.4)
-  - y: [-1, 1]  (bottom sideline → top sideline)
-       engine_y = grf_y * Y_FIELD_SCALE  (Y_FIELD_SCALE = -83.6)
-  - z: ball height in engine units.
-       engine_z = grf_z * Z_FIELD_SCALE  (Z_FIELD_SCALE = 1.0)
-       Since Z_FIELD_SCALE = 1, the observation z IS the engine z
-       directly, already in approximate meters (~0.11m for ball on ground).
+GRF 观测坐标系
+--------------
+GRF 引擎对 x/y 做了归一化，但 z 未归一化：
+  - x: [-1, 1]  （左球门线 → 右球门线）
+       engine_x = grf_x * X_FIELD_SCALE  （X_FIELD_SCALE = 54.4）
+  - y: [-1, 1]  （下边线 → 上边线）
+       engine_y = grf_y * Y_FIELD_SCALE  （Y_FIELD_SCALE = -83.6）
+  - z: 球的高度，单位为引擎单位。
+       engine_z = grf_z * Z_FIELD_SCALE  （Z_FIELD_SCALE = 1.0）
+       由于 Z_FIELD_SCALE = 1，观测中的 z 就是引擎 z，
+       已经近似为米（地面上的球约为 0.11m）。
 
-See third_party/gfootball_engine/src/defines.hpp for field scales.
+字段缩放系数参见 third_party/gfootball_engine/src/defines.hpp。
 
-UE Output Coordinate System
-----------------------------
-  - X: [-20 m, 20 m]  (left goal line → right goal line)
-  - Y: [-10 m, 10 m]  (bottom sideline → top sideline)
-  - Z: meters (ball only; player Z fixed to 0)
+UE 输出坐标系
+--------------
+  - X: [-20 m, 20 m]  （左球门线 → 右球门线）
+  - Y: [-10 m, 10 m]  （下边线 → 上边线）
+  - Z: 米（仅球；球员 Z 固定为 0）
 
-Note: The actual GRF full-size pitch is approximately 110m × 72m in engine
-units, but our export maps the normalized [-1, 1] range to the user-configured
-field dimensions (default 40m × 20m). Ball Z is passed through from the engine
-almost as-is because Z_FIELD_SCALE=1; the value is already in approximate
-meters (e.g. a ball on the ground reads ~0.11, matching ball radius).
+注意：GRF 真实全场在引擎单位下约为 110m × 72m，但我们的导出把归一化
+的 [-1, 1] 范围映射到用户配置的场地尺寸（默认 40m × 20m）。球的 Z 由于
+Z_FIELD_SCALE=1 几乎原样透传，数值已近似为米（例如地面上的球读取约为
+0.11，正好匹配球的半径）。
 """
 
 from typing import List, Tuple
@@ -33,7 +32,7 @@ import numpy as np
 
 
 class CoordinateTransform:
-    """Transforms GRF normalized coordinates to UE meter coordinates."""
+    """将 GRF 归一化坐标转换为 UE 米坐标。"""
 
     def __init__(self, field_length_m: float = 40.0, field_width_m: float = 20.0):
         self._half_length = field_length_m / 2.0  # 20.0
@@ -48,35 +47,34 @@ class CoordinateTransform:
         return self._half_width
 
     def grf_to_meter(self, grf_x: float, grf_y: float) -> Tuple[float, float]:
-        """Convert GRF normalized (x, y) to UE meters."""
+        """把 GRF 归一化 (x, y) 转换为 UE 米。"""
         mx = float(grf_x) * self._half_length
         my = float(grf_y) * self._half_width
         return mx, my
 
     def grf_ball_z_to_meter(self, grf_z: float) -> float:
-        """Convert GRF ball Z to UE meters.
+        """把 GRF 球的 Z 转换为 UE 米。
 
-        Z_FIELD_SCALE=1 in the engine, so GRF observation z is already
-        in approximate engine meters. We pass it through directly.
-        For example, a ball on the ground reads ~0.11 (≈ ball radius).
-        For precise ball height relative to UE field, tune in UE.
+        引擎中 Z_FIELD_SCALE=1，所以 GRF 观测的 z 已近似为引擎米。
+        我们原样透传。例如地面上的球读取约为 0.11（≈ 球半径）。
+        如需精确控制球相对 UE 场地的高度，请在 UE 中调整。
         """
         return float(grf_z)
 
     def transform_player_position(
         self, grf_x: float, grf_y: float
     ) -> List[float]:
-        """Transform a player's GRF position to [x_m, y_m, 0]."""
+        """把球员的 GRF 位置变换为 [x_m, y_m, 0]。"""
         mx, my = self.grf_to_meter(grf_x, grf_y)
         return [mx, my, 0.0]
 
     def transform_ball_position(
         self, grf_pos: np.ndarray
     ) -> Tuple[List[float], List[float]]:
-        """Transform ball position from GRF.
+        """变换球的 GRF 位置。
 
-        Returns (position_m, source_grf) where position_m is [x_m, y_m, z_m]
-        and source_grf is the original [grf_x, grf_y, grf_z] for reference.
+        返回 (position_m, source_grf)，其中 position_m 为 [x_m, y_m, z_m]，
+        source_grf 为原始 [grf_x, grf_y, grf_z] 供参考。
         """
         grf_x, grf_y, grf_z = float(grf_pos[0]), float(grf_pos[1]), float(grf_pos[2])
         mx, my = self.grf_to_meter(grf_x, grf_y)

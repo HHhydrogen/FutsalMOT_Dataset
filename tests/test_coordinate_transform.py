@@ -1,4 +1,4 @@
-"""Tests for coordinate transformation."""
+"""坐标变换的测试。"""
 
 import numpy as np
 
@@ -54,7 +54,7 @@ class TestCoordinateTransform:
     def test_ball_z_passthrough(self):
         ct = CoordinateTransform()
         mz = ct.grf_ball_z_to_meter(0.11)
-        assert mz == 0.11  # Z_FIELD_SCALE=1, passed through directly
+        assert mz == 0.11  # Z_FIELD_SCALE=1，原样透传
 
     def test_ball_z_zero(self):
         ct = CoordinateTransform()

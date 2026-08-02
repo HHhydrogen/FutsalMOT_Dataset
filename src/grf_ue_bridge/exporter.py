@@ -1,4 +1,4 @@
-"""Export GRF episode data to the GRF-UE JSONL format."""
+"""把 GRF episode 数据导出为 GRF-UE JSONL 格式。"""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ from .schema import (
 
 
 def _get_football_commit() -> str:
-    """Read the football commit from external_sources.lock.json if available."""
+    """如存在，从 external_sources.lock.json 读取 football 提交号。"""
     lock_path = Path("external_sources.lock.json")
     if lock_path.exists():
         try:
@@ -39,7 +39,7 @@ def _get_football_commit() -> str:
 
 
 def _get_grf_marl_commit() -> str:
-    """Read the GRF_MARL commit from external_sources.lock.json if available."""
+    """如存在，从 external_sources.lock.json 读取 GRF_MARL 提交号。"""
     lock_path = Path("external_sources.lock.json")
     if lock_path.exists():
         try:
@@ -54,17 +54,17 @@ def _get_grf_marl_commit() -> str:
 
 
 def _build_entities() -> List[EntityDefinition]:
-    """Build entity definitions for 5v5 (10 players + ball)."""
+    """构建 5v5 的实体定义（10 名球员 + 1 个球）。"""
     entities: List[EntityDefinition] = []
-    # Left team: roles from scenario, defaulting to reasonable GK/DEF/MID/FWD
+    # 左队：角色取自场景，默认使用合理的 GK/DEF/MID/FWD 组合
     left_roles = [0, 7, 9, 2, 1]  # GK, RM, CF, LB, CB
     for i, role in enumerate(left_roles):
         entities.append(EntityDefinition.from_grf_role(role, "L", i))
-    # Right team
+    # 右队
     right_roles = [0, 7, 9, 2, 1]
     for i, role in enumerate(right_roles):
         entities.append(EntityDefinition.from_grf_role(role, "R", i))
-    # Ball
+    # 球
     entities.append(create_ball_entity())
     return entities
 
@@ -74,7 +74,7 @@ def export_episode(
     result: EpisodeResult,
     output_dir: Path,
 ) -> None:
-    """Export an EpisodeResult to meta.json and frames.jsonl."""
+    """把 EpisodeResult 导出为 meta.json 和 frames.jsonl。"""
     output_dir.mkdir(parents=True, exist_ok=True)
 
     transform = CoordinateTransform(
@@ -82,11 +82,11 @@ def export_episode(
         field_width_m=config.field_width_m,
     )
 
-    # ── Build entities ──────────────────────────────────────────────
+    # ── 构建实体 ──────────────────────────────────────────────
     entities = _build_entities()
 
-    # ── Build meta ──────────────────────────────────────────────────
-    source_step_seconds = 0.1  # GRF default: 10 FPS simulation
+    # ── 构建 meta ─────────────────────────────────────────────
+    source_step_seconds = 0.1  # GRF 默认：10 FPS 仿真
 
     meta = Meta(
         schema="grf_ue_episode",
@@ -115,13 +115,13 @@ def export_episode(
         entities=entities,
     )
 
-    # ── Write meta.json ─────────────────────────────────────────────
+    # ── 写入 meta.json ────────────────────────────────────────
     meta_path = output_dir / "meta.json"
     with open(meta_path, "w", encoding="utf-8") as f:
         f.write(meta.model_dump_json(indent=2, by_alias=True))
     print(f"Wrote: {meta_path}")
 
-    # ── Write frames.jsonl ──────────────────────────────────────────
+    # ── 写入 frames.jsonl ─────────────────────────────────────
     entity_ids = [e.id for e in entities]
     player_entity_ids = [e.id for e in entities if e.id != "BALL"]
     ball_entity_id = "BALL"
@@ -141,7 +141,7 @@ def export_episode(
             f.write(frame.model_dump_json() + "\n")
     print(f"Wrote: {frames_path} ({len(result.snapshots)} lines)")
 
-    # ── Debug: dump raw observations if configured ──────────────────
+    # ── 调试：按需导出完整原始观测 ───────────────────────────
     if config.dump_full_raw_observation:
         raw_path = output_dir / "raw_observations.jsonl"
         with open(raw_path, "w", encoding="utf-8") as f:
@@ -157,25 +157,25 @@ def _build_frame(
     player_entity_ids: List[str],
     source_step_seconds: float,
 ) -> Frame:
-    """Build a Frame from a single step observation."""
-    left_team = ob["left_team"]  # [(x,y), ...] 5 players
-    right_team = ob["right_team"]  # [(x,y), ...] 5 players
+    """根据单个步的观测构建一个 Frame。"""
+    left_team = ob["left_team"]  # [(x,y), ...] 5 名球员
+    right_team = ob["right_team"]  # [(x,y), ...] 5 名球员
     ball_grf = ob["ball"]  # [x, y, z]
 
     score = [int(ob["score"][0]), int(ob["score"][1])]
 
-    # Ball
+    # 球
     ball_pos_m, source_grf = transform.transform_ball_position(ball_grf)
     ball_frame = BallFrame(position_m=ball_pos_m, source_grf_position=source_grf)
 
-    # Players
+    # 球员
     players: List[PlayerFrame] = []
-    # Left team (L0-L4)
+    # 左队（L0-L4）
     for i in range(5):
         grf_x, grf_y = left_team[i][0], left_team[i][1]
         pos = transform.transform_player_position(grf_x, grf_y)
         players.append(PlayerFrame(id=f"L{i}", position_m=pos))
-    # Right team (R0-R4)
+    # 右队（R0-R4）
     for i in range(5):
         grf_x, grf_y = right_team[i][0], right_team[i][1]
         pos = transform.transform_player_position(grf_x, grf_y)

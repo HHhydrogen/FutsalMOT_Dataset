@@ -3,7 +3,9 @@
 import json
 
 from render_episode import (
+    copy_mask_frames,
     copy_rendered_frames,
+    find_mask_files,
     map_rendered_to_annotation,
     recover_render_to_img1,
     select_rendered_frame_indices,
@@ -86,6 +88,50 @@ def _make_episode(tmp_path, num_steps=3, step_seconds=0.1, fps=30):
     return episode, tmp_path / "dataset"
 
 
+class TestFindMaskFiles:
+    def test_single_group(self, tmp_path):
+        d = tmp_path / "render_mask"
+        d.mkdir()
+        (d / "000000.png").write_bytes(b"x")
+        (d / "000003.png").write_bytes(b"x")
+        found = find_mask_files(d)
+        assert found == {0: d / "000000.png", 3: d / "000003.png"}
+
+    def test_multi_group_prefers_depth_prefix(self, tmp_path):
+        d = tmp_path / "render_mask"
+        d.mkdir()
+        # 假设 job 同时输出 Beauty 与 CustomDepth（{render_pass} 前缀）
+        for prefix in ("Beauty", "CustomDepth"):
+            for n in (0, 3):
+                (d / f"{prefix}_{n:06d}.png").write_bytes(b"x")
+        found = find_mask_files(d)
+        assert sorted(found.keys()) == [0, 3]
+        assert all("CustomDepth" in str(p) for p in found.values())
+
+    def test_multi_group_fallback_most_frames(self, tmp_path):
+        d = tmp_path / "render_mask"
+        d.mkdir()
+        for n in (0, 3, 6):
+            (d / f"A_{n:06d}.png").write_bytes(b"x")
+        (d / "B_000000.png").write_bytes(b"x")
+        found = find_mask_files(d)
+        assert sorted(found.keys()) == [0, 3, 6]  # A 组帧数更多
+
+
+class TestCopyMaskFrames:
+    def test_copy_names(self, tmp_path):
+        render_mask = tmp_path / "render_mask"
+        mask_dir = tmp_path / "mask"
+        render_mask.mkdir()
+        for n in (0, 3, 6):
+            (render_mask / f"{n:06d}.png").write_bytes(b"x")
+        copied = copy_mask_frames(render_mask, mask_dir, [0, 3, 6])
+        assert copied == 3
+        assert (mask_dir / "000001.png").exists()
+        assert (mask_dir / "000003.png").exists()
+        assert not (mask_dir / "000004.png").exists()
+
+
 class TestRecoverRenderToImg1:
     def test_recover_writes_img1_and_summary(self, tmp_path):
         # num_steps=3, step=0.1s, fps=30 -> keep_indices = [0, 3, 6]
@@ -131,4 +177,43 @@ class TestRecoverRenderToImg1:
         status, per_cam = recover_render_to_img1(seqs, ann, episode, out)
         assert status == "partial"
         assert per_cam["Cam_01"]["img1_frames"] == 1
+        assert per_cam["Cam_01"]["ok"] is False
+
+    def test_recover_mask_too(self, tmp_path):
+        # render/ 与 render_mask/ 都存在 → img1/ 与 mask/ 都恢复，ok 需两者都齐
+        episode, out = _make_episode(tmp_path, num_steps=3)
+        cam_out = out / "episode_demo" / "Cam_01"
+        (cam_out / "render").mkdir(parents=True)
+        (cam_out / "render_mask").mkdir(parents=True)
+        for n in (0, 3, 6):
+            (cam_out / "render" / f"{n:06d}.png").write_bytes(b"x")
+            (cam_out / "render_mask" / f"{n:06d}.png").write_bytes(b"x")
+
+        seqs = [{"name": "LS_Cam", "camera_actor": "Cam_01"}]
+        ann = {"render_rgb": {"frame_rate": 30}}
+        status, per_cam = recover_render_to_img1(seqs, ann, episode, out)
+        assert status == "success"
+        assert per_cam["Cam_01"]["img1_frames"] == 3
+        assert per_cam["Cam_01"]["mask_frames"] == 3
+        assert per_cam["Cam_01"]["ok"] is True
+        assert (cam_out / "mask" / "000001.png").exists()
+        assert (cam_out / "mask" / "000002.png").exists()
+        assert (cam_out / "mask" / "000003.png").exists()
+
+    def test_recover_mask_missing_ok_is_false(self, tmp_path):
+        # render/ 齐全但 render_mask/ 缺帧 → 整体 partial
+        episode, out = _make_episode(tmp_path, num_steps=3)
+        cam_out = out / "episode_demo" / "Cam_01"
+        (cam_out / "render").mkdir(parents=True)
+        (cam_out / "render_mask").mkdir(parents=True)
+        for n in (0, 3, 6):
+            (cam_out / "render" / f"{n:06d}.png").write_bytes(b"x")
+        (cam_out / "render_mask" / "000000.png").write_bytes(b"x")  # mask 只 1 帧
+
+        seqs = [{"name": "LS_Cam", "camera_actor": "Cam_01"}]
+        ann = {"render_rgb": {"frame_rate": 30}}
+        status, per_cam = recover_render_to_img1(seqs, ann, episode, out)
+        assert status == "partial"
+        assert per_cam["Cam_01"]["img1_frames"] == 3
+        assert per_cam["Cam_01"]["mask_frames"] == 1
         assert per_cam["Cam_01"]["ok"] is False

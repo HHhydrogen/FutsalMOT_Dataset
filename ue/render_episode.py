@@ -30,7 +30,9 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from dataset_export import ensure_dir, load_episode, write_json_atomic  # noqa: E402
+from annotation_utils import entity_id_to_mask_id  # noqa: E402
+from dataset_export import ensure_dir, load_episode, load_mapping, write_json_atomic  # noqa: E402
+from scene_apply import find_all_actors  # noqa: E402
 
 # 模块级：当前活跃的异步渲染管线。脚本（main）返回后 MRQ delegate 仍持有它的
 # 方法引用，但显式保留模块级引用可防止任何环境下对象被垃圾回收。
@@ -107,6 +109,52 @@ def copy_rendered_frames(
     return copied
 
 
+def find_mask_files(render_mask_dir: Path) -> Dict[int, Path]:
+    """从 render_mask/ 中挑出 Instance-ID Mask 帧文件。返回 {frame_number: path}。
+
+    正常情况下 mask job 只配置 CustomDepthPass → 每帧一个输出文件，直接解析。
+    若与其它 pass 混出（文件名出现多前缀），优先取文件名含
+    mask/depth/stencil/custom/object 前缀的组；否则取帧数最多的组兜底。
+    """
+    files = list(render_mask_dir.rglob("*.png"))
+    groups: Dict[str, Dict[int, Path]] = {}
+    for p in files:
+        digits = "".join(ch for ch in p.stem if ch.isdigit())
+        if not digits:
+            continue
+        prefix = p.stem[: -len(digits)]
+        frame = int(digits)
+        groups.setdefault(prefix, {})[frame] = p
+    if len(groups) == 1:
+        return next(iter(groups.values()))
+    for prefix, mapping in groups.items():
+        if any(k in prefix.lower() for k in ("mask", "depth", "stencil", "custom", "object")):
+            return mapping
+    if groups:
+        return max(groups.values(), key=len)
+    return {}
+
+
+def copy_mask_frames(
+    render_mask_dir: Path,
+    mask_dir: Path,
+    keep_indices: Sequence[int],
+) -> int:
+    """把 render_mask/ 中与 annotation 对齐的 mask 帧复制为 mask/{frame_index:06d}.png。
+
+    与 img1/ 使用同一帧号（frame_index），保证 RGB 与 mask 一一对应。
+    """
+    rendered = find_mask_files(render_mask_dir)
+    mapping = map_rendered_to_annotation(sorted(rendered.keys()), keep_indices)
+    ensure_dir(mask_dir)
+    copied = 0
+    for frame_index, num in mapping.items():
+        dst = mask_dir / f"{frame_index:06d}.png"
+        shutil.copy2(rendered[num], dst)
+        copied += 1
+    return copied
+
+
 def recover_render_to_img1(
     sequences_cfg,
     annotation_cfg: dict,
@@ -133,6 +181,7 @@ def recover_render_to_img1(
 
     per_camera = {}
     total_copied = 0
+    total_mask_copied = 0
     expected = len(keep_indices)
     for seq_entry in (sequences_cfg or []):
         seq_name = seq_entry.get("name")
@@ -160,6 +209,17 @@ def recover_render_to_img1(
             mark = "PARTIAL"
         print(f"  [{mark}] {cam_id}: img1/ 写入 {copied}/{expected} 帧")
 
+        # Instance-ID Mask：从 render_mask/ 恢复（若存在）
+        mask_render = cam_out / "render_mask"
+        mask_dir = cam_out / "mask"
+        if mask_render.exists():
+            mask_copied = copy_mask_frames(mask_render, mask_dir, keep_indices)
+            total_mask_copied += mask_copied
+            per_camera[cam_id]["mask_frames"] = mask_copied
+            per_camera[cam_id]["ok"] = per_camera[cam_id]["ok"] and (mask_copied == expected)
+            m_mark = "MISSING" if mask_copied == 0 else ("OK" if mask_copied == expected else "PARTIAL")
+            print(f"  [{m_mark}] {cam_id}: mask/ 写入 {mask_copied}/{expected} 帧")
+
     if not per_camera:
         print("WARNING: 没有任何可恢复的 camera render/ 目录")
         return "failed", per_camera
@@ -175,6 +235,7 @@ def recover_render_to_img1(
         "status": status,
         "reason": "从已有 render/ 目录恢复（MRQ 完成回调未触发）",
         "total_img1_frames": total_copied,
+        "total_mask_frames": total_mask_copied,
         "cameras": per_camera,
         "finished_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "note": "由 recover_render_to_img1 恢复写入。完整标注校验请在 P1 运行："
@@ -434,6 +495,463 @@ def _build_mrq_job(
     return job
 
 
+def _ensure_custom_depth_stencil_enabled() -> None:
+    """确保 Custom Depth-Stencil 已开启（含 stencil），供 Instance-ID Mask 使用。
+
+    多级 fallback：
+      1. 尝试设置 RendererSettings / RendererOverrideSettings 的 custom_depth_stencil_pass。
+      2. 用 r.CustomDepth 控制台命令开启（2 = enable with stencil）。
+      3. 仍失败则打印手动步骤。
+    """
+    import unreal
+
+    for cls_name in ("RendererSettings", "RendererOverrideSettings"):
+        cls = getattr(unreal, cls_name, None)
+        if cls is None:
+            continue
+        try:
+            settings = unreal.get_default_object(cls)
+            enum = getattr(unreal, "ECustomDepthStencil", None)
+            target = None
+            if enum is not None:
+                for name in ("ENABLED_WITH_STENCIL", "ENABLED_STENCIL", "ENABLED"):
+                    v = getattr(enum, name, None)
+                    if v is not None:
+                        target = v
+                        break
+            if target is not None:
+                settings.set_editor_property("custom_depth_stencil_pass", target)
+                print("  [MRQ] Custom Depth-Stencil Pass = Enabled With Stencil")
+                return
+        except Exception as e:
+            print(f"  WARNING: 自动开启 Custom Depth-Stencil 失败（{cls_name}）: {e}")
+    try:
+        unreal.SystemLibrary.execute_console_command(None, "r.CustomDepth 2")
+        print("  [MRQ] 通过控制台命令开启 r.CustomDepth=2（Enable with Stencil）")
+        return
+    except Exception as e:
+        print(f"  WARNING: 控制台命令开启 Custom Depth-Stencil 失败: {e}")
+    print(
+        "  WARNING: 请在 Project Settings → Rendering → Custom Depth-Stencil Pass"
+        " 手动设为 'Enabled with Stencil'，否则 Instance-ID Mask 全为背景。"
+    )
+
+
+def create_stencil_to_color_material(
+    package_path: str = "/Game/FutsalMOT/Materials", force: bool = False
+) -> Optional[str]:
+    """创建 SceneTexture(PPI_CUSTOM_STENCIL) → EmissiveColor 的 post-process 材质。
+
+    用于把每个实体的 Custom Depth Stencil 值（= mask_id，1..11）渲染为 mask 图：
+    mask 像素值 == stencil 值，P1 侧可直接按 mask_id 解码（确定性、无 hash 歧义）。
+
+    已确认 UE 5.8 的 SceneTextureId 枚举含 PPI_CUSTOM_STENCIL；本函数显式用它并读回验证。
+    force=True 时总是删除重建（用于修复之前读错纹理的旧材质）。
+    返回材质资产路径；创建失败返回 None（可手动建材质并填 post_process_material）。
+    """
+    import traceback
+
+    import unreal
+
+    asset_name = "M_StencilToID"
+    asset_path = f"{package_path}/{asset_name}"
+    if unreal.EditorAssetLibrary.does_asset_exist(asset_path) and not force:
+        if _material_is_valid(asset_path):
+            print(f"  [MRQ] 复用已有 stencil→颜色 材质: {asset_path}")
+            return asset_path
+        print("  [MRQ] 已有材质校验未通过（domain/SceneTexture 纹理不对），就地重建")
+    if not unreal.EditorAssetLibrary.does_directory_exist(package_path):
+        unreal.EditorAssetLibrary.make_directory(package_path)
+    # 存在时就地清空表达式重建（避免 delete+create_asset 触发"覆写现有Object"对话框）
+    if unreal.EditorAssetLibrary.does_asset_exist(asset_path):
+        mat = unreal.load_asset(asset_path)
+        for ex in list(unreal.MaterialEditingLibrary.get_material_expressions(mat)):
+            try:
+                unreal.MaterialEditingLibrary.delete_material_expression(mat, ex)
+            except Exception:
+                pass
+    else:
+        factory = unreal.MaterialFactoryNew()
+        mat = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
+            asset_name, package_path, None, factory
+        )
+        if mat is None:
+            print("  ERROR: create_asset 返回 None（MaterialFactoryNew 不可用？）")
+            return None
+    try:
+        mat.set_editor_property("material_domain", unreal.MaterialDomain.MD_POST_PROCESS)
+        print("  [MRQ] 材质 domain = PostProcess")
+        stex = unreal.MaterialEditingLibrary.create_material_expression(
+            mat, unreal.MaterialExpressionSceneTexture, -400.0, 0.0
+        )
+        print(f"  [MRQ] 已创建 SceneTexture 节点: {type(stex).__name__}")
+        tid = getattr(unreal.SceneTextureId, "PPI_CUSTOM_STENCIL", None)
+        if tid is not None:
+            # 属性名是 scene_texture_id（不是 texture_id）——UE 5.8 实测
+            stex.set_editor_property("scene_texture_id", tid)
+            print("  [MRQ] 用 SceneTextureId.PPI_CUSTOM_STENCIL（scene_texture_id）")
+        else:
+            print("  WARNING: 未找到 SceneTextureId.PPI_CUSTOM_STENCIL")
+        try:
+            readback = stex.get_editor_property("scene_texture_id")
+            print(f"  [MRQ] SceneTexture scene_texture_id 读回: {readback}")
+        except Exception as e:
+            print(f"  WARNING: 读回 scene_texture_id 失败: {e}")
+        # 连到材质的输出属性（EmissiveColor = post-process 材质的主输出）。
+        # connect_material_expressions 的 to_expression 必须是 MaterialExpression，
+        # 连材质属性要用 connect_material_property。
+        unreal.MaterialEditingLibrary.connect_material_property(
+            stex, "RGB", unreal.MaterialProperty.MP_EMISSIVE_COLOR
+        )
+        print("  [MRQ] 已连接 SceneTexture.RGB -> 材质 EmissiveColor（connect_material_property）")
+        unreal.EditorAssetLibrary.save_loaded_asset(mat)
+        print(f"  [MRQ] 已创建/重建 stencil→颜色 材质: {asset_path}")
+        return asset_path
+    except Exception as e:
+        print("  ERROR: 创建 stencil 材质失败，完整 traceback：")
+        traceback.print_exc()
+        return None
+
+
+def _material_is_valid(asset_path: str) -> bool:
+    """校验 M_StencilToID 材质：PostProcess 域 + SceneTexture 节点读 PPI_CUSTOM_STENCIL。"""
+    import unreal
+
+    try:
+        mat = unreal.load_asset(asset_path)
+        if mat.get_editor_property("material_domain") != unreal.MaterialDomain.MD_POST_PROCESS:
+            return False
+        for ex in unreal.MaterialEditingLibrary.get_material_expressions(mat):
+            if "SceneTexture" in type(ex).__name__:
+                val = ex.get_editor_property("scene_texture_id")
+                if "PPI_CUSTOM_STENCIL" in str(val):
+                    return True
+        return False
+    except Exception:
+        return False
+
+
+def _assign_custom_stencil(actors: dict) -> None:
+    """为每个实体 actor 的 primitive 组件设置 Custom Depth Stencil 值 = mask_id。
+
+    mask_id 由 annotation_utils.entity_id_to_mask_id 确定性映射（L0..L4→1..5、
+    R0..R4→6..10、BALL→11）。CustomDepthStencilValue / bRenderCustomDepth 是
+    EditAnywhere UPROPERTY，设置 + actor.modify() 后会随 PIE 实例化带入渲染。
+    """
+    import unreal
+
+    if not actors:
+        return
+    assigned = 0
+    verified = 0
+    for entity_id, actor in actors.items():
+        try:
+            mask_id = entity_id_to_mask_id(entity_id)
+        except (ValueError, TypeError):
+            continue
+        # 用具体组件类遍历（PrimitiveComponent 抽象基类在部分 UE 版本不可用于
+        # get_components_by_class），确保不遗漏任何会写入 custom depth 的组件。
+        comps = []
+        for cls in (
+            unreal.SkeletalMeshComponent,
+            unreal.StaticMeshComponent,
+            unreal.CapsuleComponent,
+        ):
+            try:
+                comps.extend(actor.get_components_by_class(cls))
+            except Exception:
+                continue
+        if not comps:
+            continue
+        for comp in comps:
+            set_stencil = False
+            try:
+                comp.set_editor_property("render_custom_depth", True)
+                set_stencil = True
+            except Exception as e:
+                print(f"    WARNING: {entity_id} 设置 render_custom_depth 失败: {e}")
+            try:
+                comp.set_editor_property("custom_depth_stencil_value", int(mask_id))
+                set_stencil = True
+            except Exception:
+                m = getattr(comp, "set_custom_depth_stencil_value", None)
+                if m is not None:
+                    try:
+                        m(int(mask_id))
+                        set_stencil = True
+                    except Exception:
+                        pass
+            if set_stencil:
+                assigned += 1
+                # 读回验证：确认 render_custom_depth / custom_depth_stencil_value 真正生效
+                try:
+                    rd = comp.get_editor_property("render_custom_depth")
+                    sv = comp.get_editor_property("custom_depth_stencil_value")
+                    if bool(rd) and int(sv) == int(mask_id):
+                        verified += 1
+                    else:
+                        print(
+                            f"    WARNING: {entity_id} 组件读回不一致"
+                            f"（render_custom_depth={rd}, stencil={sv}, 期望 {mask_id}）"
+                        )
+                except Exception:
+                    pass
+        try:
+            actor.modify()
+        except Exception:
+            pass
+    print(
+        f"  [MRQ] 已为 {assigned} 个组件设置 Custom Depth Stencil 值"
+        f"（读回验证通过 {verified}）"
+    )
+
+
+def _build_mask_job(
+    queue,
+    seq_asset_path: str,
+    map_path: str,
+    mask_dir: Path,
+    image_width: int,
+    image_height: int,
+    frame_rate: int,
+    file_name_format: str,
+    zero_pad: int,
+    mask_source: str = "object_id_pass",
+    post_process_material: str = None,
+):
+    """构建渲染 Instance-ID Mask 的 MRQ job（输出到 mask_dir）。
+
+    mask_source:
+      "object_id_pass"（默认）—— 添加 MoviePipelineObjectIdRenderPass（UE 5.8 存在），
+        配合每实体 Custom Depth Stencil 值（_assign_custom_stencil）输出 Instance-ID。
+        最佳实践需设置 IdType=Actor 并开启 stencil 模式；不同 UE 版本属性名不同，
+        这里做 best-effort 并打印成员供校准。
+      "post_process_material" —— 用 MoviePipelineDeferredPassBase + 用户提供的
+        stencil→颜色 材质（post_process_material 资产路径），输出为单张 mask 图。
+    分辨率 / 帧率 / 帧范围与 RGB job 一致 → 帧号严格 1:1 对齐。
+
+    注意：用 queue.allocate_new_job 加入队列（与 RGB job 一致——本 UE 5.8 的
+    MoviePipelineQueue 无 jobs 属性，queue.jobs.add 会报错）；配置失败时用
+    delete_job 移除，避免留下 0 pass 的孤儿 job 被 executor 渲染。
+    """
+    import unreal
+
+    job = queue.allocate_new_job(unreal.MoviePipelineExecutorJob)
+    try:
+        _configure_mask_job(job, seq_asset_path, map_path, mask_dir, image_width,
+                            image_height, frame_rate, file_name_format, zero_pad,
+                            mask_source, post_process_material)
+    except Exception:
+        _delete_queue_job(queue, job)
+        raise
+    return job
+
+
+def _delete_queue_job(queue, job) -> None:
+    """从 MRQ 队列移除一个 job（best-effort，不同 UE 版本方法名不同）。"""
+    for m in ("delete_job", "remove_job"):
+        fn = getattr(queue, m, None)
+        if fn is None:
+            continue
+        try:
+            fn(job)
+            return
+        except Exception:
+            continue
+    print(f"  WARNING: 无法从队列移除配置失败的 job（{job.get_name()}）")
+
+
+def _configure_mask_job(
+    job,
+    seq_asset_path: str,
+    map_path: str,
+    mask_dir: Path,
+    image_width: int,
+    image_height: int,
+    frame_rate: int,
+    file_name_format: str,
+    zero_pad: int,
+    mask_source: str,
+    post_process_material: str,
+) -> None:
+    """配置单个 mask job（已入队）：输出设置 + 渲染 pass。配置失败时抛错。"""
+    import unreal
+
+    job.sequence = unreal.SoftObjectPath(seq_asset_path)
+    if map_path:
+        job.map = unreal.SoftObjectPath(map_path)
+
+    config = _get_job_config(job)
+    output = config.find_or_add_setting_by_class(unreal.MoviePipelineOutputSetting)
+    output.output_directory = unreal.DirectoryPath(str(mask_dir))
+    output.file_name_format = file_name_format
+    output.zero_pad_frame_numbers = zero_pad
+    output.output_resolution = unreal.IntPoint(image_width, image_height)
+    try:
+        output.frame_rate = unreal.FrameRate(frame_rate, 1)
+    except Exception:
+        pass
+    config.find_or_add_setting_by_class(unreal.MoviePipelineImageSequenceOutput_PNG)
+
+    # 确保 Custom Depth-Stencil 在本次 MRQ 渲染期间开启（r.CustomDepth=2 = Enable with
+    # Stencil）。编辑器里的控制台命令不会自动带入 PIE，必须写在 job 的控制台变量里。
+    _enable_custom_depth_in_job(config)
+
+    if mask_source == "post_process_material":
+        if not post_process_material:
+            raise RuntimeError(
+                "post_process_material 未设置：请填 stencil→颜色 材质资产路径"
+                "（或确认 create_stencil_to_color_material 自动创建成功）"
+            )
+        deferred = config.find_or_add_setting_by_class(unreal.MoviePipelineDeferredPassBase)
+        mat = unreal.load_asset(post_process_material)
+        if mat is None:
+            raise RuntimeError(
+                f"post_process_material 资产不存在: {post_process_material}"
+            )
+        try:
+            # additional_post_process_materials 是 MoviePipelinePostProcessPass 结构体数组
+            #（元素含 material + enabled），不能直接放 Material 对象
+            pp = unreal.MoviePipelinePostProcessPass()
+            pp.set_editor_property("material", mat)
+            pp.set_editor_property("enabled", True)
+            deferred.set_editor_property("additional_post_process_materials", [pp])
+            print(f"  [MRQ] mask pass: 附加 stencil→颜色 材质 {post_process_material}")
+        except Exception as e:
+            raise RuntimeError(f"设置 additional_post_process_materials 失败: {e}")
+    else:
+        # 默认 object_id_pass：MoviePipelineObjectIdRenderPass
+        added = False
+        for cls_name in ("MoviePipelineObjectIdRenderPass",):
+            cls = getattr(unreal, cls_name, None)
+            if cls is None:
+                continue
+            try:
+                pass_setting = config.find_or_add_setting_by_class(cls)
+                _configure_object_id_pass(pass_setting)
+                added = True
+                break
+            except Exception as e:
+                print(f"  [MRQ] 添加 {cls_name} 失败: {e}")
+        if not added:
+            _print_mrq_members(config, "config")
+            _list_mrq_classes()
+            raise RuntimeError(
+                "无法添加 MoviePipelineObjectIdRenderPass 渲染 Instance-ID Mask。"
+                "已打印可用 MRQ 类与 config 成员，请把 [MRQ 诊断] 输出贴回；或改用"
+                " instance_mask.mask_source='post_process_material'（需提供 stencil→颜色"
+                " 材质资产路径）。"
+            )
+
+    if not _set_job_config(job, config):
+        _print_mrq_members(job, "job")
+        raise RuntimeError("无法把 mask job 配置挂到 job")
+
+
+def _enable_custom_depth_in_job(config) -> None:
+    """在 MRQ job 配置中加入 r.CustomDepth=2（Enable with Stencil）。
+
+    编辑器里的控制台命令不会自动带入 PIE 渲染（MRQ 渲染开始时按项目设置重置 cvar），
+    必须把 cvar 写进 job 的 MoviePipelineConsoleVariableSetting，确保渲染期间
+    custom depth/stencil 开启、各实体 stencil 值能被材质读到。
+    """
+    import unreal
+
+    cls = getattr(unreal, "MoviePipelineConsoleVariableSetting", None)
+    if cls is None:
+        print("  WARNING: 无 MoviePipelineConsoleVariableSetting，无法在 job 内开启 Custom Depth-Stencil")
+        return
+    try:
+        cvar = config.find_or_add_setting_by_class(cls)
+    except Exception as e:
+        print(f"  WARNING: 添加 MoviePipelineConsoleVariableSetting 失败: {e}")
+        return
+    entry_cls = getattr(unreal, "MoviePipelineConsoleVariableEntry", None)
+    if entry_cls is None:
+        print("  WARNING: 无 MoviePipelineConsoleVariableEntry，无法设置 cvar")
+        return
+    entry_struct = entry_cls()
+    if not _set_console_entry(entry_struct, "r.CustomDepth", 2.0):
+        print("  WARNING: 无法设置 MoviePipelineConsoleVariableEntry 字段，成员如下：")
+        _print_mrq_members(entry_struct, "console_entry")
+        return
+    prop = "cvars"  # 由报错确认：属性名 cvars，元素类型 MoviePipelineConsoleVariableEntry
+    try:
+        current = list(cvar.get_editor_property(prop) or [])
+    except Exception:
+        current = []
+    if not any("r.CustomDepth" in str(x) for x in current):
+        current.append(entry_struct)
+    try:
+        cvar.set_editor_property(prop, current)
+        print("  [MRQ] job 内设置 r.CustomDepth=2（Custom Depth-Stencil 开启）")
+    except Exception as e:
+        print(f"  WARNING: 设置 r.CustomDepth 2 失败: {e}")
+        _print_mrq_members(entry_struct, "console_entry")
+
+
+def _set_console_entry(entry_struct, name: str, value) -> bool:
+    """best-effort 设置 cvar 结构体字段（name/value/is_enabled，字段名因版本而异）。"""
+    ok = False
+    for name_prop in ("name", "cvar_name", "console_variable_name"):
+        try:
+            entry_struct.set_editor_property(name_prop, name)
+            ok = True
+            break
+        except Exception:
+            continue
+    for value_prop in ("value", "cvar_value"):
+        try:
+            entry_struct.set_editor_property(value_prop, float(value))
+            ok = True
+            break
+        except Exception:
+            try:
+                entry_struct.set_editor_property(value_prop, str(value))
+                ok = True
+                break
+            except Exception:
+                continue
+    for enabled_prop in ("is_enabled", "b_is_enabled", "enabled"):
+        try:
+            entry_struct.set_editor_property(enabled_prop, True)
+            break
+        except Exception:
+            continue
+    return ok
+
+
+def _configure_object_id_pass(pass_setting) -> None:
+    """best-effort 配置 MoviePipelineObjectIdRenderPass：IdType=Actor + stencil 模式。
+
+    不同 UE 版本属性名 / 枚举值不同，全部 try/except 兜底，并在最后打印可用成员
+    便于校准。若某个版本没有 stencil 开关，输出可能是自动 hash ID（需按输出校准
+    decode，或用 post_process_material）。
+    """
+    import unreal
+
+    id_type_enum = getattr(unreal, "MoviePipelineObjectIdPassIdType", None)
+    if id_type_enum is not None:
+        for name in ("ACTOR", "ACTOR_WITH_HIERARCHY"):
+            v = getattr(id_type_enum, name, None)
+            if v is not None:
+                try:
+                    pass_setting.set_editor_property("id_type", v)
+                    print(f"  [MRQ] ObjectId pass: id_type={name}")
+                except Exception:
+                    pass
+                break
+    # 打印该 pass 的可用成员，便于确认 stencil 开关属性名
+    try:
+        names = sorted(
+            n for n in dir(pass_setting) if not n.startswith("_")
+            and any(k in n.lower() for k in ("stencil", "id", "identifier", "type", "material"))
+        )
+        print(f"  [MRQ] ObjectId pass 相关成员: {names[:40]}")
+    except Exception:
+        pass
+
+
 def _submit_render(subsystem, executor) -> bool:
     """提交渲染当前队列。不同 UE 版本子系统方法名可能不同。
 
@@ -503,10 +1021,18 @@ class _AsyncRenderPipeline:
         prepared = []
         for info in self.jobs:
             try:
-                job = _build_mrq_job(
-                    queue, info["seq_asset_path"], map_path, info["render_dir"],
-                    image_width, image_height, frame_rate, file_name_format, zero_pad,
-                )
+                if info.get("kind") == "mask":
+                    job = _build_mask_job(
+                        queue, info["seq_asset_path"], map_path, info["render_dir"],
+                        image_width, image_height, frame_rate, file_name_format, zero_pad,
+                        mask_source=info.get("mask_source", "custom_depth_pass"),
+                        post_process_material=info.get("post_process_material"),
+                    )
+                else:
+                    job = _build_mrq_job(
+                        queue, info["seq_asset_path"], map_path, info["render_dir"],
+                        image_width, image_height, frame_rate, file_name_format, zero_pad,
+                    )
             except Exception as e:
                 print(f"  ERROR: 构建 MRQ job 失败 {info['name']}: {e}")
                 self.error_messages.append(f"{info['name']}: {e}")
@@ -672,9 +1198,12 @@ class _AsyncRenderPipeline:
         return bool(m())
 
     def _all_keep_frames_present(self) -> bool:
-        """所有 camera 的目标渲染帧（keep_indices）是否已输出到 render/。"""
+        """所有 camera 的目标渲染帧（keep_indices）是否已输出到 render/（mask 用 find_mask_files）。"""
         for info in self.jobs:
-            available = find_rendered_frame_numbers(info["render_dir"])
+            if info.get("kind") == "mask":
+                available = find_mask_files(info["render_dir"])
+            else:
+                available = find_rendered_frame_numbers(info["render_dir"])
             if not all(n in available for n in self.keep_indices):
                 return False
         return True
@@ -688,7 +1217,7 @@ class _AsyncRenderPipeline:
     # ── 收尾：复制 RGB + 轻量校验 + 写完成标记 ─────────────────────
 
     def _copy_and_finalize(self):
-        """finished 成功后：逐 camera 复制渲染帧到 img1/，并做帧数一致性校验。"""
+        """finished 成功后：逐 camera 复制 RGB（img1/）与 Instance-ID Mask（mask/）。"""
         if self.finished:
             return
         per_camera = {}
@@ -696,32 +1225,34 @@ class _AsyncRenderPipeline:
         expected = len(self.keep_indices)
         for info in self.jobs:
             cam_id = info["cam_id"]
-            render_dir, img1_dir = info["render_dir"], info["img1_dir"]
-            copied = copy_rendered_frames(render_dir, img1_dir, self.keep_indices)
-            total_copied += copied
-            entry = {
-                "sequence": info["name"],
-                "img1_frames": copied,
-                "expected_frames": expected,
-                "ok": copied == expected,
-            }
-            ann_count = self._check_annotation_frame_count(info["cam_out"])
-            if ann_count is not None:
-                entry["annotations_jsonl_frames"] = ann_count
-                entry["annotation_img1_match"] = ann_count == copied
-            per_camera[cam_id] = entry
-
-            if copied == 0:
-                mark = "MISSING"
-            elif copied == expected:
-                mark = "OK"
+            render_dir, out_dir = info["render_dir"], info["img1_dir"]
+            is_mask = info.get("kind") == "mask"
+            if is_mask:
+                copied = copy_mask_frames(render_dir, out_dir, self.keep_indices)
             else:
-                mark = "PARTIAL"
-            suffix = f"（annotations.jsonl {ann_count} 帧）" if ann_count is not None else ""
-            print(f"  [{mark}] {cam_id}: img1/ 写入 {copied}/{expected} 帧{suffix}")
+                copied = copy_rendered_frames(render_dir, out_dir, self.keep_indices)
+            total_copied += copied
+            entry = per_camera.setdefault(cam_id, {
+                "sequence": info["name"],
+                "expected_frames": expected,
+                "ok": True,
+            })
+            if is_mask:
+                entry["mask_frames"] = copied
+                label = "mask/"
+            else:
+                entry["img1_frames"] = copied
+                label = "img1/"
+                ann_count = self._check_annotation_frame_count(info["cam_out"])
+                if ann_count is not None:
+                    entry["annotations_jsonl_frames"] = ann_count
+                    entry["annotation_img1_match"] = ann_count == copied
+            entry["ok"] = entry["ok"] and (copied == expected)
+            mark = "MISSING" if copied == 0 else ("OK" if copied == expected else "PARTIAL")
+            print(f"  [{mark}] {cam_id}: {label}写入 {copied}/{expected} 帧")
 
         if total_copied == 0:
-            status, reason = "failed", "渲染未产生任何可用的 RGB 帧"
+            status, reason = "failed", "渲染未产生任何可用的 RGB / mask 帧"
         elif all(e["ok"] for e in per_camera.values()):
             status, reason = "success", None
         else:
@@ -791,14 +1322,17 @@ def render_sequences(
     sequence_package_path: str,
     episode_dir: Path,
     output_dir: Path,
+    mapping_path: Path = None,
 ) -> None:
-    """异步用 MRQ 渲染所有 Sequence 的 RGB 帧，提交后立即返回。
+    """异步用 MRQ 渲染所有 Sequence 的 RGB 帧（+ Instance-ID Mask），提交后立即返回。
 
     sequences_cfg: ue_import_config.json 的 sequences 列表（每个含 name/camera_actor）。
-    annotation_cfg: annotation_export 配置（含 render_rgb 段与分辨率）。
+    annotation_cfg: annotation_export 配置（含 render_rgb 段与 instance_mask 段）。
+    mapping_path: actor 映射文件路径（instance_mask.enabled 时需要，用于给 actor 打 stencil）。
 
     渲染完成后（MRQ finished 回调，或 slate post-tick watchdog 兜底）自动：
       - 复制 RGB 帧到每个 camera 的 img1/（按帧同步契约取帧）。
+      - instance_mask.enabled 时，额外渲染 mask 到 render_mask/ 并复制为 mask/（与 img1/ 同帧号）。
       - 写 <output_dir>/<episode_id>/render_summary.json 完成标记。
     本函数不阻塞编辑器主线程。
     """
@@ -813,6 +1347,31 @@ def render_sequences(
     if not render_cfg.get("enabled", False):
         print("render_rgb.enabled = false，跳过渲染")
         return
+
+    mask_cfg = annotation_cfg.get("instance_mask") or {}
+    mask_enabled = bool(mask_cfg.get("enabled", False))
+    mask_source = mask_cfg.get("mask_source", "post_process_material")
+    post_process_material = mask_cfg.get("post_process_material")
+    if mask_enabled:
+        _ensure_custom_depth_stencil_enabled()
+        if mapping_path is not None and Path(mapping_path).exists():
+            mapping = load_mapping(Path(mapping_path))
+            actors = find_all_actors(mapping)
+            _assign_custom_stencil(actors)
+        else:
+            print("  WARNING: instance_mask.enabled=true 但未提供有效 mapping_path，无法设置 stencil")
+        if mask_source == "post_process_material" and not post_process_material:
+            # 自动创建 stencil→颜色 post-process 材质（SceneTexture:SceneStencil）
+            post_process_material = create_stencil_to_color_material()
+            if post_process_material:
+                print(f"  [MRQ] 自动创建 stencil→颜色 材质: {post_process_material}")
+            else:
+                print(
+                    "  WARNING: 自动创建材质失败。请手动在编辑器建 'SceneTexture(SceneStencil)"
+                    " → EmissiveColor' 的 post-process 材质，填 instance_mask.post_process_material。"
+                )
+    else:
+        print("instance_mask.enabled = false，跳过 mask 渲染（仅 RGB）")
 
     image_width = int(
         render_cfg.get("output_resolution_x") or annotation_cfg.get("image_width", 1920)
@@ -858,8 +1417,28 @@ def render_sequences(
             "cam_out": cam_out,
             "render_dir": render_dir,
             "img1_dir": img1_dir,
+            "kind": "rgb",
         })
-        print(f"  待渲染: {seq_name} -> {img1_dir}")
+        print(f"  待渲染 RGB: {seq_name} -> {img1_dir}")
+
+        if mask_enabled:
+            mask_render_dir = cam_out / "render_mask"
+            mask_dir = cam_out / "mask"
+            ensure_dir(mask_render_dir)
+            _clear_dir(mask_render_dir)
+            _clear_dir(mask_dir)  # 清空旧的 mask 拷贝，避免上一次的无效帧残留
+            jobs.append({
+                "name": seq_name + "_MASK",
+                "cam_id": cam_id,
+                "seq_asset_path": seq_asset_path,
+                "cam_out": cam_out,
+                "render_dir": mask_render_dir,
+                "img1_dir": mask_dir,
+                "kind": "mask",
+                "mask_source": mask_source,
+                "post_process_material": post_process_material,
+            })
+            print(f"  待渲染 MASK: {seq_name} -> {mask_dir}")
 
     if not jobs:
         print("WARNING: 没有任何可渲染的 Sequence")

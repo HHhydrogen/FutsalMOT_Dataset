@@ -684,9 +684,9 @@ def main():
                 export_annotations(episode_dir, mapping_path, ann_out, ann_cfg)
             else:
                 print("annotation_export.enabled = false，跳过标注导出")
-        render_sequences(seq_list, ann_cfg, seq_pkg, episode_dir, ann_out)
-        print("\n已提交。MRQ 渲染为异步执行（不阻塞编辑器），完成后自动复制 RGB 到 "
-              "img1/ 并写 render_summary.json。")
+        render_sequences(seq_list, ann_cfg, seq_pkg, episode_dir, ann_out, mapping_path)
+        print("\n已提交。MRQ 渲染为异步执行（不阻塞编辑器），完成后自动复制 RGB 到 img1/（"
+              "及 Instance-ID Mask 到 mask/）并写 render_summary.json。")
         return
 
     meta, frames = load_episode(episode_dir)

@@ -11,8 +11,16 @@
 
 import json
 import math
+import sys
 from pathlib import Path
 from typing import Dict, List
+
+# 把仓库的 ue/ 目录加入 sys.path（与 tests/conftest.py 一致），以便 import 纯模块
+_UE_DIR = Path(__file__).resolve().parent.parent.parent / "ue"
+if str(_UE_DIR) not in sys.path:
+    sys.path.insert(0, str(_UE_DIR))
+
+from annotation_utils import entity_id_to_mask_id  # noqa: E402
 
 
 def _validate_camera(cam_dir: Path) -> List[str]:
@@ -111,12 +119,28 @@ def _validate_camera(cam_dir: Path) -> List[str]:
                 entity_to_track.setdefault(entity_id, track_id)
                 track_to_entity.setdefault(track_id, entity_id)
 
+                # entity_id ↔ mask_id 确定性映射稳定（mask-primary 标注必须一致）
+                mask_id = obj.get("mask_id")
+                if isinstance(mask_id, int):
+                    try:
+                        if mask_id != entity_id_to_mask_id(entity_id):
+                            errors.append(
+                                f"{label} mask_id={mask_id} 与 entity_id={entity_id} 的"
+                                f"确定性映射不符（期望 {entity_id_to_mask_id(entity_id)}）"
+                            )
+                    except (ValueError, TypeError):
+                        pass
+
                 in_frame = obj.get("in_frame")
                 if not isinstance(in_frame, bool):
                     errors.append(f"{label} in_frame 缺失或非布尔")
                     continue
                 if in_frame:
                     _check_bbox(errors, obj, label, width, height)
+
+    # ── Instance-ID Mask 校验（存在 mask/ 时生效）────────────────
+    if (cam_dir / "mask").exists():
+        _validate_mask_dir(errors, cam_label, cam_dir, width, height)
 
     # ── MOT gt.txt / seqinfo.ini ─────────────────────────────────
     gt_path = cam_dir / "gt" / "gt.txt"
@@ -181,6 +205,158 @@ def _check_bbox(errors: List[str], obj: dict, label: str, width: int, height: in
                 errors.append(f"{label} bbox_xywh y+h 超出图像高: {box}")
         except (TypeError, ValueError):
             errors.append(f"{label} bbox_xywh 含非法值: {box!r}")
+
+
+def _frame_numbers(dir_path: Path) -> set:
+    """从目录里的 PNG 文件名解析帧号集合。"""
+    if not dir_path.exists():
+        return set()
+    nums = set()
+    for p in dir_path.glob("*.png"):
+        digits = "".join(ch for ch in p.stem if ch.isdigit())
+        if digits:
+            nums.add(int(digits))
+    return nums
+
+
+def _read_mask_config(cam_dir: Path) -> dict:
+    """读取 annotate-masks 写入的 mask_config.json（解码参数）。"""
+    cfg_path = cam_dir / "mask_config.json"
+    if cfg_path.exists():
+        try:
+            return json.loads(cfg_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {}
+
+
+def _validate_mask_dir(
+    errors: List[str], cam_label: str, cam_dir: Path, width: int, height: int
+) -> None:
+    """校验 Instance-ID Mask：RGB/mask 帧一一对应、分辨率、合法 ID、bbox==mask、YOLO。"""
+    from instance_mask import (
+        load_mask_array,
+        mask_to_bbox,
+        quantize_mask_pixels,
+    )
+
+    mask_dir = cam_dir / "mask"
+    decode = _read_mask_config(cam_dir)
+    channel = decode.get("mask_channel", "r")
+    id_scale = float(decode.get("id_scale", 1.0))
+    id_offset = float(decode.get("id_offset", 0.0))
+
+    mask_frames = _frame_numbers(mask_dir)
+    if not mask_frames:
+        errors.append(f"[{cam_label}] mask/ 目录为空")
+        return
+
+    # RGB 与 mask 帧一一对应
+    img_frames = _frame_numbers(cam_dir / "img1")
+    if img_frames and img_frames != mask_frames:
+        only_img = sorted(img_frames - mask_frames)[:5]
+        only_mask = sorted(mask_frames - img_frames)[:5]
+        errors.append(
+            f"[{cam_label}] img1/ 与 mask/ 帧号集合不一致（仅 img1: {only_img}，仅 mask: {only_mask}）"
+        )
+
+    ann_path = cam_dir / "annotations.jsonl"
+    if not ann_path.exists():
+        return
+    with open(ann_path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            frame = json.loads(line)
+            fi = frame.get("frame_index")
+            if not isinstance(fi, int):
+                continue
+            mask_path = mask_dir / f"{fi:06d}.png"
+            if not mask_path.exists():
+                continue
+            mask_img = load_mask_array(mask_path, channel)
+            mh, mw = mask_img.shape
+            if (mw, mh) != (width, height):
+                errors.append(
+                    f"[{cam_label}] mask {fi} 分辨率 {mw}x{mh} != camera {width}x{height}"
+                )
+            quantized = quantize_mask_pixels(mask_img, id_scale, id_offset)
+            vals = set(quantized.reshape(-1).tolist())
+            legal = {0} | set(range(1, 12))  # 背景 0 + 合法实体 mask_id 1..11
+            illegal = sorted(v for v in vals if v not in legal)
+            if illegal:
+                errors.append(
+                    f"[{cam_label}] mask {fi} 含非法实例 ID 值: {illegal[:10]}"
+                )
+            for obj in frame.get("objects", []):
+                entity_id = obj.get("entity_id")
+                mask_id = obj.get("mask_id")
+                try:
+                    expected = entity_id_to_mask_id(entity_id)
+                except (ValueError, TypeError):
+                    continue
+                if isinstance(mask_id, int) and mask_id != expected:
+                    errors.append(
+                        f"[{cam_label}] frame {fi} {entity_id} mask_id={mask_id} != 期望 {expected}"
+                    )
+                if obj.get("bbox_source") == "instance_mask" and isinstance(mask_id, int):
+                    bbox = mask_to_bbox(quantized == mask_id)
+                    xyxy = obj.get("bbox_xyxy")
+                    if bbox is None or not isinstance(xyxy, list) or len(xyxy) != 4:
+                        errors.append(
+                            f"[{cam_label}] frame {fi} {entity_id} bbox_source=instance_mask"
+                            f" 但 mask 空或 bbox 缺失"
+                        )
+                        continue
+                    for a, b in zip(bbox, xyxy):
+                        if abs(float(a) - float(b)) > 0.5:
+                            errors.append(
+                                f"[{cam_label}] frame {fi} {entity_id} bbox_xyxy 与 mask"
+                                f" min/max 不一致: mask={[round(v,2) for v in bbox]}, ann={xyxy}"
+                            )
+                            break
+
+    _validate_yolo(errors, cam_label, cam_dir, "det")
+    _validate_yolo(errors, cam_label, cam_dir, "seg")
+
+
+def _validate_yolo(errors: List[str], cam_label: str, cam_dir: Path, sub: str) -> None:
+    """校验 YOLO 标签：坐标 ∈ [0,1]；det 行 5 值且 w/h>0；seg 行偶数点。"""
+    label_dir = cam_dir / "labels" / sub
+    if not label_dir.exists():
+        return  # 未导出 YOLO 属可选，不算错误
+    for p in sorted(label_dir.glob("*.txt")):
+        for line_no, line in enumerate(p.read_text(encoding="utf-8").splitlines(), start=1):
+            parts = line.strip().split()
+            if not parts:
+                continue
+            try:
+                floats = [float(v) for v in parts[1:]]
+            except ValueError:
+                errors.append(f"[{cam_label}] {p.name} 第 {line_no} 行含非数字: {line.strip()!r}")
+                continue
+            if sub == "det":
+                if len(parts) != 5:
+                    errors.append(
+                        f"[{cam_label}] {p.name} 第 {line_no} 行 det 应 5 值"
+                        f"（class cx cy w h），实际 {len(parts)} 值"
+                    )
+                    continue
+                cx, cy, w, h = floats
+                if w <= 0 or h <= 0:
+                    errors.append(f"[{cam_label}] {p.name} 第 {line_no} 行 w/h 非正")
+            else:
+                if len(floats) % 2 != 0:
+                    errors.append(
+                        f"[{cam_label}] {p.name} 第 {line_no} 行 seg 点数为奇数（应成对 x/y）"
+                    )
+            for v in floats:
+                if not (0.0 <= v <= 1.0):
+                    errors.append(
+                        f"[{cam_label}] {p.name} 第 {line_no} 行坐标越界 [0,1]: {v}"
+                    )
+                    break
 
 
 def _report(errors: List[str]) -> None:

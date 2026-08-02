@@ -10,13 +10,11 @@ dependencies = [
     "gfootball>=2.10.2",
     "gym<0.26",
     "numpy",
+    "pillow",  # 读取 mask PNG（annotate-masks）/ annotate-overlay 调试可视化
     "pydantic",
     "six>=1.17.0",
     "typer",
 ]
-
-[project.optional-dependencies]
-overlay = ["pillow"]  # 用于 grf-ue annotate-overlay 调试可视化
 
 [project.scripts]
 grf-ue = "grf_ue_bridge.cli:app"

@@ -12,6 +12,14 @@ from typing import Dict, Optional, Sequence, Tuple
 #   BALL   -> 100（独立高位 ID，与球员不冲突）
 BALL_TRACK_ID = 100
 
+# 实体 ID → Instance-ID mask_id 的确定性映射（与 track_id 同构，一个 episode 内恒定）。
+#   L0..L4 -> 1..5
+#   R0..R4 -> 6..10
+#   BALL   -> 11
+# mask 像素值 == mask_id（背景 = 0）。UE 侧用它给 actor 打 Custom Depth Stencil，
+# P1 侧用它解码 Instance-ID Mask。本模块保持纯 Python（无 numpy），UE Python 可 import。
+BALL_MASK_ID = 11
+
 # 图像坐标系的边界常量（用于裁剪判断）
 IMAGE_LEFT = 0.0
 IMAGE_TOP = 0.0
@@ -31,6 +39,39 @@ def entity_id_to_track_id(entity_id: str) -> int:
     if prefix == "R":
         return idx + 6
     raise ValueError(f"未知实体 ID: {entity_id!r}")
+
+
+def entity_id_to_mask_id(entity_id: str) -> int:
+    """实体 ID 到 Instance-ID mask_id 的确定性映射。
+
+    与 track_id 同构：L0..L4→1..5、R0..R4→6..10、BALL→11。
+    """
+    if entity_id == "BALL":
+        return BALL_MASK_ID
+    prefix = entity_id[0]
+    idx = int(entity_id[1:])
+    if prefix == "L":
+        return idx + 1
+    if prefix == "R":
+        return idx + 6
+    raise ValueError(f"未知实体 ID: {entity_id!r}")
+
+
+def mask_id_to_entity_id(mask_id: int) -> str:
+    """mask_id 到实体 ID 的确定性逆映射。非法 mask_id 抛 ValueError。"""
+    mask_id = int(mask_id)
+    if mask_id == BALL_MASK_ID:
+        return "BALL"
+    if 1 <= mask_id <= 5:
+        return f"L{mask_id - 1}"
+    if 6 <= mask_id <= 10:
+        return f"R{mask_id - 6}"
+    raise ValueError(f"未知 mask_id: {mask_id!r}")
+
+
+def valid_mask_ids() -> range:
+    """合法的实体 mask_id 集合（1..11）。"""
+    return range(1, BALL_MASK_ID + 1)
 
 
 def entity_class(entity_id: str) -> str:

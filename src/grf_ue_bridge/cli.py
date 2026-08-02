@@ -162,5 +162,57 @@ def annotate_overlay(
     raise typer.Exit(_draw_overlay(camera_dataset_dir.resolve(), include_ball))
 
 
+@app.command()
+def annotate_masks(
+    annotation_dir: Path = typer.Argument(
+        ...,
+        help="标注输出目录（含多个 camera 子目录，每个含 mask/ 与 annotations.jsonl）",
+    ),
+    mask_channel: str = typer.Option(
+        "r", "--mask-channel",
+        help="mask PNG 中携带实例 ID 的通道（r/g/b/a/gray），需与 MRQ 输出一致",
+    ),
+    include_ball: bool = typer.Option(
+        False, "--include-ball", help="MOT / YOLO 是否包含球（BALL）",
+    ),
+    polygon_tolerance_px: float = typer.Option(
+        1.0, "--polygon-tolerance-px",
+        help="YOLO segmentation 多边形 RDP 简化容差（像素）",
+    ),
+    max_polygon_points: int = typer.Option(
+        64, "--max-polygon-points",
+        help="每个实例多边形最大点数（超出均匀抽样）",
+    ),
+    id_scale: float = typer.Option(
+        1.0, "--id-scale",
+        help="mask 解码缩放：像素值量化 = round((v - id_offset) / id_scale)",
+    ),
+    id_offset: float = typer.Option(
+        0.0, "--id-offset",
+        help="mask 解码偏移：像素值量化 = round((v - id_offset) / id_scale)",
+    ),
+):
+    """从 Instance-ID Mask 计算 pixel-tight bbox / 分割标注，覆盖写 annotations.jsonl 并导出 MOT / YOLO。
+
+    bbox 由 mask 像素 min/max 直接计算（primary GT），原几何 bbox 保留在
+    geometry_bbox_* 字段作为 fallback。原始 mask/*.png 永不修改。
+    """
+    from .mask_annotator import annotate_masks_dir
+
+    exit_code = annotate_masks_dir(
+        annotation_dir.resolve(),
+        mask_channel=mask_channel,
+        include_ball=include_ball,
+        polygon_tolerance_px=polygon_tolerance_px,
+        max_polygon_points=max_polygon_points,
+        id_scale=id_scale,
+        id_offset=id_offset,
+    )
+    if exit_code != 0:
+        typer.echo("ANNOTATE MASKS FAILED", err=True)
+        raise typer.Exit(exit_code)
+    typer.echo("ANNOTATE MASKS DONE")
+
+
 if __name__ == "__main__":
     app()

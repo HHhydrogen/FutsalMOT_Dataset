@@ -9,19 +9,23 @@
 ```
 code/
 ├── src/grf_ue_bridge/            # Python CLI 包 — 在 .venv 中运行
-│   ├── cli.py                    #   grf-ue export/validate/validate-annotations/annotate-overlay
+│   ├── cli.py                    #   grf-ue export/validate/validate-annotations/annotate-masks/annotate-overlay
 │   ├── config.py                 #   ExportConfig 模型
 │   ├── grf_runner.py             #   运行 GRF 环境，采集原始观测数据
 │   ├── exporter.py               #   将 EpisodeResult 导出为 meta.json + frames.jsonl
 │   ├── coordinate_transform.py   #   GRF 归一化坐标 → UE 米坐标
 │   ├── validator.py              #   验证导出的 episode 数据完整性
-│   ├── annotation_validator.py   #   验证导出的 CV 标注目录
+│   ├── annotation_validator.py   #   验证导出的 CV 标注目录（含 Instance-ID Mask 校验）
+│   ├── mask_annotator.py         #   由 Instance-ID Mask 生成 mask-primary bbox/分割标注（P1）
 │   └── schema.py                 #   数据模型定义
 ├── ue/                           # UE Python 脚本 — 在 Unreal Editor 内运行
 │   ├── import_grf_episode.py     #   读取 JSONL，生成 Level Sequence / 编排标注导出
 │   ├── annotation_exporter.py    #   UE 内运行：读 Camera 标定与 Actor bounds 生成标注
+│   ├── render_episode.py         #   MRQ 异步渲染 RGB + Instance-ID Mask
+│   ├── instance_mask.py          #   纯 numpy：mask 解码 / bbox / 轮廓 / 多边形（pytest 可测）
+│   ├── debug_mask_pass.py        #   UE 探针：确认 MRQ mask pass 与解码参数
 │   ├── camera_projection.py      #   纯数学：相机投影（pytest 可测）
-│   ├── annotation_utils.py       #   纯数学：bbox 裁剪 / track_id 映射
+│   ├── annotation_utils.py       #   纯数学：bbox 裁剪 / track_id / mask_id 映射
 │   ├── dataset_export.py         #   纯 Python：JSONL / MOT 序列化与原子写入
 │   ├── scene_apply.py            #   UE 侧共享的 actor 变换辅助
 │   └── actor_mapping.example.json
@@ -189,28 +193,38 @@ py "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/ue/import_grf_episode
 
 在 Level Sequence / Camera 回放之上，脚本可以导出 **CV Ground-Truth 标注**：每个可见球员/球获得 2D bounding box、稳定 track_id、team/role 等，逐 Camera 独立输出。
 
-### 支持范围（MVP）
+### 支持范围
 
-- 球员 2D bbox（来自 Actor/Mesh 世界空间 AABB 的 8 角点投影，**非固定尺寸**——远处球员 bbox 更小、近处更大，符合透视）
-- 稳定 track_id（`L0..L4 → 1..5`，`R0..R4 → 6..10`，`BALL → 100`）
+- **2D bbox（primary GT 来自 Instance-ID Mask 像素）**：渲染时同步输出每帧的实例掩码，`annotate-masks` 从每个实体的可见 mask 像素直接取 min/max 得 pixel-tight bbox（严格贴合渲染轮廓，含遮挡后可见部分）。几何投影 bbox（Actor/Mesh 世界空间 AABB）仍保留在 `geometry_bbox_*` 字段作为 fallback/debug。
+- **实例分割（modal/visible）**：每个实例由可见 mask 提取外轮廓 → RDP 简化多边形，导出 YOLO Segment 标签；原始 Instance-ID Mask 始终保留为最高精度 GT。
+- 稳定 `track_id`（`L0..L4 → 1..5`，`R0..R4 → 6..10`，`BALL → 100`）与稳定 `mask_id`（`L0..L4 → 1..5`，`R0..R4 → 6..10`，`BALL → 11`）
 - team / role / is_goalkeeper（取自 meta.json 的 entities）
-- 足球 2D bbox（class = `ball`，基于球 Actor 的真实 bounds）
-- 每个 Camera 独立标注
-- frame index（1 基，与图片文件名一致）
-- 是否进入画面（`in_frame`）、是否被图像边界裁切（`truncated`）
+- 足球 2D bbox + 实例 mask（`mask_id=11`）
+- 每个 Camera 独立标注；frame index（1 基，与图片文件名一致）
+- 是否进入画面（`in_frame`，**按最终渲染可见像素**：完全被遮挡/离屏 → `false`）
+- `visible_pixel_count`（可见像素数）——遮挡的真实信号，不靠 bbox 重叠率伪造
 - 原始 3D/world 信息（`world_position`，米）
 - Camera metadata（内参 fx/fy/cx/cy + 外参 location/rotation + FOV/焦距/传感器）
-- 内部 JSONL + MOTChallenge 导出
+- 导出：内部 JSONL（annotations.jsonl）+ MOTChallenge + YOLO Detect + YOLO Segment
 
-暂不支持：pose / segmentation / depth / occlusion visibility（见「限制」）。
+暂不支持：pose keypoints / depth / **amodal** 分割 / occlusion visibility 比例（当前只给可见模态与可见像素数，见「限制」）。
 
 ### 运行方式
 
 在 Unreal Editor Python Console 中：
 
 ```python
-py "D:/.../code/ue/import_grf_episode.py" --mode annotations
+py "D:/.../code/ue/import_grf_episode.py" --mode annotations   # 几何 bbox 标注（fallback）
+py "D:/.../code/ue/import_grf_episode.py" --mode full           # 或一键：建 Sequence + 几何标注 + 渲染 RGB + Instance-ID Mask
 ```
+
+UE 侧导出几何标注并渲染出 RGB 与 Instance-ID Mask 后，在 P1（`.venv`）把 bbox/分割升级为 mask-primary：
+
+```powershell
+uv run grf-ue annotate-masks G:/FutsalMOT_Dataset [--include-ball]
+```
+
+`annotate-masks` 读取每帧 `mask/*.png`，对每个实体由其可见 mask 像素计算 pixel-tight bbox、可见像素数、分割多边形，覆盖写 `annotations.jsonl` 并生成 MOT / YOLO（可重复运行，幂等）。无 `mask/` 目录时保持几何 bbox（fallback）。
 
 脚本读取 `ue_import_config.json` 中的 `annotation_export` 配置段，常用字段：
 
@@ -228,8 +242,15 @@ py "D:/.../code/ue/import_grf_episode.py" --mode annotations
 | `player_bbox.source` | `mesh` | 球员 bbox 数据源：`mesh`=用 `SkeletalMesh.get_bounds()` 模型边界；`capsule`=胶囊缩放 |
 | `player_bbox.width_scale` | `0.7` | 仅 `capsule` 模式：球员 bbox 横向半宽 = 胶囊 radius × scale。胶囊 r=35→70cm 宽，比真人肩宽(~50cm)宽；0.7→≈49cm 贴合身体 |
 | `player_bbox.height_scale` | `1.0` | 仅 `capsule` 模式：球员 bbox 纵向半高 = 胶囊 half_height × scale |
+| `instance_mask.enabled` | `true` | 是否在渲染时同步输出 Instance-ID Mask（`mask/`） |
+| `instance_mask.mask_source` | `post_process_material` | `post_process_material`=DeferredPass + stencil→颜色 post-process 材质（默认，脚本自动创建 SceneTexture:SceneStencil→EmissiveColor 到 `/Game/FutsalMOT/Materials/M_StencilToID`）；`object_id_pass`=MoviePipelineObjectIdRenderPass（实测本 5.8 输出 ActorHitProxyMask，非逐实体 ID，**不可用**） |
+| `instance_mask.mask_channel` | `r` | mask PNG 中携带实例 ID 的通道（r/g/b/a/gray），用 `debug_mask_pass.py` 校准 |
+| `instance_mask.id_scale` / `id_offset` | `1.0` / `0.0` | 解码参数：像素值量化 = `round((v - id_offset) / id_scale)` |
+| `instance_mask.polygon_tolerance_px` | `1.0` | YOLO segmentation 多边形 RDP 简化容差（像素） |
+| `instance_mask.max_polygon_points` | `64` | 每个实例多边形最大点数（超出均匀抽样） |
+| `instance_mask.post_process_material` | `null` | `mask_source="post_process_material"` 时 stencil→颜色 材质的资产路径 |
 
-> 说明：球员身体是 SkeletalMesh，SkeletalMeshComponent 在 UE Python 没有可用的 bounds API（`get_local_bounds`/`get_actor_bounds` 不可用/偏大），但 **SkeletalMesh 资产有 `get_bounds()`**（模型参考姿势边界），`source="mesh"` 即用它的世界换算作为 bbox，严格贴合模型。参考姿势可能手臂张开（侧面偏宽）、且随角色朝向旋转而变，若视觉效果不理想可切 `capsule` 模式缩放胶囊。两种模式切换后需重新 `--mode annotations` 并 `annotate-overlay` 目视对比。
+> 说明：渲染出 Instance-ID Mask 后，bbox 以 mask 像素为准（primary GT），`player_bbox` 几何投影仅作 fallback/debug。几何 bbox 数据源为 `player_bbox.source`——`mesh`=用 `SkeletalMesh.get_bounds()` 模型边界（严格贴合模型参考姿势，但可能手臂张开偏宽、随朝向旋转而变）；`capsule`=胶囊缩放（胶囊 r=35→70cm 宽，比真人肩宽~50cm 宽，`width_scale` 收窄消余量）。两种几何模式切换后需重新 `--mode annotations` 并 `annotate-overlay` 目视对比。
 
 ### 输出目录
 
@@ -238,10 +259,16 @@ py "D:/.../code/ue/import_grf_episode.py" --mode annotations
 └── episode_0001/
     └── Camera_01/
         ├── camera.json        # 相机标定（每 camera 一次）
-        ├── annotations.jsonl  # 内部标注，每帧一行
-        ├── img1/              # RGB 帧目录（本阶段不渲染，见「帧同步」）
+        ├── annotations.jsonl  # 内部标注，每帧一行（mask-primary bbox）
+        ├── mask_config.json   # annotate-masks 写入的解码参数（validator 复用）
+        ├── img1/              # RGB 帧（MRQ 渲染，见「自动渲染 RGB(MRQ)」）
+        ├── mask/              # Instance-ID Mask 帧（与 img1/ 同帧号，像素值 == mask_id）
+        ├── render/            # MRQ 原始 RGB 输出（中转）
+        ├── render_mask/       # MRQ 原始 mask 输出（中转）
         ├── gt/gt.txt          # MOTChallenge 标注
-        └── seqinfo.ini        # MOT 序列信息
+        ├── seqinfo.ini        # MOT 序列信息
+        ├── labels/det/        # YOLO Detect：每帧一行 class cx cy w h（归一化）
+        └── labels/seg/        # YOLO Segment：每帧一行 class x1 y1 x2 y2 ...（归一化）
 ```
 
 ### 内部 annotation schema（annotations.jsonl）
@@ -259,18 +286,24 @@ py "D:/.../code/ue/import_grf_episode.py" --mode annotations
     {
       "entity_id": "L0",
       "track_id": 1,
+      "mask_id": 1,
       "class": "player",
       "team": "left",
       "role": "goalkeeper",
       "is_goalkeeper": true,
       "world_position": [-1.23, 0.45, 0.9],
       "in_frame": true,
+      "bbox_source": "instance_mask",
       "truncated": false,
       "visibility": null,
-      "raw_bbox_xywh": [100.0, 200.0, 120.0, 430.0],
-      "raw_bbox_xyxy": [100.0, 200.0, 220.0, 630.0],
+      "visible_pixel_count": 4321,
       "bbox_xywh": [100.0, 200.0, 120.0, 430.0],
-      "bbox_xyxy": [100.0, 200.0, 220.0, 630.0]
+      "bbox_xyxy": [100.0, 200.0, 220.0, 630.0],
+      "segmentation": [0.05, 0.18, 0.11, 0.18, ...],
+      "geometry_bbox_xywh": [99.0, 202.0, 125.0, 428.0],
+      "geometry_bbox_xyxy": [99.0, 202.0, 224.0, 630.0],
+      "raw_bbox_xywh": [98.0, 201.0, 127.0, 432.0],
+      "raw_bbox_xyxy": [98.0, 201.0, 225.0, 633.0]
     }
   ]
 }
@@ -279,10 +312,15 @@ py "D:/.../code/ue/import_grf_episode.py" --mode annotations
 字段说明：
 
 - `frame_index`（1 基）= MOT 帧号 = 图片文件名 `000001.png`；`source_step`（0 基）= frames.jsonl 行号。
-- `bbox_xywh` / `bbox_xyxy` 是**裁剪到图像内**的合法 bbox；`raw_bbox_*` 是投影原始值（可能越出图像边界）。
-- `in_frame`：bbox 与图像矩形有非零面积交集；完全在相机后方 → `false`。
-- `truncated`：in_frame 且 raw bbox 有部分超出图像边界。
-- `visibility`：第一版不建模遮挡，恒为 `null`。
+- `bbox_source`：`"instance_mask"`（primary，bbox 由 mask 可见像素 min/max 计算）或 `"geometry"`（fallback，无 mask / 完全不可见时）。
+- `bbox_xywh` / `bbox_xyxy`：`instance_mask` 时是 mask 像素的 tight bbox（连续坐标，`xmax=max_x+1`，恰好覆盖全部可见像素）；`geometry` 时是裁剪到图像内的几何投影 bbox。
+- `geometry_bbox_xyxy/xywh`：几何投影的裁剪 bbox（fallback/debug，始终保留）。`raw_bbox_*`：几何投影原始值（可能越出图像边界）。
+- `visible_pixel_count`：该实体可见 mask 像素数（遮挡的真实信号）；`instance_mask` 时 ≥1，`geometry`（不可见）时为 0。
+- `segmentation`：模态分割，YOLO 归一化 flat 点列表 `[x1,y1,x2,y2,...]`（多连通域合并）；无可见像素时为 `null`。
+- `mask_id`：实例稳定 ID（`L0..L4→1..5`、`R0..R4→6..10`、`BALL→11`），等于 mask 像素值。
+- `in_frame`：**按最终渲染可见像素**——`bbox_source="instance_mask"` 时恒 `true`；完全被遮挡/离屏（mask 空）→ `false`。
+- `truncated`：`instance_mask` 时恒 `false`（mask bbox 必在图像内）；`geometry` 时反映几何投影的边界截断。
+- `visibility`：**不建模 amodal 遮挡**，恒为 `null`（要量化遮挡请用 `visible_pixel_count`）。
 - bbox 单位为像素，坐标原点为图像左上角。
 
 ### Camera metadata（camera.json）
@@ -331,7 +369,7 @@ py "D:/.../code/ue/import_grf_episode.py" --mode full
 py "D:/.../code/ue/import_grf_episode.py" --mode render
 ```
 
-**异步执行**：渲染是**异步**的——脚本把所有 Sequence 加入同一个 MRQ queue 并提交后**立即返回**，不阻塞编辑器主线程（MRQ 的 PIE 渲染窗口需要编辑器主线程持续 tick 才能推进，任何 `time.sleep`/`Event.wait` 同步阻塞都会让渲染卡死）。渲染完成后自动把渲染帧复制到各 camera 的 `img1/`，并写完成标记 `<output_dir>/<episode_id>/render_summary.json`（记录 `status`：`success` / `partial` / `failed`、各 camera 帧数与 annotation 帧数一致性）。渲染期间请保持编辑器运行；完成后查看控制台汇总与 `render_summary.json`。
+**异步执行**：渲染是**异步**的——脚本把所有 Sequence 加入同一个 MRQ queue 并提交后**立即返回**，不阻塞编辑器主线程（MRQ 的 PIE 渲染窗口需要编辑器主线程持续 tick 才能推进，任何 `time.sleep`/`Event.wait` 同步阻塞都会让渲染卡死）。渲染完成后自动把 RGB 帧复制到各 camera 的 `img1/`、Instance-ID Mask 复制到 `mask/`，并写完成标记 `<output_dir>/<episode_id>/render_summary.json`（记录 `status`：`success` / `partial` / `failed`、各 camera 的 `img1_frames`/`mask_frames` 与 annotation 帧数一致性）。渲染期间请保持编辑器运行；完成后查看控制台汇总与 `render_summary.json`。
 
 **完成检测**：正常路径由 MRQ 的 `on_executor_finished_delegate` 回调驱动收尾（回调须用与委托一致的显式签名——UE 5.8 会拒绝 `*args` 变参并报 "incorrect number of arguments"）。脚本同时注册了一个 **slate post-tick watchdog** 兜底——每编辑帧非阻塞检查（不再渲染 且 目标帧齐全 / 文件数长期稳定 / 30 分钟硬超时），命中即完成同样的收尾。两条路径幂等，只收尾一次。
 
@@ -349,7 +387,7 @@ py "D:/.../code/ue/import_grf_episode.py" --mode render
 
 **对齐规则**：MRQ 以 `frame_rate`（30fps）渲染 Sequence 全范围，脚本按 `round((frame_index-1)*source_step*fps)` 选出与每个标注帧对应的渲染帧，复制为 `img1/{frame_index:06d}.png`。标注、MOT、RGB 三者同源同帧。
 
-**渲染时长**：当前以 30fps 渲染全范围后每 3 帧取 1 帧，约 3 倍耗时；后续可优化为渲染 10fps 变体 Sequence。
+**渲染时长**：当前以 30fps 渲染全范围后每 3 帧取 1 帧，约 3 倍耗时；`instance_mask.enabled=true` 时 mask 为独立 MRQ job，总耗时再 ×2（见「Instance-ID Mask 像素级 GT」）。后续可优化为渲染 10fps 变体 Sequence / 同 job 多 pass。
 
 **恢复（不重新渲染）**：若渲染已把 PNG 输出到各 camera 的 `render/`，但完成回调未触发导致 `img1/` 为空（极端情况），无需重新渲染，直接从现有 `render/` 恢复 `img1/` 并写 `render_summary.json`：
 
@@ -359,14 +397,49 @@ uv run python ue/recover_render.py
 
 （也可在 UE 控制台 `py "D:/.../code/ue/recover_render.py"`。该脚本纯 Python，读取 `ue_import_config.json`。）
 
+### Instance-ID Mask 像素级 GT
+
+`annotation_export.instance_mask.enabled=true` 时，MRQ 在渲染 RGB 的同时为每个 Sequence 额外渲染一份 **Instance-ID Mask**（独立 MRQ job，输出到 `render_mask/` 后复制为 `mask/`，与 `img1/` 同帧号同分辨率），每个实体的 mask 像素值 == 其稳定 `mask_id`（背景 0）：
+
+| 实体 | mask_id | | 实体 | mask_id |
+|------|---------|-|------|---------|
+| `L0`..`L4` | `1`..`5` | | `R0`..`R4` | `6`..`10` |
+| `BALL` | `11` | | 背景 | `0` |
+
+**渲染机制**：UE 侧 `_assign_custom_stencil` 为每个 actor 的组件设置 `CustomDepthStencilValue = mask_id` 并开启 `bRenderCustomDepth`；mask job 用 DeferredPass + **stencil→颜色 post-process 材质**（`SceneTexture:SceneStencil` → EmissiveColor，脚本自动创建）把 stencil 值渲染为像素值，即 mask 像素 == `mask_id`（确定性，无 hash 歧义）。需要开启 **Custom Depth-Stencil Pass**（脚本尝试自动设置：先改 RendererSettings，失败则用 `r.CustomDepth=3` 控制台命令，再失败打印手动步骤）。渲染完成后 `annotate-masks` 从 mask 像素计算 bbox/分割（见上），因此 bbox 严格贴合实际渲染轮廓（含遮挡后可见部分），不再依赖几何估算。
+
+**mask job 是独立 MRQ job → 总渲染耗时约 2 倍**（RGB 一遍 + mask 一遍）。RGB job 与 mask job 独立构建：mask job 构建失败不影响 RGB 渲染（错误记入 `render_summary.json`）。
+
+**校准（一次性，设备相关）**：若 mask 输出不正确，先运行探针：
+
+```python
+# UE 编辑器 Python Console
+py "D:/.../code/ue/debug_mask_pass.py"
+```
+
+它会打印可用 MRQ pass 类、已渲染 mask 的各通道取值分布。按输出设置 `instance_mask.mask_channel` / `id_scale` / `id_offset`。若自动创建的 stencil 材质输出不对（如全 255 或全 0），手动在编辑器建一个 post-process 材质：新建 Material → Material Domain 设为 Post Process → 加 SceneTexture 节点设 SceneTextureId=SceneStencil → 连到 EmissiveColor，填 `instance_mask.post_process_material` 资产路径。`mask_source="object_id_pass"` 在本 5.8 实测不可用（输出 ActorHitProxyMask，非逐实体 ID）。
+
+**生成 mask-primary 标注（P1，渲染完成后）**：
+
+```powershell
+uv run grf-ue annotate-masks G:/FutsalMOT_Dataset [--include-ball] [--mask-channel r] [--polygon-tolerance-px 1.0] [--max-polygon-points 64]
+```
+
+对每个 camera：读 `mask/{frame}.png` + UE 导出的 `annotations.jsonl` → 每实体由可见 mask 像素算 tight bbox / `visible_pixel_count` / 模态分割多边形 → 覆盖写 `annotations.jsonl`（`bbox_source="instance_mask"`，几何 bbox 保留在 `geometry_bbox_*`）→ 重写 MOT `gt/gt.txt` → 写 YOLO `labels/det/` 与 `labels/seg/` → 写 `mask_config.json`（解码参数）。幂等，可重复运行；原始 `mask/*.png` 永不修改。无 `mask/` 的 camera 保持几何 bbox（fallback）。
+
+**MOT / YOLO 导出**：
+- MOT `gt/gt.txt`：bbox 为 mask 可见 bbox，`visibility` 按 `mot_visibility_mode`（默认 `unoccluded` 写 1.0）；完全不可见实体不写入。
+- YOLO Detect `labels/det/`：每行 `class cx cy w h`（归一化，`0=player`、`1=ball`）。
+- YOLO Segment `labels/seg/`：每行 `class x1 y1 x2 y2 ...`（归一化多边形，RDP 简化后 ≤ `max_polygon_points` 点，多连通域合并为一行）。
+- 球默认不导出到 MOT/YOLO，`--include-ball` 开启（`annotate-masks` 参数）。
+
 ### 调试可视化
 
 ```powershell
-uv sync --extra overlay   # 安装 pillow（可选）
 uv run grf-ue annotate-overlay G:/FutsalMOT_Dataset/episode_0001/Camera_01 --include-ball
 ```
 
-把 bbox + entity_id + track_id 画到 `img1/` 的 RGB 帧上，输出到 `debug/000001_bbox.png`。没有 RGB 时跳过。
+把 bbox + entity_id + track_id 画到 `img1/` 的 RGB 帧上，输出到 `debug/000001_bbox.png`。没有 RGB 时跳过。需要 pillow（已是核心依赖）。
 
 ### 验证
 
@@ -374,7 +447,7 @@ uv run grf-ue annotate-overlay G:/FutsalMOT_Dataset/episode_0001/Camera_01 --inc
 uv run grf-ue validate-annotations G:/FutsalMOT_Dataset
 ```
 
-检查 bbox 合法性、frame_index 连续性、entity↔track 双向一致、MOT 行合法、resolution 一致等。
+检查 bbox 合法性、frame_index 连续性、entity↔track 双向一致、MOT 行合法、resolution 一致等。若 camera 目录存在 `mask/`，额外检查：RGB(`img1/`) 与 mask 帧一一对应、mask 分辨率一致、mask 像素值合法（0 或 1..11）、`mask_id` 与实体确定性映射一致、`bbox_xyxy` 与 mask min/max 一致、YOLO 坐标 ∈ [0,1] 且 det/seg 行格式合法。
 
 ---
 
@@ -396,20 +469,23 @@ uv run pytest
 # 仅测试某个模块
 uv run pytest tests/test_validator.py -v
 
-# 验证 CV 标注输出目录
+# 验证 CV 标注输出目录（含 Instance-ID Mask 校验）
 uv run grf-ue validate-annotations G:/FutsalMOT_Dataset
 
-# 调试可视化（需要 pillow，可选依赖）
-uv sync --extra overlay
+# 由 Instance-ID Mask 生成 mask-primary bbox / 分割标注（渲染完成后）
+uv run grf-ue annotate-masks G:/FutsalMOT_Dataset --include-ball
+
+# 调试可视化（pillow 为核心依赖，无需额外安装）
 uv run grf-ue annotate-overlay G:/FutsalMOT_Dataset/episode_0001/Camera_01 --include-ball
 ```
 
 ## 当前阶段
 
-GRF → JSONL → Unreal Engine 回放与 CV 标注导出已跑通。以下功能**暂不包含**：
+GRF → JSONL → Unreal Engine 回放 → RGB + Instance-ID Mask → mask-primary bbox / 实例分割 / MOT / YOLO 标注已跑通。以下功能**暂不包含**：
 
 - 批量 episode 生成（单个 episode 的 `--mode full` 全流程已支持）
 - GRF_MARL 预训练策略接入
 - 事件系统
 - 旧版行为克隆 / PPO
-- pose keypoints / semantic / instance segmentation / depth / occlusion visibility
+- pose keypoints / semantic segmentation / depth
+- **amodal** 分割与 occlusion visibility 比例（当前只给模态可见 mask、可见 bbox、`visible_pixel_count`；`visibility` 字段为 `null`）

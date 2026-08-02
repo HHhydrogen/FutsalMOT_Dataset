@@ -98,14 +98,10 @@ dependencies = [
     { name = "gfootball" },
     { name = "gym" },
     { name = "numpy" },
+    { name = "pillow" },
     { name = "pydantic" },
     { name = "six" },
     { name = "typer" },
-]
-
-[package.optional-dependencies]
-overlay = [
-    { name = "pillow" },
 ]
 
 [package.dev-dependencies]
@@ -118,12 +114,11 @@ requires-dist = [
     { name = "gfootball", specifier = ">=2.10.2" },
     { name = "gym", specifier = "<0.26" },
     { name = "numpy" },
-    { name = "pillow", marker = "extra == 'overlay'" },
+    { name = "pillow" },
     { name = "pydantic" },
     { name = "six", specifier = ">=1.17.0" },
     { name = "typer" },
 ]
-provides-extras = ["overlay"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest" }]

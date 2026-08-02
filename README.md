@@ -17,6 +17,7 @@ code/
 │   ├── validator.py              #   验证导出的 episode 数据完整性
 │   ├── annotation_validator.py   #   验证导出的 CV 标注目录（含 Instance-ID Mask 校验）
 │   ├── mask_annotator.py         #   由 Instance-ID Mask 生成 mask-primary bbox/分割标注（P1）
+│   ├── cryptomatte.py            #   解析 Cryptomatte EXR → mask/*.png（mask_id 值，P1）
 │   └── schema.py                 #   数据模型定义
 ├── ue/                           # UE Python 脚本 — 在 Unreal Editor 内运行
 │   ├── import_grf_episode.py     #   读取 JSONL，生成 Level Sequence / 编排标注导出
@@ -243,7 +244,7 @@ uv run grf-ue annotate-masks G:/FutsalMOT_Dataset [--include-ball]
 | `player_bbox.width_scale` | `0.7` | 仅 `capsule` 模式：球员 bbox 横向半宽 = 胶囊 radius × scale。胶囊 r=35→70cm 宽，比真人肩宽(~50cm)宽；0.7→≈49cm 贴合身体 |
 | `player_bbox.height_scale` | `1.0` | 仅 `capsule` 模式：球员 bbox 纵向半高 = 胶囊 half_height × scale |
 | `instance_mask.enabled` | `true` | 是否在渲染时同步输出 Instance-ID Mask（`mask/`） |
-| `instance_mask.mask_source` | `post_process_material` | `post_process_material`=DeferredPass + stencil→颜色 post-process 材质（默认，脚本自动创建 SceneTexture:SceneStencil→EmissiveColor 到 `/Game/FutsalMOT/Materials/M_StencilToID`）；`object_id_pass`=MoviePipelineObjectIdRenderPass（实测本 5.8 输出 ActorHitProxyMask，非逐实体 ID，**不可用**） |
+| `instance_mask.mask_source` | `object_id_pass` | `object_id_pass`（默认）=MoviePipelineObjectIdRenderPass + multilayer EXR（Cryptomatte，UE 5.8 实测可用），渲染后由 `grf-ue cryptomatte-to-mask` 转成 mask/；`post_process_material`=DeferredPass + stencil→颜色 post-process 材质（**实测本 5.8 不可用**，渲染全 0） |
 | `instance_mask.mask_channel` | `r` | mask PNG 中携带实例 ID 的通道（r/g/b/a/gray），用 `debug_mask_pass.py` 校准 |
 | `instance_mask.id_scale` / `id_offset` | `1.0` / `0.0` | 解码参数：像素值量化 = `round((v - id_offset) / id_scale)` |
 | `instance_mask.polygon_tolerance_px` | `1.0` | YOLO segmentation 多边形 RDP 简化容差（像素） |
@@ -406,26 +407,32 @@ uv run python ue/recover_render.py
 | `L0`..`L4` | `1`..`5` | | `R0`..`R4` | `6`..`10` |
 | `BALL` | `11` | | 背景 | `0` |
 
-**渲染机制**：UE 侧 `_assign_custom_stencil` 为每个 actor 的组件设置 `CustomDepthStencilValue = mask_id` 并开启 `bRenderCustomDepth`；mask job 用 DeferredPass + **stencil→颜色 post-process 材质**（`SceneTexture:SceneStencil` → EmissiveColor，脚本自动创建）把 stencil 值渲染为像素值，即 mask 像素 == `mask_id`（确定性，无 hash 歧义）。需要开启 **Custom Depth-Stencil Pass**（脚本尝试自动设置：先改 RendererSettings，失败则用 `r.CustomDepth=3` 控制台命令，再失败打印手动步骤）。渲染完成后 `annotate-masks` 从 mask 像素计算 bbox/分割（见上），因此 bbox 严格贴合实际渲染轮廓（含遮挡后可见部分），不再依赖几何估算。
+**渲染机制**：mask job 用 **`MoviePipelineObjectIdRenderPass`（`id_type=ACTOR`）+ multilayer EXR**，输出 **Cryptomatte**（UE 5.8 实测可用）：manifest 在 EXR header（`{actor_label: "hex_id"}`），实体 ID 是 float32（存于 `RGBA` 层 R 通道，`hex_id` = 位模式大端十六进制）。渲染后 P1 用 `grf-ue cryptomatte-to-mask` 把 `render_mask/*.exr` 转成 `mask/*.png`（每实体像素 = `mask_id` 1~11，背景 0），再经 `annotate-masks` 从 mask 像素计算 bbox/分割。因此 bbox 严格贴合实际渲染轮廓（含遮挡后可见部分），不再依赖几何估算。
+
+> 之前尝试的 `mask_source="post_process_material"`（stencil→颜色 材质）在本 5.8 **不可用**：PIE 里 stencil 值/开关/材质均正确，但渲染出的 mask 全 0；`MoviePipelinePostProcessPass` 是结构体非独立 pass。故采用 Object ID + Cryptomatte。
 
 **mask job 是独立 MRQ job → 总渲染耗时约 2 倍**（RGB 一遍 + mask 一遍）。RGB job 与 mask job 独立构建：mask job 构建失败不影响 RGB 渲染（错误记入 `render_summary.json`）。
 
-**校准（一次性，设备相关）**：若 mask 输出不正确，先运行探针：
+**校准 / 诊断**：若 mask 输出不正确，用 `ue/debug_object_id_exr.py` 检查 Cryptomatte EXR：
 
-```python
-# UE 编辑器 Python Console
-py "D:/.../code/ue/debug_mask_pass.py"
+```powershell
+uv run python ue/debug_object_id_exr.py G:/FutsalMOT_Dataset/episode_demo/CineCam_01/render_mask
 ```
 
-它会打印可用 MRQ pass 类、已渲染 mask 的各通道取值分布。按输出设置 `instance_mask.mask_channel` / `id_scale` / `id_offset`。若自动创建的 stencil 材质输出不对（如全 255 或全 0），手动在编辑器建一个 post-process 材质：新建 Material → Material Domain 设为 Post Process → 加 SceneTexture 节点设 SceneTextureId=SceneStencil → 连到 EmissiveColor，填 `instance_mask.post_process_material` 资产路径。`mask_source="object_id_pass"` 在本 5.8 实测不可用（输出 ActorHitProxyMask，非逐实体 ID）。
+它会打印 EXR 里的 manifest（实体名→ID）与各通道取值，确认 Cryptomatte 是否含全部实体。
 
 **生成 mask-primary 标注（P1，渲染完成后）**：
 
 ```powershell
-uv run grf-ue annotate-masks G:/FutsalMOT_Dataset [--include-ball] [--mask-channel r] [--polygon-tolerance-px 1.0] [--max-polygon-points 64]
+# 1. Cryptomatte EXR → mask/*.png（每实体像素 = mask_id 1~11）
+uv run grf-ue cryptomatte-to-mask G:/FutsalMOT_Dataset/episode_demo
+
+# 2. mask → mask-primary bbox / 分割 / MOT / YOLO
+uv run grf-ue annotate-masks G:/FutsalMOT_Dataset/episode_demo --include-ball [--polygon-tolerance-px 1.0] [--max-polygon-points 64]
 ```
 
-对每个 camera：读 `mask/{frame}.png` + UE 导出的 `annotations.jsonl` → 每实体由可见 mask 像素算 tight bbox / `visible_pixel_count` / 模态分割多边形 → 覆盖写 `annotations.jsonl`（`bbox_source="instance_mask"`，几何 bbox 保留在 `geometry_bbox_*`）→ 重写 MOT `gt/gt.txt` → 写 YOLO `labels/det/` 与 `labels/seg/` → 写 `mask_config.json`（解码参数）。幂等，可重复运行；原始 `mask/*.png` 永不修改。无 `mask/` 的 camera 保持几何 bbox（fallback）。
+`cryptomatte-to-mask`：读 `render_mask/*.exr` 的 manifest + `RGBA` 层 R 通道，对每实体按 float32 ID 匹配生成 mask（缺省从 `ue_import_config.json` 读 mapping/episode，可用 `--mapping`/`--episode` 覆盖）。
+`annotate-masks`：读 `mask/{frame}.png` + UE 导出的 `annotations.jsonl` → 每实体由可见 mask 像素算 tight bbox / `visible_pixel_count` / 模态分割多边形 → 覆盖写 `annotations.jsonl`（`bbox_source="instance_mask"`，几何 bbox 保留在 `geometry_bbox_*`）→ 重写 MOT `gt/gt.txt` → 写 YOLO `labels/det/` 与 `labels/seg/` → 写 `mask_config.json`（解码参数）。幂等，可重复运行；原始 `mask/*.png` 永不修改。无 `mask/` 的 camera 保持几何 bbox（fallback）。
 
 **MOT / YOLO 导出**：
 - MOT `gt/gt.txt`：bbox 为 mask 可见 bbox，`visibility` 按 `mot_visibility_mode`（默认 `unoccluded` 写 1.0）；完全不可见实体不写入。

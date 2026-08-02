@@ -31,7 +31,8 @@ uv run grf-ue validate outputs/episode_0001
 uv run pytest                             # 运行全部测试
 uv run pytest tests/test_validator.py -v  # 运行单个测试文件
 uv run grf-ue validate-annotations G:/FutsalMOT_Dataset   # 验证 CV 标注目录（数据集在 UE Content 之外）
-uv run grf-ue annotate-masks G:/FutsalMOT_Dataset --include-ball  # 由 Instance-ID Mask 生成 mask-primary bbox/分割标注
+uv run grf-ue cryptomatte-to-mask G:/FutsalMOT_Dataset/episode_demo  # Cryptomatte EXR → mask/*.png（mask_id 1~11）
+uv run grf-ue annotate-masks G:/FutsalMOT_Dataset/episode_demo --include-ball  # mask → mask-primary bbox/分割标注
 uv run grf-ue annotate-overlay G:/FutsalMOT_Dataset/episode_0001/Camera_01  # debug 可视化（pillow 为核心依赖）
 ```
 
@@ -77,10 +78,11 @@ py "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/ue/import_grf_episode
 - `ue/dataset_export.py`（纯）— JSONL/MOT/seqinfo/camera.json 序列化与原子写入；`load_episode`/`load_mapping`。
 - `ue/scene_apply.py`（UE 侧）— preview 与 annotation 共享的 actor 变换/查找辅助（与 Level Sequence bake 一致）。
 - `ue/annotation_exporter.py`（UE 侧）— 读 CineCamera 标定与 Actor 世界 AABB，逐帧生成**几何**标注（bbox fallback 源）。
-- `ue/render_episode.py`（UE 侧 + 纯函数）— 用 MRQ **异步**渲染每个 Camera 的 Sequence：RGB → `img1/`，`instance_mask.enabled` 时额外渲染 Instance-ID Mask → `mask/`（独立 MRQ job，渲染耗时 ×2；job 配置成功才入队，失败用 delete_job 移除）。mask 用 DeferredPass + **stencil→颜色 post-process 材质**（`create_stencil_to_color_material` 自动创建 SceneTexture:SceneStencil→EmissiveColor，mask 像素值==stencil 值==mask_id；`object_id_pass` 实测本 5.8 不可用）。提交后立即返回（不阻塞编辑器主线程），由 MRQ finished/error delegate + slate post-tick watchdog 驱动「复制 RGB/mask + 写 `render_summary.json` 完成标记」；`recover_render_to_img1` 可从已有 `render/`+`render_mask/` 恢复 `img1/`+`mask/`（纯函数）；`--mode full` = 建 Sequence + 导标注 + 渲染一键全流程。Custom Depth-Stencil 开启用多级 fallback（RendererSettings → `r.CustomDepth=3` → 手动提示）。
+- `ue/render_episode.py`（UE 侧 + 纯函数）— 用 MRQ **异步**渲染每个 Camera 的 Sequence：RGB → `img1/`，`instance_mask.enabled` 时额外渲染 Instance-ID Mask → `render_mask/`（独立 MRQ job，渲染耗时 ×2；job 配置成功才入队，失败用 delete_job 移除）。mask 用 **`MoviePipelineObjectIdRenderPass`（id_type=ACTOR）+ multilayer EXR** 输出 **Cryptomatte**（UE 5.8 实测可用；manifest 在 EXR header，实体 ID 为 `RGBA` 层 R 通道 float32）。**`post_process_material`（stencil→颜色材质）实测本 5.8 不可用（渲染全 0）**。渲染后由 P1 `grf-ue cryptomatte-to-mask` 转成 `mask/*.png`（mask_id 1~11）。提交后立即返回（不阻塞编辑器主线程），由 MRQ finished/error delegate + slate post-tick watchdog 驱动「复制 RGB + 写 `render_summary.json` 完成标记」；`recover_render_to_img1` 可从已有 `render/` 恢复 `img1/`（纯函数）；`--mode full` = 建 Sequence + 导标注 + 渲染一键全流程。
 - `ue/recover_render.py`（纯脚本）— 从已有 `render/` 恢复 `img1/`（无需重新渲染 / 无需 UE），P1 `.venv` 与 UE 控制台均可运行。
 - `ue/debug_mask_pass.py` — UE 探针：打印可用 MRQ pass 类与已渲染 mask 的通道取值分布，用于校准 `instance_mask.mask_channel`/`id_scale`（CustomDepthPass 输出格式设备相关，需一次性验证）。
 - `src/grf_ue_bridge/mask_annotator.py`（P1 纯 Python，import `ue/instance_mask`）— `grf-ue annotate-masks`：读 `mask/` + 几何 `annotations.jsonl` → 覆盖写 mask-primary `annotations.jsonl` / MOT / YOLO det / YOLO seg（幂等）。
+- `src/grf_ue_bridge/cryptomatte.py`（P1 纯 Python，openexr）— `grf-ue cryptomatte-to-mask`：解析 Object ID Pass 的 Cryptomatte EXR（manifest + `RGBA` 层 R 通道 float32 ID）→ 写 `mask/*.png`（每实体像素 = mask_id 1~11），与 `annotate-masks` 契约一致。
 - `src/grf_ue_bridge/annotation_validator.py` — `grf-ue validate-annotations`；存在 `mask/` 时额外校验 RGB/mask 帧一一对应、mask ID 合法、`mask_id` 映射稳定、bbox==mask min/max、YOLO 坐标 ∈ [0,1]。
 - `grf-ue annotate-overlay` — debug 可视化（pillow 为核心依赖）。
 

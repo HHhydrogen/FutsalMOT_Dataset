@@ -86,7 +86,8 @@ def export(
         typer.echo(f"ERROR: Config file not found: {config}", err=True)
         raise typer.Exit(1)
 
-    with open(config) as f:
+    # 显式 UTF-8：配置文件可能含中文注释
+    with open(config, encoding="utf-8") as f:
         config_data = json.load(f)
     export_cfg = ExportConfig(**config_data)
 

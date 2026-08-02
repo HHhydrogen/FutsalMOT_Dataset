@@ -1,0 +1,12 @@
+{
+  "scenario": "5_vs_5",
+  "seed": 42,
+  "num_steps": 10,
+  "playback_fps": 30,
+  "field_length_m": 40.0,
+  "field_width_m": 20.0,
+  "render": false,
+  "write_video": false,
+  "dump_full_raw_observation": false,
+  "comment": "快速测试 demo：10 个 GRF 步 = 10 帧标注，渲染 30 帧/每 camera（num_steps*0.1*30）"
+}

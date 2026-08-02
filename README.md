@@ -310,7 +310,49 @@ py "D:/.../code/ue/import_grf_episode.py" --mode annotations
 
 GRF step（0 基）→ `time_seconds = step × source_step_seconds`（0.1s）→ Sequence 帧 = `round(time_seconds × playback_fps)`（30 FPS）→ 标注 `frame_index = step + 1` → 图片 `img1/000001.png`。
 
-**标注的 frame N 与将来渲染的 `000N.png` 表示同一时刻**（同一 Level Sequence time 下的 actor/camera 变换）。`img1/` 目录已建立，本阶段不生成假的 RGB 文件；渲染管线接入后，把对应分辨率的 RGB 放入 `img1/` 即可与标注对齐。
+**标注的 frame N 与 `img1/000N.png` 表示同一时刻**（同一 Level Sequence time 下的 actor/camera 变换）。`img1/` 由下一节「自动渲染 RGB(MRQ)」自动填充；也可手动把对应分辨率的 RGB 放入。
+
+### 自动渲染 RGB(MRQ)
+
+一键全流程（建 Sequence + 导标注 + 渲染 RGB）：
+
+```python
+py "D:/.../code/ue/import_grf_episode.py" --mode full
+```
+
+也可以只渲染已有 Sequence：
+
+```python
+py "D:/.../code/ue/import_grf_episode.py" --mode render
+```
+
+**异步执行**：渲染是**异步**的——脚本把所有 Sequence 加入同一个 MRQ queue 并提交后**立即返回**，不阻塞编辑器主线程（MRQ 的 PIE 渲染窗口需要编辑器主线程持续 tick 才能推进，任何 `time.sleep`/`Event.wait` 同步阻塞都会让渲染卡死）。渲染完成后自动把渲染帧复制到各 camera 的 `img1/`，并写完成标记 `<output_dir>/<episode_id>/render_summary.json`（记录 `status`：`success` / `partial` / `failed`、各 camera 帧数与 annotation 帧数一致性）。渲染期间请保持编辑器运行；完成后查看控制台汇总与 `render_summary.json`。
+
+**完成检测**：正常路径由 MRQ 的 `on_executor_finished_delegate` 回调驱动收尾；部分 UE 版本该 delegate 不触发（UE 5.8 实测如此），因此脚本同时注册了一个 **slate post-tick watchdog**——每编辑帧非阻塞检查（不再渲染 且 目标帧齐全 / 文件数长期稳定 / 30 分钟硬超时），命中即完成同样的收尾。两条路径幂等，只收尾一次。
+
+渲染使用 UE 的 **Movie Render Queue（MRQ）**，通过 `annotation_export.render_rgb` 配置：
+
+| 字段 | 默认值 | 说明 |
+|------|--------|------|
+| `enabled` | `false` | 是否渲染 RGB |
+| `output_resolution_x/y` | `1920/1080` | 渲染分辨率（默认复用 image_width/height） |
+| `frame_rate` | `30` | 渲染帧率（须与 Sequence display rate 一致，默认 playback_fps） |
+| `file_name_format` | `{frame_number}` | MRQ 输出文件名格式 |
+| `zero_pad_frame_numbers` | `6` | MRQ 帧号补零位数 |
+
+**Camera Cut**：脚本在创建 Sequence 时会尝试自动设置 Camera Cut（`import_grf_episode.py` 的 `_add_camera_cut`）。若自动设置失败（不同 UE 版本 API 差异），需在 Sequencer 手动设置一次（右键摄像机轨道 → "Set as Camera Cut"）。没有 Camera Cut 时 MRQ 会用默认视角渲染，与标注投影不一致。
+
+**对齐规则**：MRQ 以 `frame_rate`（30fps）渲染 Sequence 全范围，脚本按 `round((frame_index-1)*source_step*fps)` 选出与每个标注帧对应的渲染帧，复制为 `img1/{frame_index:06d}.png`。标注、MOT、RGB 三者同源同帧。
+
+**渲染时长**：当前以 30fps 渲染全范围后每 3 帧取 1 帧，约 3 倍耗时；后续可优化为渲染 10fps 变体 Sequence。
+
+**恢复（不重新渲染）**：若渲染已把 PNG 输出到各 camera 的 `render/`，但完成回调未触发导致 `img1/` 为空（极端情况），无需重新渲染，直接从现有 `render/` 恢复 `img1/` 并写 `render_summary.json`：
+
+```powershell
+uv run python ue/recover_render.py
+```
+
+（也可在 UE 控制台 `py "D:/.../code/ue/recover_render.py"`。该脚本纯 Python，读取 `ue_import_config.json`。）
 
 ### 调试可视化
 
@@ -361,9 +403,8 @@ uv run grf-ue annotate-overlay outputs/dataset/episode_0001/Camera_01 --include-
 
 GRF → JSONL → Unreal Engine 回放与 CV 标注导出已跑通。以下功能**暂不包含**：
 
-- 批量 episode 生成
+- 批量 episode 生成（单个 episode 的 `--mode full` 全流程已支持）
 - GRF_MARL 预训练策略接入
 - 事件系统
 - 旧版行为克隆 / PPO
-- 自动 RGB/MRQ 批量渲染（`img1/` 已建立契约，图片由外部渲染后对齐）
 - pose keypoints / semantic / instance segmentation / depth / occlusion visibility

@@ -75,17 +75,19 @@ py "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/ue/import_grf_episode
 - `ue/dataset_export.py`（纯）— JSONL/MOT/seqinfo/camera.json 序列化与原子写入；`load_episode`/`load_mapping`。
 - `ue/scene_apply.py`（UE 侧）— preview 与 annotation 共享的 actor 变换/查找辅助（与 Level Sequence bake 一致）。
 - `ue/annotation_exporter.py`（UE 侧）— 读 CineCamera 标定与 Actor 世界 AABB，逐帧生成标注。
+- `ue/render_episode.py`（UE 侧 + 纯函数）— 用 MRQ **异步**渲染每个 Camera 的 Sequence 到 `img1/`：提交后立即返回（不阻塞编辑器主线程），由 MRQ finished/error delegate + slate post-tick watchdog 驱动「复制 RGB + 写 `render_summary.json` 完成标记」；`recover_render_to_img1` 可从已有 `render/` 恢复 `img1/`（纯函数）；`--mode full` = 建 Sequence + 导标注 + 渲染一键全流程。
+- `ue/recover_render.py`（纯脚本）— 从已有 `render/` 恢复 `img1/`（无需重新渲染 / 无需 UE），P1 `.venv` 与 UE 控制台均可运行。
 - `src/grf_ue_bridge/annotation_validator.py` — `grf-ue validate-annotations`。
 - `grf-ue annotate-overlay` — debug 可视化（需 pillow，可选依赖）。
 
-关键点：bbox 来自 Actor 世界 AABB 的 8 角点投影（非固定尺寸）；`visibility` 第一版恒为 `null`。帧同步：GRF step → `time=step×0.1` → Sequence 帧 `round(time×playback_fps)` → 标注 `frame_index=step+1` → 图片 `img1/000001.png`。
+关键点：球员 bbox 来自 CapsuleComponent（稳定人形尺寸），球可用 `ball_radius_m` 覆盖 mesh bounds；`visibility` 第一版恒为 `null`。帧同步：GRF step → `time=step×0.1` → Sequence 帧 `round(time×playback_fps)` → 标注 `frame_index=step+1` → 图片 `img1/000001.png`。MRQ 渲染以 `frame_rate` 渲染全范围后按该映射取帧对齐。
 
 ### Sequencer API 注意事项（已内建在脚本中——请保留）
 
 - UE 5.8+ 会给通道名追加 `_NNN` 数字后缀；`_build_channel_map` 通过 `_canonical_channel_name` 去除后缀后匹配。
 - 关键帧通过显式 `unreal.FrameNumber` 包装添加（`add_double_channel_key`）；通道来自 `section.get_all_channels()`。
 - 写真实关键帧前，会先创建一个临时 `_TEMP_SMOKE` Sequence 验证 `add_key`/`remove_key` 可用。
-- CameraCut 轨道**无法**通过 UE 5.8 Python API 创建——脚本只绑定摄像机 actor，并记录需要在 Sequencer 中手动设置。
+- CameraCut：脚本用 `_add_camera_cut` **尝试**自动设置（`set_camera_binding_id` 等，MRQ 渲染必需）；不同 UE 版本 API 差异导致失败时，需在 Sequencer 手动设置（右键摄像机轨道 → "Set as Camera Cut"）。
 - 关键帧通过每个实体的 binding（`add_possessable` → `MovieScene3DTransformTrack` → section）写入，写完后会断言关键帧数量。
 
 ## 约定与注意事项

@@ -6,6 +6,8 @@ Unreal Engine Python 脚本 —— 把 GRF-UE episode 导入到 Level Sequence�
   --sequence   创建 / 覆盖带关键帧变换的 Level Sequence 资产。
   --both       先 preview 后 sequence。
   --annotations 导出 CV Ground-Truth 标注（见 ue/annotation_exporter.py）。
+  --render     用 MRQ 渲染已有 Sequence 的 RGB 帧到各 Camera 的 img1/（见 ue/render_episode.py）。
+  --full       一键全流程：创建 Sequence + 导出标注 + 渲染 RGB。
 
 用法（在 Unreal Editor Python Console 中执行）：
     # 最简单（参数在 ue_import_config.json 中）
@@ -39,7 +41,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 # 本脚本时需先强制重载，否则会运行到磁盘上已修改但会话里仍是旧版本的代码。
 _UE_MODULE_NAMES = (
     "camera_projection", "annotation_utils", "dataset_export",
-    "scene_apply", "annotation_exporter",
+    "scene_apply", "annotation_exporter", "render_episode",
 )
 for _name in _UE_MODULE_NAMES:
     if _name in sys.modules:
@@ -58,6 +60,7 @@ from scene_apply import (  # noqa: E402
 )
 from dataset_export import load_episode, load_mapping  # noqa: E402
 from annotation_exporter import export_annotations  # noqa: E402
+from render_episode import render_sequences  # noqa: E402
 
 DEFAULT_SEQUENCE_PACKAGE_PATH = "/Game/FutsalMOT/Sequences"
 EXPECTED_CHANNEL_NAMES = [
@@ -82,7 +85,7 @@ def _parse_args():
         help="actor 映射 JSON 文件路径"
     )
     parser.add_argument(
-        "--mode", choices=["preview", "sequence", "both", "annotations"], default="both",
+        "--mode", choices=["preview", "sequence", "both", "annotations", "render", "full"], default="both",
         help="执行模式"
     )
     parser.add_argument(
@@ -339,6 +342,82 @@ def _smoke_test_sequencer_api(actors: dict, total_output_frames: int, package_pa
     return temp_seq, cmap
 
 
+# ── Camera Cut 辅助（MRQ 渲染必需）─────────────────────────────────────
+
+def _get_camera_binding_id(sequence, camera_binding):
+    """多级尝试获取相机的 MovieSceneObjectBindingID。
+
+    不同 UE 版本获取方式不同：binding 自带方法 / MovieSceneSequenceExtensions /
+    MovieSceneBindingExtensions。
+    """
+    import unreal
+
+    # 1) binding 自带方法
+    m = getattr(camera_binding, "get_binding_id", None)
+    if m is not None:
+        try:
+            bid = m()
+            if bid is not None:
+                return bid
+        except Exception:
+            pass
+    # 2) 扩展库
+    for lib_name in ("MovieSceneSequenceExtensions", "MovieSceneBindingExtensions"):
+        lib = getattr(unreal, lib_name, None)
+        if lib is None:
+            continue
+        m = getattr(lib, "get_binding_id", None)
+        if m is None:
+            continue
+        for args in ((sequence, camera_binding), (camera_binding,)):
+            try:
+                bid = m(*args)
+                if bid is not None:
+                    return bid
+            except Exception:
+                continue
+
+    # 诊断：打印 binding 对象与扩展库的可用成员，便于适配
+    print(f"  [CameraCut 诊断] binding 类型: {type(camera_binding)}")
+    print(
+        "  [CameraCut 诊断] binding 成员:",
+        sorted(n for n in dir(camera_binding) if not n.startswith("_")),
+    )
+    for lib_name in ("MovieSceneSequenceExtensions", "MovieSceneBindingExtensions"):
+        lib = getattr(unreal, lib_name, None)
+        print(f"  [CameraCut 诊断] {lib_name} 存在: {lib is not None}")
+        if lib is not None:
+            print(
+                f"  [CameraCut 诊断] {lib_name} 成员:",
+                sorted(n for n in dir(lib) if "binding" in n.lower() or "id" in n.lower()),
+            )
+    return None
+
+
+def _add_camera_cut(sequence, camera_binding, total_output_frames: int) -> bool:
+    """为 Sequence 添加 Camera Cut（MRQ 渲染必需，否则无活动相机导致白屏）。
+
+    UE 5.8：LevelSequence.add_track(MovieSceneCameraCutTrack) + add_section() +
+    set_camera_binding_id(...) + set_range(...)。
+    """
+    import unreal
+
+    try:
+        camera_cut_track = sequence.add_track(unreal.MovieSceneCameraCutTrack)
+        section = camera_cut_track.add_section()
+        binding_id = _get_camera_binding_id(sequence, camera_binding)
+        if binding_id is None:
+            print("  WARNING: 无法获取相机 binding id，未设置 Camera Cut（MRQ 渲染会无画面）")
+            return False
+        section.set_camera_binding_id(binding_id)
+        section.set_range(0, int(total_output_frames))
+        print("  Camera Cut 已设置")
+        return True
+    except Exception as e:
+        print(f"  WARNING: 设置 Camera Cut 失败: {e}")
+        return False
+
+
 # ── Sequence 模式 ───────────────────────────────────────────────────────
 
 def create_sequence(meta: dict, frames: list, mapping: dict, replace_existing: bool = False,
@@ -425,10 +504,10 @@ def create_sequence(meta: dict, frames: list, mapping: dict, replace_existing: b
                 camera_binding = seq.add_possessable(cam_actor)
                 print(f"  Camera bound: {camera_actor_name}")
 
-                # 摄像机以 possessable 方式绑定。UE 5.8 Python API 未暴露
-                # CameraCutTrack 的创建——需在 Sequencer 中手动设置：
-                # 右键摄像机轨道 → "Set as Camera Cut"。
-                unreal.log(f"  Camera bound: {camera_actor_name} (set as Camera Cut manually in Sequencer)")
+                # 自动设置 Camera Cut（MRQ 渲染必需）。若自动设置失败，
+                # 需在 Sequencer 手动右键摄像机轨道 → "Set as Camera Cut"。
+                _add_camera_cut(seq, camera_binding, total_output_frames)
+                unreal.log(f"  Camera bound: {camera_actor_name} (Camera Cut set)")
 
         # ── 为每个 actor 写入变换关键帧 ──────────────────────────────
         total_transform_keys = 0
@@ -587,6 +666,27 @@ def main():
         )
         export_annotations(episode_dir, mapping_path, output_dir, ann_cfg)
         print("\nDone.")
+        return
+
+    # full / render 模式：一键全流程（sequence + annotations + render）或仅渲染
+    if mode in ("full", "render"):
+        ann_cfg = cfg_defaults.get("annotation_export") or {}
+        ann_out = Path(ann_cfg.get("output_dir") or (episode_dir.parent / "dataset"))
+        seq_pkg = cfg_defaults.get("sequence_package_path") or DEFAULT_SEQUENCE_PACKAGE_PATH
+        seq_list = cfg_defaults.get("sequences") or None
+        if mode == "full":
+            meta, frames = load_episode(episode_dir)
+            mapping = load_mapping(mapping_path)
+            ball_rolling_cfg = cfg_defaults.get("ball_rolling", None)
+            print("\n--- 全流程：创建 Level Sequence ---")
+            create_sequence(meta, frames, mapping, replace_existing, seq_pkg, seq_list, ball_rolling_cfg)
+            if ann_cfg.get("enabled", True) is not False:
+                export_annotations(episode_dir, mapping_path, ann_out, ann_cfg)
+            else:
+                print("annotation_export.enabled = false，跳过标注导出")
+        render_sequences(seq_list, ann_cfg, seq_pkg, episode_dir, ann_out)
+        print("\n已提交。MRQ 渲染为异步执行（不阻塞编辑器），完成后自动复制 RGB 到 "
+              "img1/ 并写 render_summary.json。")
         return
 
     meta, frames = load_episode(episode_dir)

@@ -94,7 +94,7 @@ def _parse_args():
     )
     parser.add_argument(
         "--config", type=str, default=None,
-        help="已弃用：配置会自动从脚本同级的 ue_import_config.json 加载。"
+        help="配置文件路径；缺省用脚本同级的 ue_import_config.json。"
     )
     parsed = parser.parse_args()
     return parsed
@@ -624,13 +624,22 @@ def main():
 
     # 从固定路径加载配置（本脚本同级）
     cfg_defaults = {}
-    cfg_path = Path(__file__).resolve().parent.parent / "ue_import_config.json"
+    if args.config:
+        cfg_path = Path(args.config)
+        # 相对路径按脚本目录（仓库根）解析，避免依赖 UE Python 的 CWD
+        if not cfg_path.is_absolute():
+            cfg_path = Path(__file__).resolve().parent.parent / args.config
+    else:
+        cfg_path = Path(__file__).resolve().parent.parent / "ue_import_config.json"
     if cfg_path.exists():
         with open(cfg_path) as f:
             raw = json.load(f)
         for k, v in raw.items():
             if not k.startswith("comment_"):
                 cfg_defaults[k] = v
+    else:
+        print(f"ERROR: 配置文件不存在: {cfg_path}", file=sys.stderr)
+        sys.exit(1)
 
     episode_dir = Path(
         args.episode if args.episode

@@ -500,7 +500,7 @@ def _ensure_custom_depth_stencil_enabled() -> None:
 
     多级 fallback：
       1. 尝试设置 RendererSettings / RendererOverrideSettings 的 custom_depth_stencil_pass。
-      2. 用 r.CustomDepth 控制台命令开启（2 = enable with stencil）。
+      2. 用 r.CustomDepth 控制台命令开启（3 = enable with stencil）。
       3. 仍失败则打印手动步骤。
     """
     import unreal
@@ -526,8 +526,8 @@ def _ensure_custom_depth_stencil_enabled() -> None:
         except Exception as e:
             print(f"  WARNING: 自动开启 Custom Depth-Stencil 失败（{cls_name}）: {e}")
     try:
-        unreal.SystemLibrary.execute_console_command(None, "r.CustomDepth 2")
-        print("  [MRQ] 通过控制台命令开启 r.CustomDepth=2（Enable with Stencil）")
+        unreal.SystemLibrary.execute_console_command(None, "r.CustomDepth 3")
+        print("  [MRQ] 通过控制台命令开启 r.CustomDepth=3（Enable with Stencil）")
         return
     except Exception as e:
         print(f"  WARNING: 控制台命令开启 Custom Depth-Stencil 失败: {e}")
@@ -535,6 +535,30 @@ def _ensure_custom_depth_stencil_enabled() -> None:
         "  WARNING: 请在 Project Settings → Rendering → Custom Depth-Stencil Pass"
         " 手动设为 'Enabled with Stencil'，否则 Instance-ID Mask 全为背景。"
     )
+
+
+def _save_current_level() -> None:
+    """保存当前关卡，把 actor 上运行时设置的 stencil 值写入磁盘。
+
+    MRQ 的 PIE 渲染从磁盘加载/复制关卡；若不保存，运行时用 set_editor_property 设的
+    stencil 值不会带入 PIE → stencil 缓冲为空 → Instance-ID Mask 全黑。保存后 PIE
+    能读到持久化的 stencil 值（多级 fallback，兼容 World Partition / 旧版 API）。
+    """
+    import unreal
+
+    attempts = (
+        lambda: unreal.EditorLevelLibrary.save_current_level(),
+        lambda: unreal.get_editor_subsystem(unreal.LevelEditorSubsystem).save_current_level(),
+        lambda: unreal.EditorLoadingAndSavingUtils.save_dirty_packages(True, True),
+    )
+    for fn in attempts:
+        try:
+            ok = bool(fn())
+            print(f"  [MRQ] 已保存关卡（stencil 值持久化）: {ok}")
+            return
+        except Exception as e:
+            print(f"  [MRQ] 保存关卡尝试失败: {e}")
+    print("  WARNING: 无法保存当前关卡，stencil 值可能不带入 PIE")
 
 
 def create_stencil_to_color_material(
@@ -597,13 +621,38 @@ def create_stencil_to_color_material(
             print(f"  [MRQ] SceneTexture scene_texture_id 读回: {readback}")
         except Exception as e:
             print(f"  WARNING: 读回 scene_texture_id 失败: {e}")
-        # 连到材质的输出属性（EmissiveColor = post-process 材质的主输出）。
-        # connect_material_expressions 的 to_expression 必须是 MaterialExpression，
-        # 连材质属性要用 connect_material_property。
-        unreal.MaterialEditingLibrary.connect_material_property(
-            stex, "RGB", unreal.MaterialProperty.MP_EMISSIVE_COLOR
+        # CustomStencil.R / 255.0 → Emissive。
+        # 直接 CustomStencil → Emissive 会把 stencil 值(0~255)塞进 Emissive(0~1)导致
+        # 1~11 全部饱和成白色；先除以 255 归一化，PNG 输出时 R 通道 ≈ stencil 值。
+        const255 = unreal.MaterialEditingLibrary.create_material_expression(
+            mat, unreal.MaterialExpressionConstant, -200.0, -100.0
         )
-        print("  [MRQ] 已连接 SceneTexture.RGB -> 材质 EmissiveColor（connect_material_property）")
+        try:
+            const255.set_editor_property("r", 255.0)
+        except Exception as e:
+            print(f"  WARNING: 设置 Constant 值失败: {e}")
+        divide = unreal.MaterialEditingLibrary.create_material_expression(
+            mat, unreal.MaterialExpressionDivide, -200.0, 0.0
+        )
+        # stex.R -> divide.A
+        unreal.MaterialEditingLibrary.connect_material_expressions(stex, "R", divide, "A")
+        # const255 -> divide.B（输出名兜底 "" / Out）
+        for out_name in ("", "Out", "output"):
+            try:
+                unreal.MaterialEditingLibrary.connect_material_expressions(const255, out_name, divide, "B")
+                break
+            except Exception:
+                continue
+        # divide -> 材质 EmissiveColor（post-process 材质主输出）
+        try:
+            unreal.MaterialEditingLibrary.connect_material_property(
+                divide, "Out", unreal.MaterialProperty.MP_EMISSIVE_COLOR
+            )
+        except Exception:
+            unreal.MaterialEditingLibrary.connect_material_property(
+                divide, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR
+            )
+        print("  [MRQ] 已连接 SceneTexture.R / 255 -> 材质 EmissiveColor")
         unreal.EditorAssetLibrary.save_loaded_asset(mat)
         print(f"  [MRQ] 已创建/重建 stencil→颜色 材质: {asset_path}")
         return asset_path
@@ -614,19 +663,24 @@ def create_stencil_to_color_material(
 
 
 def _material_is_valid(asset_path: str) -> bool:
-    """校验 M_StencilToID 材质：PostProcess 域 + SceneTexture 节点读 PPI_CUSTOM_STENCIL。"""
+    """校验 M_StencilToID 材质：PostProcess 域 + SceneTexture(PPI_CUSTOM_STENCIL) + Divide(÷255)。"""
     import unreal
 
     try:
         mat = unreal.load_asset(asset_path)
         if mat.get_editor_property("material_domain") != unreal.MaterialDomain.MD_POST_PROCESS:
             return False
+        has_stencil_tex = False
+        has_divide = False
         for ex in unreal.MaterialEditingLibrary.get_material_expressions(mat):
-            if "SceneTexture" in type(ex).__name__:
+            tn = type(ex).__name__
+            if "SceneTexture" in tn:
                 val = ex.get_editor_property("scene_texture_id")
                 if "PPI_CUSTOM_STENCIL" in str(val):
-                    return True
-        return False
+                    has_stencil_tex = True
+            if "Divide" in tn:
+                has_divide = True
+        return has_stencil_tex and has_divide
     except Exception:
         return False
 
@@ -793,7 +847,7 @@ def _configure_mask_job(
         pass
     config.find_or_add_setting_by_class(unreal.MoviePipelineImageSequenceOutput_PNG)
 
-    # 确保 Custom Depth-Stencil 在本次 MRQ 渲染期间开启（r.CustomDepth=2 = Enable with
+    # 确保 Custom Depth-Stencil 在本次 MRQ 渲染期间开启（r.CustomDepth=3 = Enable with
     # Stencil）。编辑器里的控制台命令不会自动带入 PIE，必须写在 job 的控制台变量里。
     _enable_custom_depth_in_job(config)
 
@@ -849,7 +903,7 @@ def _configure_mask_job(
 
 
 def _enable_custom_depth_in_job(config) -> None:
-    """在 MRQ job 配置中加入 r.CustomDepth=2（Enable with Stencil）。
+    """在 MRQ job 配置中加入 r.CustomDepth=3（Enable with Stencil）。
 
     编辑器里的控制台命令不会自动带入 PIE 渲染（MRQ 渲染开始时按项目设置重置 cvar），
     必须把 cvar 写进 job 的 MoviePipelineConsoleVariableSetting，确保渲染期间
@@ -871,7 +925,7 @@ def _enable_custom_depth_in_job(config) -> None:
         print("  WARNING: 无 MoviePipelineConsoleVariableEntry，无法设置 cvar")
         return
     entry_struct = entry_cls()
-    if not _set_console_entry(entry_struct, "r.CustomDepth", 2.0):
+    if not _set_console_entry(entry_struct, "r.CustomDepth", 3.0):
         print("  WARNING: 无法设置 MoviePipelineConsoleVariableEntry 字段，成员如下：")
         _print_mrq_members(entry_struct, "console_entry")
         return
@@ -884,9 +938,9 @@ def _enable_custom_depth_in_job(config) -> None:
         current.append(entry_struct)
     try:
         cvar.set_editor_property(prop, current)
-        print("  [MRQ] job 内设置 r.CustomDepth=2（Custom Depth-Stencil 开启）")
+        print("  [MRQ] job 内设置 r.CustomDepth=3（Custom Depth-Stencil 开启）")
     except Exception as e:
-        print(f"  WARNING: 设置 r.CustomDepth 2 失败: {e}")
+        print(f"  WARNING: 设置 r.CustomDepth 3 失败: {e}")
         _print_mrq_members(entry_struct, "console_entry")
 
 
@@ -1358,6 +1412,7 @@ def render_sequences(
             mapping = load_mapping(Path(mapping_path))
             actors = find_all_actors(mapping)
             _assign_custom_stencil(actors)
+            _save_current_level()  # 持久化 stencil 值，确保 PIE 渲染能读到
         else:
             print("  WARNING: instance_mask.enabled=true 但未提供有效 mapping_path，无法设置 stencil")
         if mask_source == "post_process_material" and not post_process_material:

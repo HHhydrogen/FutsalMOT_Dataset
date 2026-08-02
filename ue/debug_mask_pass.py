@@ -163,7 +163,7 @@ def _try_cvar_struct():
     try:
         entry = unreal.MoviePipelineConsoleVariableEntry()
         from render_episode import _set_console_entry
-        if _set_console_entry(entry, "r.CustomDepth", 2.0):
+        if _set_console_entry(entry, "r.CustomDepth", 3.0):
             print(f"  结构体设置成功: {entry}")
         else:
             print("  结构体字段设置失败，成员：")

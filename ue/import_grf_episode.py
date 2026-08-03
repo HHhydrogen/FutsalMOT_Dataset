@@ -41,7 +41,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 # 本脚本时需先强制重载，否则会运行到磁盘上已修改但会话里仍是旧版本的代码。
 _UE_MODULE_NAMES = (
     "camera_projection", "annotation_utils", "dataset_export",
-    "scene_apply", "annotation_exporter", "render_episode",
+    "scene_apply", "annotation_exporter", "render_preset", "render_episode",
 )
 for _name in _UE_MODULE_NAMES:
     if _name in sys.modules:

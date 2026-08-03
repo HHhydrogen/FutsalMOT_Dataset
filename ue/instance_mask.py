@@ -197,6 +197,90 @@ def trace_outer_contour(binary: np.ndarray) -> List[Tuple[int, int]]:
     return contour
 
 
+# ── 多边形栅格化（even-odd 扫描线）─────────────────────────────────────
+
+def polygon_to_mask(points, width, height):
+    """把闭合多边形栅格化为 bool mask（even-odd 规则）。
+
+    像素 (px, py) 的中心 (px+0.5, py+0.5) 在多边形内即填充。点序为闭合 ring
+    （首尾自动相连），坐标可为 int/float。
+    """
+    n = len(points)
+    mask = np.zeros((height, width), dtype=bool)
+    if n < 3:
+        return mask
+    for py in range(height):
+        y = py + 0.5
+        xs = []
+        for i in range(n):
+            x1, y1 = points[i]
+            x2, y2 = points[(i + 1) % n]
+            if y1 == y2:
+                continue  # 水平边不贡献交点
+            if (y >= y1) == (y >= y2):
+                continue  # 半开区间：顶点只计一次
+            xs.append(x1 + (y - y1) * (x2 - x1) / (y2 - y1))
+        xs.sort()
+        for k in range(0, len(xs) - 1, 2):
+            xl, xr = xs[k], xs[k + 1]
+            c0 = int(np.ceil(xl - 0.5))
+            c1 = int(np.ceil(xr - 0.5))
+            lo = max(c0, 0)
+            hi = min(c1, width)
+            if hi > lo:
+                mask[py, lo:hi] = True
+    return mask
+
+
+# ── 面积膨胀检查辅助（rasterize 回 mask 的质量指标）────────────────────
+
+def dilate8(binary_mask):
+    """8 邻域膨胀（radius=1）。"""
+    h, w = binary_mask.shape
+    out = binary_mask.copy()
+    if h > 1:
+        out[1:, :] |= binary_mask[:-1, :]
+        out[:-1, :] |= binary_mask[1:, :]
+    if w > 1:
+        out[:, 1:] |= binary_mask[:, :-1]
+        out[:, :-1] |= binary_mask[:, 1:]
+    if h > 1 and w > 1:
+        out[1:, 1:] |= binary_mask[:-1, :-1]
+        out[:-1, 1:] |= binary_mask[1:, :-1]
+        out[1:, :-1] |= binary_mask[:-1, 1:]
+        out[:-1, :-1] |= binary_mask[1:, 1:]
+    return out
+
+
+def raster_quality_metrics(raster, truth):
+    """栅格化多边形 vs 原始 mask 的像素质量指标。
+
+    raster/truth: 同形状 bool ndarray。
+    返回 dict：
+      extra_ratio          = |raster ∧ ¬truth| / |truth|（背景被填成前景）
+      refined_missing_ratio = |{truth∧¬raster 且 8 邻域内无 raster}| / |truth|
+                              （被完整丢弃的碎片；边界环天然欠填不计）
+      iou                  = |raster ∧ truth| / |raster ∨ truth|
+      raw_missing_ratio    = |truth ∧ ¬raster| / |truth|（仅诊断）
+    truth 为空时返回理想值（无缺失、IoU=1）。
+    """
+    truth_count = int(truth.sum())
+    if truth_count == 0:
+        return {"extra_ratio": 0.0, "refined_missing_ratio": 0.0,
+                "iou": 1.0, "raw_missing_ratio": 0.0}
+    inter = raster & truth
+    union = raster | truth
+    extra = raster & ~truth
+    raw_missing = truth & ~raster
+    refined_missing = raw_missing & ~dilate8(raster)
+    return {
+        "extra_ratio": int(extra.sum()) / truth_count,
+        "refined_missing_ratio": int(refined_missing.sum()) / truth_count,
+        "iou": int(inter.sum()) / max(1, int(union.sum())),
+        "raw_missing_ratio": int(raw_missing.sum()) / truth_count,
+    }
+
+
 # ── 多边形简化（Ramer-Douglas-Peucker）与归一化 ─────────────────────────
 
 def _point_segment_distance(p, a, b) -> float:
@@ -249,7 +333,20 @@ def mask_to_polygons(
 
     返回像素坐标多边形列表 [[(x, y), ...], ...]（每个连通域一个）。
     """
-    polys: List[List[Tuple[float, float]]] = []
+    polys, _areas = mask_to_polygons_with_areas(binary_mask, tolerance, max_points)
+    return polys
+
+
+# ── 多连通域 → 单 ring（YOLO 单多边形约束的派生近似）───────────────────
+
+def mask_to_polygons_with_areas(binary_mask, tolerance=1.0, max_points=64):
+    """mask_to_polygons 的变体：同时返回每个多边形的连通域像素数。
+
+    返回 (polys, areas)，两者同序一一对应；mask_to_polygons 跳过的极小
+    连通域不计入。
+    """
+    polys = []
+    areas = []
     for comp in connected_components(binary_mask):
         contour = trace_outer_contour(comp)
         if len(contour) < 3:
@@ -257,14 +354,117 @@ def mask_to_polygons(
         simp = rdp_simplify(contour, tolerance)
         simp = cap_polygon_points(simp, max_points)
         if len(simp) < 3:
-            # 简化后不足三角形：用该连通域 bbox 四角兜底
             bb = mask_to_bbox(comp)
             if bb is not None:
                 xmin, ymin, xmax, ymax = bb
                 simp = [(xmin, ymin), (xmax, ymin), (xmax, ymax), (xmin, ymax)]
         if len(simp) >= 3:
             polys.append(simp)
-    return polys
+            areas.append(int(comp.sum()))
+    return polys, areas
+
+
+def _polygon_bbox_center(poly):
+    xs = [p[0] for p in poly]
+    ys = [p[1] for p in poly]
+    return ((min(xs) + max(xs)) / 2.0, (min(ys) + max(ys)) / 2.0)
+
+
+def _nearest_point_pair(ring_a, ring_b):
+    """两轮廓间最近边界点对 (ia, ib)；平局取最小索引，确定性。"""
+    best = None
+    for ia, pa in enumerate(ring_a):
+        for ib, pb in enumerate(ring_b):
+            d = (pa[0] - pb[0]) ** 2 + (pa[1] - pb[1]) ** 2
+            if best is None or d < best[0]:
+                best = (d, ia, ib)
+    return best[1], best[2]
+
+
+def _bridge_splice(ring, poly):
+    """把 poly 桥接进 ring：最近边界点对 (a, b) 处，各沿原方向走满一圈后拼接。
+
+    结果闭合 ring：往返桥为 (a→b) 与 (b→a) 同段反向（零宽、共线重叠）。
+    由最近点性质可证桥接边 (a, b) 不穿过任一分量内部（否则其内部点会比
+    a 更接近 b，矛盾），故不产生 proper crossing。
+    """
+    ia, ib = _nearest_point_pair(ring, poly)
+    a, b = ring[ia], poly[ib]
+    ring_rot = ring[ia:] + ring[:ia] + [a]   # [a, ..., a]
+    poly_rot = poly[ib:] + poly[:ib] + [b]   # [b, ..., b]
+    return ring_rot + poly_rot               # 闭合边 (b, a) = 返回桥
+
+
+def _shoelace_area(poly):
+    s = 0.0
+    n = len(poly)
+    for i in range(n):
+        x1, y1 = poly[i]
+        x2, y2 = poly[(i + 1) % n]
+        s += x1 * y2 - x2 * y1
+    return abs(s) / 2.0
+
+
+def _largest_component_fallback(polygons, areas, reason):
+    """回退：只保留最大连通域（areas 缺省用 shoelace 面积）。"""
+    if areas is None:
+        areas = [_shoelace_area(p) for p in polygons]
+    best = max(range(len(polygons)), key=lambda i: areas[i])
+    return list(polygons[best]), {
+        "n_components": len(polygons), "merged": False,
+        "fallback": "largest_component", "crossing_detected": True,
+        "fallback_reason": reason,
+    }
+
+
+def merge_to_single_ring(polygons, areas=None):
+    """多连通域多边形 → 单个 ring（YOLO 单多边形约束的派生近似）。
+
+    策略：按 bbox 中心排序，逐次最近点桥接；桥接结果做合法性检查
+    （防御性，正常输入不触发——最近点桥接边不穿过分量内部）。
+    失败 → 回退只保留最大连通域。
+
+    areas: 每分量像素数（可选，回退选最大分量用；缺省用 shoelace 面积）。
+
+    返回 (ring, meta)。
+    """
+    if not polygons:
+        return [], {"n_components": 0, "merged": False, "fallback": None,
+                    "crossing_detected": False, "fallback_reason": None}
+    if len(polygons) == 1:
+        return list(polygons[0]), {"n_components": 1, "merged": False,
+                                   "fallback": None, "crossing_detected": False,
+                                   "fallback_reason": None}
+    ordered = sorted(range(len(polygons)),
+                     key=lambda i: _polygon_bbox_center(polygons[i]))
+    ring = list(polygons[ordered[0]])
+    for idx in ordered[1:]:
+        ring = _bridge_splice(ring, polygons[idx])
+    if _ring_has_proper_crossing(ring):
+        return _largest_component_fallback(polygons, areas,
+                                           reason="proper_crossing_detected")
+    return ring, {"n_components": len(polygons), "merged": True,
+                  "fallback": None, "crossing_detected": False,
+                  "fallback_reason": None}
+
+
+# ── YOLO 归一化（单 ring）────────────────────────────────────────────
+
+def ring_to_yolo_flat(
+    ring: Sequence[Tuple[float, float]],
+    width: int,
+    height: int,
+    precision: int = 6,
+) -> List[float]:
+    """单 ring → YOLO seg 归一化 flat 点列表 [x1, y1, x2, y2, ...]。
+
+    坐标 = 像素 / 尺寸，全部 ∈ [0, 1]。
+    """
+    pts: List[float] = []
+    for x, y in ring:
+        pts.append(round(x / width, precision))
+        pts.append(round(y / height, precision))
+    return pts
 
 
 def polygon_to_yolo_flat(
@@ -273,16 +473,13 @@ def polygon_to_yolo_flat(
     height: int,
     precision: int = 6,
 ) -> List[float]:
-    """把像素坐标多边形列表转为 YOLO seg 归一化 flat 点列表 [x1, y1, x2, y2, ...]。
+    """把像素坐标多边形列表转为 YOLO seg 归一化 flat 点列表。
 
-    多连通域合并为同一条 YOLO 行（一个实体一行，坐标全部 ∈ [0, 1]）。
+    多连通域先桥接合并为单 ring（YOLO 单多边形约束）；单连通域输出与旧
+    实现一致。
     """
-    pts: List[float] = []
-    for poly in polygons:
-        for x, y in poly:
-            pts.append(round(x / width, precision))
-            pts.append(round(y / height, precision))
-    return pts
+    ring, _meta = merge_to_single_ring(polygons)
+    return ring_to_yolo_flat(ring, width, height, precision)
 
 
 def yolo_class_id(entity_id: str) -> int:
@@ -335,3 +532,35 @@ def analyze_mask_dir(mask_dir, sample_frames: int = 5) -> Optional[dict]:
             "用该值设 instance_mask.mask_channel 与 id_scale。背景通常为 0 或 255。"
         ),
     }
+
+
+# ── 多边形合法性检查（proper crossing）────────────────────────────────
+
+def _segments_properly_cross(p1, p2, p3, p4):
+    """两条开线段 (p1-p2, p3-p4) 是否在各自内部点处严格相交。
+
+    排除：端点相接、共线重叠（往返零宽桥因此不被误判）。
+    """
+    def orient(a, b, c):
+        return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+
+    d1 = orient(p3, p4, p1)
+    d2 = orient(p3, p4, p2)
+    d3 = orient(p1, p2, p3)
+    d4 = orient(p1, p2, p4)
+    return ((d1 > 0 and d2 < 0) or (d1 < 0 and d2 > 0)) and \
+           ((d3 > 0 and d4 < 0) or (d3 < 0 and d4 > 0))
+
+
+def _ring_has_proper_crossing(ring):
+    """闭合 ring 是否存在非相邻边的严格交叉。"""
+    n = len(ring)
+    for i in range(n):
+        p1, p2 = ring[i], ring[(i + 1) % n]
+        for j in range(i + 2, n):
+            if i == 0 and j == n - 1:
+                continue  # 边 n-1 与边 0 相邻（闭合）
+            q1, q2 = ring[j], ring[(j + 1) % n]
+            if _segments_properly_cross(p1, p2, q1, q2):
+                return True
+    return False

@@ -74,14 +74,14 @@ py "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/ue/import_grf_episode
 
 - `ue/camera_projection.py`（纯，pytest 可测）— 相机内参换算（FOV/焦距）、外参、world→camera→pixel 投影、3D box 投影与近平面裁剪。
 - `ue/annotation_utils.py`（纯）— bbox 转换/裁剪/in_frame/truncated、track_id 映射（`L0..L4→1..5`、`R0..R4→6..10`、`BALL→100`）、**mask_id 映射**（`L0..L4→1..5`、`R0..R4→6..10`、`BALL→11`，纯 Python，UE 侧可 import 用于打 stencil）。
-- `ue/instance_mask.py`（纯 numpy+PIL，pytest 可测，**UE 侧不 import**——UE Python 无 numpy）— mask 解码/量化、pixel-tight bbox、连通域、Moore 边界跟踪、RDP 多边形简化、YOLO 归一化。
+- `ue/instance_mask.py`（纯 numpy+PIL，pytest 可测，**UE 侧不 import**——UE Python 无 numpy）— mask 解码/量化、pixel-tight bbox、连通域、Moore 边界跟踪、RDP 多边形简化、YOLO 归一化。多连通域 → YOLO 单多边形：`merge_to_single_ring` 最近点桥接合并成单 ring + `polygon_to_mask` even-odd 栅格化做面积膨胀检查，失败回退最大连通域（详见 specs/2026-08-03-multi-component-yolo-seg-design.md）。
 - `ue/dataset_export.py`（纯）— JSONL/MOT/seqinfo/camera.json 序列化与原子写入；`load_episode`/`load_mapping`。
 - `ue/scene_apply.py`（UE 侧）— preview 与 annotation 共享的 actor 变换/查找辅助（与 Level Sequence bake 一致）。
 - `ue/annotation_exporter.py`（UE 侧）— 读 CineCamera 标定与 Actor 世界 AABB，逐帧生成**几何**标注（bbox fallback 源）。
 - `ue/render_episode.py`（UE 侧 + 纯函数）— 用 MRQ **异步**渲染每个 Camera 的 Sequence：RGB → `img1/`，`instance_mask.enabled` 时额外渲染 Instance-ID Mask → `render_mask/`（独立 MRQ job，渲染耗时 ×2；job 配置成功才入队，失败用 delete_job 移除）。mask 用 **`MoviePipelineObjectIdRenderPass`（id_type=ACTOR）+ multilayer EXR** 输出 **Cryptomatte**（UE 5.8 实测可用；manifest 在 EXR header，实体 ID 为 `RGBA` 层 R 通道 float32）。**`post_process_material`（stencil→颜色材质）实测本 5.8 不可用（渲染全 0）**。渲染后由 P1 `grf-ue cryptomatte-to-mask` 转成 `mask/*.png`（mask_id 1~11）。提交后立即返回（不阻塞编辑器主线程），由 MRQ finished/error delegate + slate post-tick watchdog 驱动「复制 RGB + 写 `render_summary.json` 完成标记」；`recover_render_to_img1` 可从已有 `render/` 恢复 `img1/`（纯函数）；`--mode full` = 建 Sequence + 导标注 + 渲染一键全流程。
 - `ue/recover_render.py`（纯脚本）— 从已有 `render/` 恢复 `img1/`（无需重新渲染 / 无需 UE），P1 `.venv` 与 UE 控制台均可运行。
 - `ue/debug_object_id_exr.py` — 诊断脚本：检查 Cryptomatte EXR 的 manifest（实体名→ID）与通道，确认 Object ID Pass 输出。
-- `src/grf_ue_bridge/mask_annotator.py`（P1 纯 Python，import `ue/instance_mask`）— `grf-ue annotate-masks`：读 `mask/` + 几何 `annotations.jsonl` → 覆盖写 mask-primary `annotations.jsonl` / MOT / YOLO det / YOLO seg（幂等）。
+- `src/grf_ue_bridge/mask_annotator.py`（P1 纯 Python，import `ue/instance_mask`）— `grf-ue annotate-masks`：读 `mask/` + 几何 `annotations.jsonl` → 覆盖写 mask-primary `annotations.jsonl`（多连通域合并面积检查，记录 `segmentation_components/merged/fallback`）/ MOT / YOLO det / YOLO seg（幂等）。
 - `src/grf_ue_bridge/cryptomatte.py`（P1 纯 Python，openexr）— `grf-ue cryptomatte-to-mask`：解析 Object ID Pass 的 Cryptomatte EXR（manifest + `RGBA` 层 R 通道 float32 ID）→ 写 `mask/*.png`（每实体像素 = mask_id 1~11），与 `annotate-masks` 契约一致。
 - `src/grf_ue_bridge/annotation_validator.py` — `grf-ue validate-annotations`；存在 `mask/` 时额外校验 RGB/mask 帧一一对应、mask ID 合法、`mask_id` 映射稳定、bbox==mask min/max、YOLO 坐标 ∈ [0,1]。
 - `grf-ue annotate-overlay` — debug 可视化（pillow 为核心依赖）。

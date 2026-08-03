@@ -317,7 +317,11 @@ uv run grf-ue annotate-masks G:/FutsalMOT_Dataset [--include-ball]
 - `bbox_xywh` / `bbox_xyxy`：`instance_mask` 时是 mask 像素的 tight bbox（连续坐标，`xmax=max_x+1`，恰好覆盖全部可见像素）；`geometry` 时是裁剪到图像内的几何投影 bbox。
 - `geometry_bbox_xyxy/xywh`：几何投影的裁剪 bbox（fallback/debug，始终保留）。`raw_bbox_*`：几何投影原始值（可能越出图像边界）。
 - `visible_pixel_count`：该实体可见 mask 像素数（遮挡的真实信号）；`instance_mask` 时 ≥1，`geometry`（不可见）时为 0。
-- `segmentation`：模态分割，YOLO 归一化 flat 点列表 `[x1,y1,x2,y2,...]`（多连通域合并）；无可见像素时为 `null`。
+- `segmentation`：模态分割，YOLO 归一化 flat 点列表 `[x1,y1,x2,y2,...]`。单连通域为单个多边形；**多连通域（`segmentation_components>1`）时为派生近似**——YOLO 单多边形限制下用最近点桥接合并为单个 ring（弱简单，含零宽连接），raw Instance-ID Mask 始终为 canonical GT。`segmentation_fallback` 非空表示合并失败已回退为最大连通域。
+- `segmentation_components`：可见连通域碎片数（1 = 单连通域；0 = 完全不可见）。
+- `segmentation_merged`：是否经最近点桥接合并为单个 ring（多连通域且未回退时为 `true`）。
+- `segmentation_fallback`：`null` 或 `"largest_component"`（合并的合法性/面积膨胀检查失败时回退只保留最大连通域）。
+- `segmentation_fallback_reason`：回退原因（如 `extra_ratio=0.42>0.10`）；无回退时为 `null`。
 - `mask_id`：实例稳定 ID（`L0..L4→1..5`、`R0..R4→6..10`、`BALL→11`），等于 mask 像素值。
 - `in_frame`：**按最终渲染可见像素**——`bbox_source="instance_mask"` 时恒 `true`；完全被遮挡/离屏（mask 空）→ `false`。
 - `truncated`：`instance_mask` 时恒 `false`（mask bbox 必在图像内）；`geometry` 时反映几何投影的边界截断。
@@ -437,7 +441,7 @@ uv run grf-ue annotate-masks G:/FutsalMOT_Dataset/episode_demo --include-ball [-
 **MOT / YOLO 导出**：
 - MOT `gt/gt.txt`：bbox 为 mask 可见 bbox，`visibility` 按 `mot_visibility_mode`（默认 `unoccluded` 写 1.0）；完全不可见实体不写入。
 - YOLO Detect `labels/det/`：每行 `class cx cy w h`（归一化，`0=player`、`1=ball`）。
-- YOLO Segment `labels/seg/`：每行 `class x1 y1 x2 y2 ...`（归一化多边形，RDP 简化后 ≤ `max_polygon_points` 点，多连通域合并为一行）。
+- YOLO Segment `labels/seg/`：每行 `class x1 y1 x2 y2 ...`（归一化多边形，RDP 简化后 ≤ `max_polygon_points` 点，多连通域用最近点桥接合并为单行；raw mask 为最高精度 GT）。
 - 球默认不导出到 MOT/YOLO，`--include-ball` 开启（`annotate-masks` 参数）。
 
 ### 调试可视化

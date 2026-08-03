@@ -15,6 +15,7 @@ mask 则重新解码计算，结果一致。
 """
 
 import json
+import math
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -38,14 +39,22 @@ from instance_mask import (  # noqa: E402
     det_xyxy_to_yolo_norm,
     load_mask_array,
     mask_to_bbox,
-    mask_to_polygons,
-    polygon_to_yolo_flat,
+    mask_to_polygons_with_areas,
+    merge_to_single_ring,
+    polygon_to_mask,
+    raster_quality_metrics,
+    ring_to_yolo_flat,
     visible_pixel_count,
     yolo_class_id,
 )
 
 # MOT visibility：mask-primary 已把 bbox 裁剪到图像内，truncation 模式无意义，固定 unoccluded
 _MOT_VISIBILITY_MODE = "unoccluded"
+
+# 多连通域合并的面积膨胀检查阈值（仅多连通域时生效；单连通域不进入）
+_AREA_TOL_EXTRA_RATIO = 0.10
+_AREA_TOL_MISSING_RATIO = 0.05
+_AREA_TOL_IOU = 0.75
 
 
 def _camera_dirs(annotation_dir: Path) -> List[Path]:
@@ -165,6 +174,38 @@ def _annotate_camera(cam_dir: Path, mask_channel: str, include_ball: bool,
     return True
 
 
+def _check_area_quality(ring, binary, width, height):
+    """ROI 内栅格化 merged ring 与原始 mask 对比；返回失败原因字符串或 None。
+
+    Gate：extra_ratio ≤ tol、refined_missing_ratio ≤ tol、iou ≥ tol；
+    任一项失败或栅格化异常即返回原因（由调用方回退最大连通域）。
+    """
+    try:
+        xs = [p[0] for p in ring]
+        ys = [p[1] for p in ring]
+        x0 = max(0, int(math.floor(min(xs))))
+        y0 = max(0, int(math.floor(min(ys))))
+        x1 = min(width, int(math.ceil(max(xs))) + 1)
+        y1 = min(height, int(math.ceil(max(ys))) + 1)
+        roi_w, roi_h = x1 - x0, y1 - y0
+        if roi_w <= 0 or roi_h <= 0:
+            return "empty_roi"
+        shifted = [(x - x0, y - y0) for x, y in ring]
+        raster = polygon_to_mask(shifted, roi_w, roi_h)
+        truth = binary[y0:y1, x0:x1]
+        m = raster_quality_metrics(raster, truth)
+        if m["extra_ratio"] > _AREA_TOL_EXTRA_RATIO:
+            return "extra_ratio=%.3f>%.2f" % (m["extra_ratio"], _AREA_TOL_EXTRA_RATIO)
+        if m["refined_missing_ratio"] > _AREA_TOL_MISSING_RATIO:
+            return "refined_missing_ratio=%.3f>%.2f" % (
+                m["refined_missing_ratio"], _AREA_TOL_MISSING_RATIO)
+        if m["iou"] < _AREA_TOL_IOU:
+            return "iou=%.3f<%.2f" % (m["iou"], _AREA_TOL_IOU)
+        return None
+    except Exception as e:
+        return "rasterization_error: %s" % e
+
+
 def _upgrade_object(obj: dict, mask_img, width: int, height: int,
                     polygon_tolerance_px: float, max_polygon_points: int,
                     id_scale: float, id_offset: float) -> None:
@@ -183,8 +224,23 @@ def _upgrade_object(obj: dict, mask_img, width: int, height: int,
     if binary.any():
         bbox = mask_to_bbox(binary)
         xywh = xyxy_to_xywh(bbox)
-        polys = mask_to_polygons(binary, polygon_tolerance_px, max_polygon_points)
-        seg_flat = polygon_to_yolo_flat(polys, width, height) if polys else None
+        polys, comp_areas = mask_to_polygons_with_areas(
+            binary, polygon_tolerance_px, max_polygon_points
+        )
+        n_components = len(polys)
+        ring, meta = merge_to_single_ring(polys, comp_areas) if polys else ([], None)
+        seg_flat = ring_to_yolo_flat(ring, width, height) if ring else None
+        fallback = meta.get("fallback") if meta else None
+        fallback_reason = meta.get("fallback_reason") if meta else None
+        # 面积膨胀检查（仅多连通域且桥接成功时）
+        if n_components > 1 and fallback is None and seg_flat:
+            reason = _check_area_quality(ring, binary, width, height)
+            if reason:
+                best = max(range(len(polys)), key=lambda i: comp_areas[i])
+                ring = list(polys[best])
+                seg_flat = ring_to_yolo_flat(ring, width, height)
+                fallback = "largest_component"
+                fallback_reason = reason
         obj.update({
             "mask_id": mask_id,
             "bbox_source": "instance_mask",
@@ -195,6 +251,10 @@ def _upgrade_object(obj: dict, mask_img, width: int, height: int,
             "bbox_xyxy": [round(v, 3) for v in bbox],
             "bbox_xywh": [round(v, 3) for v in xywh],
             "segmentation": seg_flat,
+            "segmentation_components": n_components,
+            "segmentation_merged": n_components > 1 and fallback is None,
+            "segmentation_fallback": fallback,
+            "segmentation_fallback_reason": fallback_reason,
             "geometry_bbox_xyxy": [round(v, 3) for v in geo_xyxy] if geo_xyxy else None,
             "geometry_bbox_xywh": [round(v, 3) for v in geo_xywh] if geo_xywh else None,
         })
@@ -206,6 +266,10 @@ def _upgrade_object(obj: dict, mask_img, width: int, height: int,
             "in_frame": False,
             "visible_pixel_count": 0,
             "segmentation": None,
+            "segmentation_components": 0,
+            "segmentation_merged": False,
+            "segmentation_fallback": None,
+            "segmentation_fallback_reason": None,
             "bbox_xyxy": geo_xyxy,
             "bbox_xywh": geo_xywh,
             "geometry_bbox_xyxy": geo_xyxy,

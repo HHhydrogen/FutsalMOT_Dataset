@@ -101,6 +101,110 @@ def _load_frames(cam_dir):
     return [json.loads(line) for line in (cam_dir / "annotations.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
+def _make_multi_component_camera(root):
+    """L0 可见 mask = 头(5..12, 20..30) + 躯干(20..35, 15..35)，L1 覆盖中间遮挡带(12..20, 15..35)。
+
+    L0 被一分为二（两个 disconnected components），L1 为单个连通域。
+    """
+    cam_dir = root / "Cam_01"
+    (cam_dir / "gt").mkdir(parents=True, exist_ok=True)
+    W, H = 64, 64
+    cam = {
+        "camera_id": "Cam_01", "image_width": W, "image_height": H,
+        "intrinsics": {"width": W, "height": H, "fx": 50.0, "fy": 50.0,
+                       "cx": W / 2, "cy": H / 2},
+        "extrinsics": {"world_location_m": [0.0, 0.0, 0.0], "forward": [1.0, 0.0, 0.0],
+                       "right": [0.0, 1.0, 0.0], "up": [0.0, 0.0, 1.0]},
+    }
+    (cam_dir / "camera.json").write_text(json.dumps(cam), encoding="utf-8")
+    (cam_dir / "seqinfo.ini").write_text("[Sequence]\nname=Cam_01\n", encoding="utf-8")
+    l0 = _geo_obj("L0", 1, "player", [15, 5, 35, 35])
+    l1 = _geo_obj("L1", 2, "player", [15, 12, 35, 20])
+    frames = [{"episode_id": "ep", "camera_id": "Cam_01", "frame_index": 1,
+               "source_step": 0, "time_seconds": 0.0, "objects": [l0, l1]}]
+    with open(cam_dir / "annotations.jsonl", "w", encoding="utf-8") as f:
+        for fr in frames:
+            f.write(json.dumps(fr) + "\n")
+    img1 = cam_dir / "img1"
+    mask = cam_dir / "mask"
+    img1.mkdir(parents=True, exist_ok=True)
+    mask.mkdir(parents=True, exist_ok=True)
+    m = np.zeros((H, W), dtype=np.uint8)
+    m[5:12, 20:30] = 1    # L0 头
+    m[20:35, 15:35] = 1   # L0 躯干
+    m[12:20, 15:35] = 2   # L1 遮挡带
+    _write_png(img1 / "000001.png", m, rgb=True)
+    _write_png(mask / "000001.png", m)
+    return cam_dir
+
+
+def _make_far_apart_camera(root):
+    """L0 两个相距极远的正常尺寸碎片（对角 gap ~20px）。
+
+    零宽往返桥在 even-odd 栅格化下不填充桥带 → 面积 gate 通过，应干净合并。
+    """
+    cam_dir = root / "Cam_01"
+    (cam_dir / "gt").mkdir(parents=True, exist_ok=True)
+    W, H = 64, 64
+    cam = {
+        "camera_id": "Cam_01", "image_width": W, "image_height": H,
+        "intrinsics": {"width": W, "height": H, "fx": 50.0, "fy": 50.0,
+                       "cx": W / 2, "cy": H / 2},
+        "extrinsics": {"world_location_m": [0.0, 0.0, 0.0], "forward": [1.0, 0.0, 0.0],
+                       "right": [0.0, 1.0, 0.0], "up": [0.0, 0.0, 1.0]},
+    }
+    (cam_dir / "camera.json").write_text(json.dumps(cam), encoding="utf-8")
+    (cam_dir / "seqinfo.ini").write_text("[Sequence]\nname=Cam_01\n", encoding="utf-8")
+    l0 = _geo_obj("L0", 1, "player", [5, 5, 55, 55])
+    frames = [{"episode_id": "ep", "camera_id": "Cam_01", "frame_index": 1,
+               "source_step": 0, "time_seconds": 0.0, "objects": [l0]}]
+    with open(cam_dir / "annotations.jsonl", "w", encoding="utf-8") as f:
+        for fr in frames:
+            f.write(json.dumps(fr) + "\n")
+    img1 = cam_dir / "img1"
+    mask = cam_dir / "mask"
+    img1.mkdir(parents=True, exist_ok=True)
+    mask.mkdir(parents=True, exist_ok=True)
+    m = np.zeros((H, W), dtype=np.uint8)
+    m[5:25, 5:25] = 1    # 碎片1（20×20）
+    m[45:65, 45:65] = 1  # 碎片2（20×20，对角 gap ~20px）
+    _write_png(img1 / "000001.png", m, rgb=True)
+    _write_png(mask / "000001.png", m)
+    return cam_dir
+
+
+def _make_tiny_components_camera(root):
+    """L0 两个 3×3 极小碎片 → 轮廓约定下 iou≈0.44<0.75 → 面积 gate 失败回退。"""
+    cam_dir = root / "Cam_01"
+    (cam_dir / "gt").mkdir(parents=True, exist_ok=True)
+    W, H = 64, 64
+    cam = {
+        "camera_id": "Cam_01", "image_width": W, "image_height": H,
+        "intrinsics": {"width": W, "height": H, "fx": 50.0, "fy": 50.0,
+                       "cx": W / 2, "cy": H / 2},
+        "extrinsics": {"world_location_m": [0.0, 0.0, 0.0], "forward": [1.0, 0.0, 0.0],
+                       "right": [0.0, 1.0, 0.0], "up": [0.0, 0.0, 1.0]},
+    }
+    (cam_dir / "camera.json").write_text(json.dumps(cam), encoding="utf-8")
+    (cam_dir / "seqinfo.ini").write_text("[Sequence]\nname=Cam_01\n", encoding="utf-8")
+    l0 = _geo_obj("L0", 1, "player", [5, 5, 55, 55])
+    frames = [{"episode_id": "ep", "camera_id": "Cam_01", "frame_index": 1,
+               "source_step": 0, "time_seconds": 0.0, "objects": [l0]}]
+    with open(cam_dir / "annotations.jsonl", "w", encoding="utf-8") as f:
+        for fr in frames:
+            f.write(json.dumps(fr) + "\n")
+    img1 = cam_dir / "img1"
+    mask = cam_dir / "mask"
+    img1.mkdir(parents=True, exist_ok=True)
+    mask.mkdir(parents=True, exist_ok=True)
+    m = np.zeros((H, W), dtype=np.uint8)
+    m[5:8, 5:8] = 1      # 碎片1（3×3）
+    m[50:53, 50:53] = 1  # 碎片2（3×3）
+    _write_png(img1 / "000001.png", m, rgb=True)
+    _write_png(mask / "000001.png", m)
+    return cam_dir
+
+
 class TestAnnotateMasks:
     def test_bbox_from_mask_and_sources(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -267,3 +371,64 @@ class TestValidatorMask:
             import shutil
             shutil.rmtree(cam_dir / "mask")
             assert validate_annotation_dir(root) == 0
+
+
+class TestAnnotateMasksMultiComponent:
+    def test_occluded_two_components_merged(self):
+        # L0 被 L1 遮挡带一分为二（头 + 躯干）→ 桥接合并为单 ring
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cam = _make_multi_component_camera(root)
+            annotate_masks_dir(root)
+            frames = _load_frames(cam)
+            o = {obj["entity_id"]: obj for obj in frames[0]["objects"]}
+            assert o["L0"]["bbox_source"] == "instance_mask"
+            assert o["L0"]["segmentation_components"] == 2
+            assert o["L0"]["segmentation_merged"] is True
+            assert o["L0"]["segmentation_fallback"] is None
+            seg = o["L0"]["segmentation"]
+            assert seg is not None and len(seg) % 2 == 0
+            assert all(0.0 <= v <= 1.0 for v in seg)
+            # bbox 仍严格等于 mask min/max（头 x[20,30)、躯干 x[15,35)、y[5,35)）
+            assert o["L0"]["bbox_xyxy"] == [15.0, 5.0, 35.0, 35.0]
+            # YOLO seg 单行且无跨区连接（L0 + L1 各一行）
+            segtxt = (cam / "labels" / "seg" / "000001.txt").read_text(encoding="utf-8").strip().splitlines()
+            assert len(segtxt) == 2
+            # validator 仍通过
+            assert validate_annotation_dir(root) == 0
+
+    def test_single_component_no_merge_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cam = _make_camera(Path(tmp))  # 现有 helper，单连通域
+            annotate_masks_dir(Path(tmp))
+            f1 = _load_frames(cam)[0]
+            o = {obj["entity_id"]: obj for obj in f1["objects"]}
+            assert o["L0"]["segmentation_components"] == 1
+            assert o["L0"]["segmentation_merged"] is False
+            assert o["L0"]["segmentation_fallback"] is None
+
+    def test_far_apart_merge_clean(self):
+        # 零宽往返桥在 even-odd 栅格化下不填充桥带 → 远距碎片干净合并，无额外前景
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cam = _make_far_apart_camera(root)
+            annotate_masks_dir(root)
+            frames = _load_frames(cam)
+            o = {obj["entity_id"]: obj for obj in frames[0]["objects"]}
+            assert o["L0"]["segmentation_components"] == 2
+            assert o["L0"]["segmentation_merged"] is True
+            assert o["L0"]["segmentation_fallback"] is None
+
+    def test_tiny_components_fallback_largest(self):
+        # 极小碎片（3×3）在轮廓约定下欠填充严重 → iou<0.75 → 回退最大连通域并记录原因
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cam = _make_tiny_components_camera(root)
+            annotate_masks_dir(root)
+            frames = _load_frames(cam)
+            o = {obj["entity_id"]: obj for obj in frames[0]["objects"]}
+            assert o["L0"]["segmentation_components"] == 2
+            assert o["L0"]["segmentation_merged"] is False
+            assert o["L0"]["segmentation_fallback"] == "largest_component"
+            assert o["L0"]["segmentation_fallback_reason"]
+

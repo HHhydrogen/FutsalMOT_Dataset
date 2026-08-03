@@ -473,7 +473,8 @@ class TestAnnotateMasks:
             assert o1["L0"]["visible_pixel_count"] == 400
             assert o2["L0"].get("bbox_source") is None  # 无 mask → 保持几何
             assert o2["L0"]["bbox_xyxy"] == [15.0, 15.0, 35.0, 35.0]
-            assert validate_annotation_dir(root) == 0
+            # 该 fixture 缺帧 2 的 mask/img1 → dataset regression 判定不完整（应失败）
+            assert validate_annotation_dir(root) == 1
 
 
 class TestValidatorMask:

@@ -15,7 +15,8 @@ code/
 │   ├── exporter.py               #   将 EpisodeResult 导出为 meta.json + frames.jsonl
 │   ├── coordinate_transform.py   #   GRF 归一化坐标 → UE 米坐标
 │   ├── validator.py              #   验证导出的 episode 数据完整性
-│   ├── annotation_validator.py   #   验证导出的 CV 标注目录（含 Instance-ID Mask 校验）
+│   ├── annotation_validator.py   #   验证导出的 CV 标注目录（语义/掩码校验）
+│   ├── dataset_regression.py     #   端到端 dataset 回归校验（RGB/mask/annotation 全链路一致性）
 │   ├── mask_annotator.py         #   由 Instance-ID Mask 生成 mask-primary bbox/分割标注（P1）
 │   ├── cryptomatte.py            #   解析 Cryptomatte EXR → mask/*.png（mask_id 值，P1）
 │   └── schema.py                 #   数据模型定义
@@ -407,6 +408,8 @@ uv run python ue/recover_render.py
 
 ### Instance-ID Mask 像素级 GT
 
+> 状态：**RESOLVED**。完整排查过程与最终方案见仓库根 `MASK_RENDERING_STATUS.md`（CustomStencil 黑屏问题已作为历史记录归档，不再阻塞）。
+
 `annotation_export.instance_mask.enabled=true` 时，MRQ 在渲染 RGB 的同时为每个 Sequence 额外渲染一份 **Instance-ID Mask**（独立 MRQ job，输出到 `render_mask/` 后复制为 `mask/`，与 `img1/` 同帧号同分辨率），每个实体的 mask 像素值 == 其稳定 `mask_id`（背景 0）：
 
 | 实体 | mask_id | | 实体 | mask_id |
@@ -461,7 +464,27 @@ uv run grf-ue annotate-overlay G:/FutsalMOT_Dataset/episode_0001/Camera_01 --inc
 uv run grf-ue validate-annotations G:/FutsalMOT_Dataset
 ```
 
-检查 bbox 合法性、frame_index 连续性、entity↔track 双向一致、MOT 行合法、resolution 一致、可见像素 GT 与几何 GT 语义分离（`bbox_source="instance_mask"` → `visible_pixel_count>0`；`visible_pixel_count==0` → 可见 bbox 为 null；`bbox_source="not_visible"` → mask 无像素；**不可见对象不进入 MOT/YOLO**，做交叉校验）等。若 camera 目录存在 `mask/`，额外检查：RGB(`img1/`) 与 mask 帧一一对应、mask 分辨率一致、mask 像素值合法（0 或 1..11）、`mask_id` 与实体确定性映射一致、`bbox_xyxy` 与 mask min/max 一致、YOLO 坐标 ∈ [0,1] 且 det/seg 行格式合法。
+这是**最终验收命令**，一条命令同时运行两类校验：
+
+1. **逐 camera 语义/掩码校验**（`annotation_validator`）：bbox 合法性、frame_index 连续性、entity↔track 双向一致、MOT 行合法、resolution 一致、可见像素 GT 与几何 GT 语义分离（`bbox_source="instance_mask"` → `visible_pixel_count>0`；`visible_pixel_count==0` → 可见 bbox 为 null；`bbox_source="not_visible"` → mask 无像素；**不可见对象不进入 MOT/YOLO**，做交叉校验）等。若 camera 目录存在 `mask/`，额外检查：RGB(`img1/`) 与 mask 帧一一对应、mask 分辨率一致、mask 像素值合法（0 或 1..11）、`mask_id` 与实体确定性映射一致、`bbox_xyxy` 与 mask min/max 一致、YOLO 坐标 ∈ [0,1] 且 det/seg 行格式合法。
+2. **端到端 dataset regression**（`dataset_regression`）：从 mask + annotations **重新派生** bbox / MOT / YOLO Det / YOLO Seg，与落盘产物逐项比对，验证整条 Instance-ID 标注链路的内部一致性（见下节）。
+
+### Dataset Integrity Validation
+
+`grf-ue validate-annotations` 末尾会自动运行统一的 **dataset regression validator**（`src/grf_ue_bridge/dataset_regression.py`），对每个 camera 检查：
+
+- **帧数全链路对应**：`annotations.jsonl` 帧数 == `img1/` PNG 帧数 == `mask/` PNG 帧数；`frame_index` 与文件名 `{frame_index:06d}.png` 严格一一对应。
+- **分辨率一致**：RGB / mask 每帧分辨率 == `camera.json` 的 `image_width × image_height`。
+- **mask 不得全背景**：任何 mask 帧不得全为 0（疑似渲染失败/实体全部丢失）。
+- **entity/class/track/mask 规则**：`BALL → class=ball, track_id=100, mask_id=11`；`L0..L4 → track/mask 1..5`；`R0..R4 → track/mask 6..10`，全帧稳定。
+- **instance-mask bbox == mask 像素**：每个 `bbox_source="instance_mask"` 对象的 `bbox_xyxy` 必须等于 mask 可见像素 min/max（±0.5px），`visible_pixel_count` 必须等于 mask 非零像素数。
+- **MOT / YOLO 重新派生比对**：用与生成完全相同的公式（`build_mot_gt` / `det_xyxy_to_yolo_norm` / segmentation flat）从 annotations 重新生成期望的 MOT gt.txt 与 YOLO det/seg 标签，逐行精确比对落盘文件——`bbox_source="not_visible"` 的不可见对象不会出现。
+- **多连通域 merge 的 raster quality gate 复验**：对 `segmentation_merged=true`（多连通域成功桥接合并）的对象，用与 `annotate-masks` 相同的面积膨胀检查（extra/missing/iou 阈值）复验存储的 segmentation ring 仍通过。
+- **BALL 规则**：球以 `class=ball / track_id=100 / mask_id=11` 进入 MOT/YOLO（仅 `--include-ball` 时）。
+
+> 说明：对缺 `mask/` 的 legacy 纯几何目录，mask 相关检查自动放行；但若 `mask/` 存在（mask-primary 数据集），则要求 RGB / mask / annotation 全链路完整——任一帧缺 mask 或 RGB 都会判定不完整。
+
+最小回归锚点：`tests/test_golden_fixture.py` 用确定性合成 64×64 fixture（2 帧、L0/L1/BALL 可见、R0 不可见），**手工核算 + 锁定** mask → bbox → MOT → YOLO Detect → YOLO Seg 的精确输出值；任何一环改动都会让 golden 断言失败。`tests/test_dataset_regression.py` 单独覆盖 regression validator 的负例（全背景 mask、分辨率不符、帧数缺失、MOT/YOLO 与 mask bbox 不一致）。
 
 ---
 

@@ -529,6 +529,9 @@ def validate_annotation_dir(annotation_dir: Path) -> int:
     支持两种层级：<root>/<camera>/ 或 <root>/<episode_id>/<camera>/。
     通过递归查找包含 camera.json 的目录来定位 camera 子目录。
 
+    除逐字段语义/掩码校验外，还会运行端到端 dataset regression（RGB/mask/annotation
+    帧数、分辨率、MOT/YOLO 重新派生比对、多连通域 quality gate 复验），作为最终验收。
+
     Returns:
         0 表示通过，1 表示失败。
     """
@@ -538,6 +541,13 @@ def validate_annotation_dir(annotation_dir: Path) -> int:
         errors.append(f"目录 {annotation_dir} 下没有 camera 子目录（缺少 camera.json）")
     for cam_dir in camera_dirs:
         errors += _validate_camera(cam_dir)
+    # 端到端回归：重新派生 bbox/MOT/YOLO 并与落盘产物比对（统一入口）
+    try:
+        from .dataset_regression import collect_dataset_regression_errors
+
+        errors += collect_dataset_regression_errors(annotation_dir)
+    except Exception as e:
+        errors.append(f"DATASET REGRESSION: 执行异常: {e}")
     _report(errors)
     if not errors:
         print(f"ANNOTATION VALIDATOR: {annotation_dir} PASSED all checks")

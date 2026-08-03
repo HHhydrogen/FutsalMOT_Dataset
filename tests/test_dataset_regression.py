@@ -131,3 +131,37 @@ class TestDatasetRegression:
                 for fr in frames:
                     f.write(json.dumps(fr) + "\n")
             assert validate_dataset_regression(root) == 1
+
+    def test_tiny_visible_object_without_seg_passes(self):
+        """1px 可见球无法多边形化（segmentation=None）→ regression 不应报错。
+
+        极小/全孤立单像素可见对象是 annotate 的合法输出（无法提取多边形，
+        YOLO seg 自动跳过该行）；validator 不得把"instance_mask 缺 segmentation"当错误。
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cam = _make_camera(root)
+            # 帧1 加 BALL：几何在画面内 + mask 1px
+            frames = [json.loads(ln) for ln in
+                      (cam / "annotations.jsonl").read_text(encoding="utf-8").splitlines() if ln.strip()]
+            frames[0]["objects"].append({
+                "entity_id": "BALL", "track_id": 100, "class": "ball", "team": None,
+                "role": None, "is_goalkeeper": False, "world_position": [0.0, 0.0, 0.11],
+                "in_frame": True, "truncated": False, "visibility": None,
+                "raw_bbox_xyxy": [40.0, 40.0, 41.0, 41.0], "raw_bbox_xywh": [40.0, 40.0, 1.0, 1.0],
+                "bbox_xyxy": [40.0, 40.0, 41.0, 41.0], "bbox_xywh": [40.0, 40.0, 1.0, 1.0],
+            })
+            with open(cam / "annotations.jsonl", "w", encoding="utf-8") as f:
+                for fr in frames:
+                    f.write(json.dumps(fr) + "\n")
+            m = np.array(Image.open(cam / "mask" / "000001.png"))
+            m[40, 40] = 11  # BALL 1px
+            Image.fromarray(m.astype(np.uint8)).save(str(cam / "mask" / "000001.png"))
+            annotate_masks_dir(root)
+            frames2 = [json.loads(ln) for ln in
+                       (cam / "annotations.jsonl").read_text(encoding="utf-8").splitlines() if ln.strip()]
+            ball = next(o for o in frames2[0]["objects"] if o["entity_id"] == "BALL")
+            assert ball["bbox_source"] == "instance_mask"
+            assert ball["visible_pixel_count"] == 1
+            assert ball["segmentation"] is None  # 合法：1px 无法多边形化
+            assert validate_dataset_regression(root) == 0

@@ -18,6 +18,7 @@ RGB/mask/annotation 全链路一致。
 """
 
 import json
+import math
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -38,10 +39,16 @@ from instance_mask import (  # noqa: E402
     det_xyxy_to_yolo_norm,
     load_mask_array,
     mask_to_bbox,
+    polygon_to_mask,
     quantize_mask_pixels,
+    raster_quality_metrics,
     yolo_class_id,
 )
-from .mask_annotator import _check_area_quality  # noqa: E402
+from .mask_annotator import (  # noqa: E402
+    _AREA_TOL_EXTRA_RATIO,
+    _AREA_TOL_IOU,
+    _AREA_TOL_MISSING_RATIO,
+)
 
 
 def _camera_dirs(annotation_dir: Path) -> List[Path]:
@@ -316,15 +323,19 @@ def _check_object(errors: List[str], olabel: str, obj: dict, quantized,
 
 
 def _check_seg_gate(errors: List[str], olabel: str, obj: dict, binary, width: int, height: int) -> None:
-    """复验多连通域 merge 的 raster quality gate（与 mask_annotator 同一 gate）。
+    """复验多连通域 merge 的 raster quality gate（放宽阈值吸收舍入误差）。
 
-    只在「多连通域已成功合并」（segmentation_merged=True）时复验面积膨胀检查——这是
-    annotate-masks 实际 gating 的范围。单连通域（轮廓直接 = 边界环，小目标如球有边界
-    欠填的已知轮廓约定）与回退对象（已记录的派生近似）不在此 gate 范围。
+    只在「多连通域已成功合并」（segmentation_merged=True）时复验面积膨胀检查——annotate
+    时已用精确 ring 认证过 gate，这里对**反归一化的存储 ring** 做 sanity 复验：
+      - 6 位小数 YOLO 归一化有 <0.001px 舍入误差，可能在临界处翻转 1~2 个栅格像素
+        （实测 iou 0.748 vs 0.75）；故阈值放宽 ±0.05，仍能捕获 gross 违例。
+      - 极小可见对象（如 1~5px 的球，全部为孤立单像素连通域）无法提取多边形 →
+        annotate 合法输出 segmentation=None，不属于错误（YOLO seg 自动跳过该行）。
+    单连通域与回退对象不在此 gate 范围。
     """
     seg = obj.get("segmentation")
     if not seg:
-        errors.append(f"{olabel} instance_mask 对象缺 segmentation")
+        # 极小/全孤立单像素可见对象：无法多边形化，annotate 合法输出 None（跳过）
         return
     if len(seg) % 2 != 0:
         errors.append(f"{olabel} segmentation 点数为奇数（应成对 x/y）")
@@ -333,9 +344,26 @@ def _check_seg_gate(errors: List[str], olabel: str, obj: dict, binary, width: in
         return  # 非多连通域成功合并：不在此 gate 范围
     ring = [(float(seg[i]) * width, float(seg[i + 1]) * height)
             for i in range(0, len(seg), 2)]
-    reason = _check_area_quality(ring, binary, width, height)
-    if reason:
-        errors.append(f"{olabel} segmentation 多连通域 merge quality gate 未通过: {reason}")
+    # ROI 栅格化 + 质量指标（同 mask_annotator._check_area_quality，阈值放宽 ±0.05）
+    xs = [p[0] for p in ring]
+    ys = [p[1] for p in ring]
+    x0 = max(0, int(math.floor(min(xs))))
+    y0 = max(0, int(math.floor(min(ys))))
+    x1 = min(width, int(math.ceil(max(xs))) + 1)
+    y1 = min(height, int(math.ceil(max(ys))) + 1)
+    if x1 <= x0 or y1 <= y0:
+        return
+    shifted = [(x - x0, y - y0) for x, y in ring]
+    raster = polygon_to_mask(shifted, x1 - x0, y1 - y0)
+    truth = binary[y0:y1, x0:x1]
+    m = raster_quality_metrics(raster, truth)
+    if (m["extra_ratio"] > _AREA_TOL_EXTRA_RATIO + 0.05
+            or m["refined_missing_ratio"] > _AREA_TOL_MISSING_RATIO + 0.05
+            or m["iou"] < _AREA_TOL_IOU - 0.05):
+        errors.append(
+            f"{olabel} segmentation 多连通域 merge quality gate 未通过"
+            f"（iou={m['iou']:.3f}, extra={m['extra_ratio']:.3f}, missing={m['refined_missing_ratio']:.3f}）"
+        )
 
 
 # ── 统一入口 ────────────────────────────────────────────────────────────

@@ -171,6 +171,10 @@ def build_mot_gt(
       bbox_xyxy  : 裁剪后的浮点 (xmin, ymin, xmax, ymax)
       raw_bbox_xywh : 原始浮点 (x, y, w, h)，仅 truncation visibility 使用
       bbox_xywh  : 裁剪后的浮点 (x, y, w, h)，仅 truncation visibility 使用
+
+    只有 in_frame=true 且有合法 bbox_xyxy 的对象会写入 MOT；
+    bbox_source="not_visible"（mask 存在但实体不可见）的对象 in_frame=false，
+    天然被排除。
     """
     rows: List[str] = []
     for frame_index_1based, objects in enumerate(per_frame_objects, start=1):
@@ -180,7 +184,10 @@ def build_mot_gt(
             cls = obj.get("class", "player")
             if cls == "ball" and not include_ball:
                 continue
-            xyxy = obj["bbox_xyxy"]
+            xyxy = obj.get("bbox_xyxy")
+            # 防御：in_frame=true 但 bbox 缺失/非法（schema 不一致）时跳过而非崩溃
+            if not isinstance(xyxy, (list, tuple)) or len(xyxy) != 4:
+                continue
             x, y, w, h = mot_int_bbox(
                 xyxy[0], xyxy[1], xyxy[2], xyxy[3], image_width, image_height
             )

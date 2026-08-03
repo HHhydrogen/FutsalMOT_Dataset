@@ -196,7 +196,7 @@ py "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/ue/import_grf_episode
 
 ### 支持范围
 
-- **2D bbox（primary GT 来自 Instance-ID Mask 像素）**：渲染时同步输出每帧的实例掩码，`annotate-masks` 从每个实体的可见 mask 像素直接取 min/max 得 pixel-tight bbox（严格贴合渲染轮廓，含遮挡后可见部分）。几何投影 bbox（Actor/Mesh 世界空间 AABB）仍保留在 `geometry_bbox_*` 字段作为 fallback/debug。
+- **2D bbox（primary GT 来自 Instance-ID Mask 像素）**：渲染时同步输出每帧的实例掩码，`annotate-masks` 从每个实体的可见 mask 像素直接取 min/max 得 pixel-tight bbox（严格贴合渲染轮廓，含遮挡后可见部分）。mask 中实体像素为 0（完全遮挡/离屏）→ `bbox_source="not_visible"`、可见 bbox 为 null，几何投影 bbox（Actor/Mesh 世界空间 AABB）只保留在 `geometry_bbox_*` 字段作 fallback/debug，**不回填**为可见 GT。
 - **实例分割（modal/visible）**：每个实例由可见 mask 提取外轮廓 → RDP 简化多边形，导出 YOLO Segment 标签；原始 Instance-ID Mask 始终保留为最高精度 GT。
 - 稳定 `track_id`（`L0..L4 → 1..5`，`R0..R4 → 6..10`，`BALL → 100`）与稳定 `mask_id`（`L0..L4 → 1..5`，`R0..R4 → 6..10`，`BALL → 11`）
 - team / role / is_goalkeeper（取自 meta.json 的 entities）
@@ -225,7 +225,7 @@ UE 侧导出几何标注并渲染出 RGB 与 Instance-ID Mask 后，在 P1（`.v
 uv run grf-ue annotate-masks G:/FutsalMOT_Dataset [--include-ball]
 ```
 
-`annotate-masks` 读取每帧 `mask/*.png`，对每个实体由其可见 mask 像素计算 pixel-tight bbox、可见像素数、分割多边形，覆盖写 `annotations.jsonl` 并生成 MOT / YOLO（可重复运行，幂等）。无 `mask/` 目录时保持几何 bbox（fallback）。
+`annotate-masks` 读取每帧 `mask/*.png`，对每个实体由其可见 mask 像素计算 pixel-tight bbox、可见像素数、分割多边形，覆盖写 `annotations.jsonl` 并生成 MOT / YOLO（可重复运行，幂等）。mask 中实体像素为 0 → `bbox_source="not_visible"`、可见 bbox 为 null、几何只保留在 `geometry_bbox_*`（不回填）；无 `mask/` 目录或缺某帧 mask → 保持几何 bbox（legacy fallback）。
 
 脚本读取 `ue_import_config.json` 中的 `annotation_export` 配置段，常用字段：
 
@@ -313,18 +313,21 @@ uv run grf-ue annotate-masks G:/FutsalMOT_Dataset [--include-ball]
 字段说明：
 
 - `frame_index`（1 基）= MOT 帧号 = 图片文件名 `000001.png`；`source_step`（0 基）= frames.jsonl 行号。
-- `bbox_source`：`"instance_mask"`（primary，bbox 由 mask 可见像素 min/max 计算）或 `"geometry"`（fallback，无 mask / 完全不可见时）。
-- `bbox_xywh` / `bbox_xyxy`：`instance_mask` 时是 mask 像素的 tight bbox（连续坐标，`xmax=max_x+1`，恰好覆盖全部可见像素）；`geometry` 时是裁剪到图像内的几何投影 bbox。
-- `geometry_bbox_xyxy/xywh`：几何投影的裁剪 bbox（fallback/debug，始终保留）。`raw_bbox_*`：几何投影原始值（可能越出图像边界）。
-- `visible_pixel_count`：该实体可见 mask 像素数（遮挡的真实信号）；`instance_mask` 时 ≥1，`geometry`（不可见）时为 0。
+- `bbox_source`：三值，严格区分「可见像素 GT」与「几何投影 GT」：
+  - `"instance_mask"`（primary）：bbox 由 mask 可见像素 min/max 计算；
+  - `"not_visible"`：有有效 mask 帧但该实体 mask 像素为 0（完全遮挡/离屏）——可见 GT 全为 null，几何只留在 `geometry_bbox_*`；
+  - `"geometry"` / 无该字段：legacy 几何标注，仅在**无 mask 数据**（无 `mask/` 目录或缺该帧 mask）时保留。
+- `bbox_xywh` / `bbox_xyxy`：`instance_mask` 时是 mask 像素的 tight bbox（连续坐标，`xmax=max_x+1`，恰好覆盖全部可见像素）；`not_visible` 时为 `null`；legacy 几何时是裁剪到图像内的几何投影 bbox。
+- `geometry_bbox_xyxy/xywh`：几何投影的裁剪 bbox（仅 geometry/debug/fallback 信息，**不代表** visible/modal GT；`not_visible` 时与可见 bbox 完全解耦，绝不回填）。`raw_bbox_*`：几何投影原始值（可能越出图像边界），`not_visible` 时为 `null`。
+- `visible_pixel_count`：该实体可见 mask 像素数（遮挡的真实信号）；`instance_mask` 时 ≥1，`not_visible` 时为 0。
 - `segmentation`：模态分割，YOLO 归一化 flat 点列表 `[x1,y1,x2,y2,...]`。单连通域为单个多边形；**多连通域（`segmentation_components>1`）时为派生近似**——YOLO 单多边形限制下用最近点桥接合并为单个 ring（弱简单，含零宽连接），raw Instance-ID Mask 始终为 canonical GT。`segmentation_fallback` 非空表示合并失败已回退为最大连通域。
 - `segmentation_components`：可见连通域碎片数（1 = 单连通域；0 = 完全不可见）。
 - `segmentation_merged`：是否经最近点桥接合并为单个 ring（多连通域且未回退时为 `true`）。
 - `segmentation_fallback`：`null` 或 `"largest_component"`（合并的合法性/面积膨胀检查失败时回退只保留最大连通域）。
 - `segmentation_fallback_reason`：回退原因（如 `extra_ratio=0.42>0.10`）；无回退时为 `null`。
 - `mask_id`：实例稳定 ID（`L0..L4→1..5`、`R0..R4→6..10`、`BALL→11`），等于 mask 像素值。
-- `in_frame`：**按最终渲染可见像素**——`bbox_source="instance_mask"` 时恒 `true`；完全被遮挡/离屏（mask 空）→ `false`。
-- `truncated`：`instance_mask` 时恒 `false`（mask bbox 必在图像内）；`geometry` 时反映几何投影的边界截断。
+- `in_frame`：**按最终渲染可见像素**——`bbox_source="instance_mask"` 时恒 `true`；`not_visible`（完全遮挡/离屏，mask 像素为 0）→ `false`。
+- `truncated`：`instance_mask` 与 `not_visible` 时恒 `false`；legacy 几何时反映几何投影的边界截断。
 - `visibility`：**不建模 amodal 遮挡**，恒为 `null`（要量化遮挡请用 `visible_pixel_count`）。
 - bbox 单位为像素，坐标原点为图像左上角。
 
@@ -436,10 +439,10 @@ uv run grf-ue annotate-masks G:/FutsalMOT_Dataset/episode_demo --include-ball [-
 ```
 
 `cryptomatte-to-mask`：读 `render_mask/*.exr` 的 manifest + `RGBA` 层 R 通道，对每实体按 float32 ID 匹配生成 mask（缺省从 `ue_import_config.json` 读 mapping/episode，可用 `--mapping`/`--episode` 覆盖）。
-`annotate-masks`：读 `mask/{frame}.png` + UE 导出的 `annotations.jsonl` → 每实体由可见 mask 像素算 tight bbox / `visible_pixel_count` / 模态分割多边形 → 覆盖写 `annotations.jsonl`（`bbox_source="instance_mask"`，几何 bbox 保留在 `geometry_bbox_*`）→ 重写 MOT `gt/gt.txt` → 写 YOLO `labels/det/` 与 `labels/seg/` → 写 `mask_config.json`（解码参数）。幂等，可重复运行；原始 `mask/*.png` 永不修改。无 `mask/` 的 camera 保持几何 bbox（fallback）。
+`annotate-masks`：读 `mask/{frame}.png` + UE 导出的 `annotations.jsonl` → 每实体由可见 mask 像素算 tight bbox / `visible_pixel_count` / 模态分割多边形 → 覆盖写 `annotations.jsonl`（`bbox_source="instance_mask"`，几何 bbox 保留在 `geometry_bbox_*`；mask 像素为 0 → `bbox_source="not_visible"`、可见 bbox 置 null）→ 重写 MOT `gt/gt.txt` → 写 YOLO `labels/det/` 与 `labels/seg/` → 写 `mask_config.json`（解码参数）。幂等，可重复运行；原始 `mask/*.png` 永不修改。无 `mask/` 的 camera 或缺某帧 mask 保持几何 bbox（legacy fallback）。
 
 **MOT / YOLO 导出**：
-- MOT `gt/gt.txt`：bbox 为 mask 可见 bbox，`visibility` 按 `mot_visibility_mode`（默认 `unoccluded` 写 1.0）；完全不可见实体不写入。
+- MOT `gt/gt.txt`：bbox 为 mask 可见 bbox，`visibility` 按 `mot_visibility_mode`（默认 `unoccluded` 写 1.0）；完全不可见实体（`bbox_source="not_visible"`）不写入。
 - YOLO Detect `labels/det/`：每行 `class cx cy w h`（归一化，`0=player`、`1=ball`）。
 - YOLO Segment `labels/seg/`：每行 `class x1 y1 x2 y2 ...`（归一化多边形，RDP 简化后 ≤ `max_polygon_points` 点，多连通域用最近点桥接合并为单行；raw mask 为最高精度 GT）。
 - 球默认不导出到 MOT/YOLO，`--include-ball` 开启（`annotate-masks` 参数）。
@@ -458,7 +461,7 @@ uv run grf-ue annotate-overlay G:/FutsalMOT_Dataset/episode_0001/Camera_01 --inc
 uv run grf-ue validate-annotations G:/FutsalMOT_Dataset
 ```
 
-检查 bbox 合法性、frame_index 连续性、entity↔track 双向一致、MOT 行合法、resolution 一致等。若 camera 目录存在 `mask/`，额外检查：RGB(`img1/`) 与 mask 帧一一对应、mask 分辨率一致、mask 像素值合法（0 或 1..11）、`mask_id` 与实体确定性映射一致、`bbox_xyxy` 与 mask min/max 一致、YOLO 坐标 ∈ [0,1] 且 det/seg 行格式合法。
+检查 bbox 合法性、frame_index 连续性、entity↔track 双向一致、MOT 行合法、resolution 一致、可见像素 GT 与几何 GT 语义分离（`bbox_source="instance_mask"` → `visible_pixel_count>0`；`visible_pixel_count==0` → 可见 bbox 为 null；`bbox_source="not_visible"` → mask 无像素；**不可见对象不进入 MOT/YOLO**，做交叉校验）等。若 camera 目录存在 `mask/`，额外检查：RGB(`img1/`) 与 mask 帧一一对应、mask 分辨率一致、mask 像素值合法（0 或 1..11）、`mask_id` 与实体确定性映射一致、`bbox_xyxy` 与 mask min/max 一致、YOLO 坐标 ∈ [0,1] 且 det/seg 行格式合法。
 
 ---
 

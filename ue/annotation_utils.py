@@ -24,6 +24,15 @@ BALL_MASK_ID = 11
 IMAGE_LEFT = 0.0
 IMAGE_TOP = 0.0
 
+# bbox_source 取值：区分「可见像素 GT」与「几何投影 GT」。
+#   "geometry"      —— 几何投影 bbox（UE 导出初始标注；无 mask 数据时的 legacy fallback）
+#   "instance_mask" —— primary GT：bbox 由 Instance-ID Mask 可见像素 min/max 计算
+#   "not_visible"   —— 有有效 mask 帧但实体可见像素为 0（完全遮挡/离屏），可见 GT 为 null，
+#                      几何 bbox 只保留在 geometry_bbox_*，绝不回填到 bbox_*。
+BBOX_SOURCE_GEOMETRY = "geometry"
+BBOX_SOURCE_INSTANCE_MASK = "instance_mask"
+BBOX_SOURCE_NOT_VISIBLE = "not_visible"
+
 
 def entity_id_to_track_id(entity_id: str) -> int:
     """实体 ID 到稳定 track_id 的确定性映射。

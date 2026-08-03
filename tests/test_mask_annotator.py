@@ -101,6 +101,12 @@ def _load_frames(cam_dir):
     return [json.loads(line) for line in (cam_dir / "annotations.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
+def _rewrite_annotations(cam_dir, frames):
+    with open(cam_dir / "annotations.jsonl", "w", encoding="utf-8") as f:
+        for fr in frames:
+            f.write(json.dumps(fr) + "\n")
+
+
 def _make_multi_component_camera(root):
     """L0 可见 mask = 头(5..12, 20..30) + 躯干(20..35, 15..35)，L1 覆盖中间遮挡带(12..20, 15..35)。
 
@@ -205,6 +211,84 @@ def _make_tiny_components_camera(root):
     return cam_dir
 
 
+def _make_camera_offscreen(root):
+    """L0 可见（mask 有像素）；R0 几何完全离屏（UE 导出 in_frame=false、bbox=null）。
+
+    离屏实体的 mask 必然没有像素 → annotate-masks 后应为 not_visible，
+    geometry_bbox_* 也为 null（几何本身就是 None）。
+    """
+    cam_dir = root / "Cam_01"
+    (cam_dir / "gt").mkdir(parents=True, exist_ok=True)
+    cam = {
+        "camera_id": "Cam_01", "image_width": W, "image_height": H,
+        "intrinsics": {"width": W, "height": H, "fx": 50.0, "fy": 50.0,
+                       "cx": W / 2, "cy": H / 2},
+        "extrinsics": {"world_location_m": [0.0, 0.0, 0.0], "forward": [1.0, 0.0, 0.0],
+                       "right": [0.0, 1.0, 0.0], "up": [0.0, 0.0, 1.0]},
+    }
+    (cam_dir / "camera.json").write_text(json.dumps(cam), encoding="utf-8")
+    (cam_dir / "seqinfo.ini").write_text("[Sequence]\nname=Cam_01\n", encoding="utf-8")
+    l0 = _geo_obj("L0", 1, "player", [10, 10, 30, 30])
+    # R0 几何离屏：in_frame=false、bbox/raw 全 null（与 UE annotation_exporter._not_in_frame 一致）
+    r0 = {
+        "entity_id": "R0", "track_id": 6, "class": "player", "team": "right",
+        "role": None, "is_goalkeeper": False, "world_position": [12.0, 0.0, 0.9],
+        "in_frame": False, "truncated": False, "visibility": None,
+        "raw_bbox_xywh": None, "raw_bbox_xyxy": None,
+        "bbox_xywh": None, "bbox_xyxy": None,
+    }
+    frames = [{"episode_id": "ep", "camera_id": "Cam_01", "frame_index": 1,
+               "source_step": 0, "time_seconds": 0.0, "objects": [l0, r0]}]
+    with open(cam_dir / "annotations.jsonl", "w", encoding="utf-8") as f:
+        for fr in frames:
+            f.write(json.dumps(fr) + "\n")
+    img1 = cam_dir / "img1"
+    mask = cam_dir / "mask"
+    img1.mkdir(parents=True, exist_ok=True)
+    mask.mkdir(parents=True, exist_ok=True)
+    m = np.zeros((H, W), dtype=np.uint8)
+    m[10:30, 10:30] = 1  # 只有 L0
+    _write_png(img1 / "000001.png", m, rgb=True)
+    _write_png(mask / "000001.png", m)
+    return cam_dir
+
+
+def _make_camera_missing_frame_mask(root):
+    """帧 1 有 mask、帧 2 缺 mask PNG：帧 2 应保持 UE 几何标注（legacy fallback）。"""
+    cam_dir = root / "Cam_01"
+    (cam_dir / "gt").mkdir(parents=True, exist_ok=True)
+    cam = {
+        "camera_id": "Cam_01", "image_width": W, "image_height": H,
+        "intrinsics": {"width": W, "height": H, "fx": 50.0, "fy": 50.0,
+                       "cx": W / 2, "cy": H / 2},
+        "extrinsics": {"world_location_m": [0.0, 0.0, 0.0], "forward": [1.0, 0.0, 0.0],
+                       "right": [0.0, 1.0, 0.0], "up": [0.0, 0.0, 1.0]},
+    }
+    (cam_dir / "camera.json").write_text(json.dumps(cam), encoding="utf-8")
+    (cam_dir / "seqinfo.ini").write_text("[Sequence]\nname=Cam_01\n", encoding="utf-8")
+    l0 = _geo_obj("L0", 1, "player", [10, 10, 30, 30])
+    frames = [
+        {"episode_id": "ep", "camera_id": "Cam_01", "frame_index": 1,
+         "source_step": 0, "time_seconds": 0.0, "objects": [l0]},
+        {"episode_id": "ep", "camera_id": "Cam_01", "frame_index": 2,
+         "source_step": 1, "time_seconds": 0.1, "objects": [
+            dict(l0, bbox_xyxy=[15.0, 15.0, 35.0, 35.0], bbox_xywh=[15.0, 15.0, 20.0, 20.0],
+                 raw_bbox_xyxy=[15.0, 15.0, 35.0, 35.0], raw_bbox_xywh=[15.0, 15.0, 20.0, 20.0])]},
+    ]
+    with open(cam_dir / "annotations.jsonl", "w", encoding="utf-8") as f:
+        for fr in frames:
+            f.write(json.dumps(fr) + "\n")
+    img1 = cam_dir / "img1"
+    mask = cam_dir / "mask"
+    img1.mkdir(parents=True, exist_ok=True)
+    mask.mkdir(parents=True, exist_ok=True)
+    m = np.zeros((H, W), dtype=np.uint8)
+    m[10:30, 10:30] = 1
+    _write_png(img1 / "000001.png", m, rgb=True)
+    _write_png(mask / "000001.png", m)  # 只有帧 1
+    return cam_dir
+
+
 class TestAnnotateMasks:
     def test_bbox_from_mask_and_sources(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -222,10 +306,20 @@ class TestAnnotateMasks:
             # L1 全可见
             assert o["L1"]["visible_pixel_count"] == 400
             assert o["L1"]["bbox_xyxy"] == [20.0, 20.0, 40.0, 40.0]
-            # R0 完全不可见 → 模态 GT 无 bbox，回退几何、in_frame=False
-            assert o["R0"]["bbox_source"] == "geometry"
+            # R0：几何在画面内但 mask 完全无像素 → not_visible，可见 bbox 必须为 null，
+            # 几何只保留在 geometry_bbox_*（不回填）
+            assert o["R0"]["bbox_source"] == "not_visible"
             assert o["R0"]["visible_pixel_count"] == 0
             assert o["R0"]["in_frame"] is False
+            assert o["R0"]["bbox_xyxy"] is None
+            assert o["R0"]["bbox_xywh"] is None
+            assert o["R0"]["segmentation"] is None
+            assert o["R0"]["geometry_bbox_xyxy"] == [50.0, 50.0, 55.0, 55.0]
+            assert o["R0"]["geometry_bbox_xywh"] == [50.0, 50.0, 5.0, 5.0]
+            # BALL 同样 mask 无像素 → not_visible（球几何 [0,0,3,3] 在画面内但被跳过）
+            assert o["BALL"]["bbox_source"] == "not_visible"
+            assert o["BALL"]["bbox_xyxy"] is None
+            assert o["BALL"]["visible_pixel_count"] == 0
 
             # 帧 2 L0 遮挡后
             o2 = {obj["entity_id"]: obj for obj in f2["objects"]}
@@ -303,6 +397,84 @@ class TestAnnotateMasks:
             second = _load_frames(cam)
             assert first == second
 
+    def test_ball_fully_invisible_not_in_mot_yolo(self):
+        # BALL 几何在画面内但 mask 无像素 → not_visible；即使 include_ball 也不进 MOT/YOLO
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cam = _make_camera(root)
+            annotate_masks_dir(root, include_ball=True)
+            f1 = _load_frames(cam)[0]
+            ball = next(o for o in f1["objects"] if o["entity_id"] == "BALL")
+            assert ball["bbox_source"] == "not_visible"
+            assert ball["in_frame"] is False
+            assert ball["bbox_xyxy"] is None
+            assert ball["visible_pixel_count"] == 0
+            gt = (cam / "gt" / "gt.txt").read_text(encoding="utf-8")
+            assert ",100," not in gt  # 不可见球不进入 MOT
+            det1 = (cam / "labels" / "det" / "000001.txt").read_text(encoding="utf-8")
+            assert all(l.split()[0] == "0" for l in det1.splitlines() if l.strip())  # 无球类别
+            assert validate_annotation_dir(root) == 0
+
+    def test_offscreen_entity_not_visible(self):
+        # 几何完全离屏：in_frame=false、bbox null；mask 无像素 → not_visible，geometry 也为 null
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cam = _make_camera_offscreen(root)
+            annotate_masks_dir(root)
+            f1 = _load_frames(cam)[0]
+            o = {obj["entity_id"]: obj for obj in f1["objects"]}
+            assert o["L0"]["bbox_source"] == "instance_mask"
+            r0 = o["R0"]
+            assert r0["bbox_source"] == "not_visible"
+            assert r0["in_frame"] is False
+            assert r0["visible_pixel_count"] == 0
+            assert r0["bbox_xyxy"] is None
+            assert r0["geometry_bbox_xyxy"] is None  # 几何本身离屏为 None
+            gt = (cam / "gt" / "gt.txt").read_text(encoding="utf-8")
+            assert ",6," not in gt  # R0 不进入 MOT
+            assert validate_annotation_dir(root) == 0
+
+    def test_no_mask_dir_keeps_geometry_fallback(self):
+        # 无 mask/ 目录：annotate-masks 跳过，几何标注原样保留（legacy fallback）
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cam = _make_camera(root)
+            # 模拟 UE 已导出的几何 MOT（无 mask 前）
+            (cam / "gt" / "gt.txt").write_text(
+                "1,1,10,10,20,20,1,1,1.00\n"
+                "1,2,20,20,20,20,1,1,1.00\n"
+                "1,6,50,50,5,5,1,1,1.00\n"
+                "2,1,15,15,20,20,1,1,1.00\n"
+                "2,2,20,20,20,20,1,1,1.00\n"
+                "2,6,50,50,5,5,1,1,1.00\n",
+                encoding="utf-8",
+            )
+            import shutil
+            shutil.rmtree(cam / "mask")
+            before = _load_frames(cam)
+            assert annotate_masks_dir(root) == 0
+            after = _load_frames(cam)
+            assert before == after  # 未改动
+            l0 = {o["entity_id"]: o for o in after[0]["objects"]}["L0"]
+            assert l0.get("bbox_source") is None  # 仍是 legacy 几何
+            assert l0["bbox_xyxy"] == [10.0, 10.0, 30.0, 30.0]
+            assert validate_annotation_dir(root) == 0
+
+    def test_missing_frame_mask_keeps_geometry(self):
+        # 帧 2 缺 mask PNG：该帧保持几何标注（legacy fallback），帧 1 升级为 instance_mask
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cam = _make_camera_missing_frame_mask(root)
+            annotate_masks_dir(root)
+            f1, f2 = _load_frames(cam)
+            o1 = {o["entity_id"]: o for o in f1["objects"]}
+            o2 = {o["entity_id"]: o for o in f2["objects"]}
+            assert o1["L0"]["bbox_source"] == "instance_mask"
+            assert o1["L0"]["visible_pixel_count"] == 400
+            assert o2["L0"].get("bbox_source") is None  # 无 mask → 保持几何
+            assert o2["L0"]["bbox_xyxy"] == [15.0, 15.0, 35.0, 35.0]
+            assert validate_annotation_dir(root) == 0
+
 
 class TestValidatorMask:
     def test_valid_dir_passes(self):
@@ -371,6 +543,82 @@ class TestValidatorMask:
             import shutil
             shutil.rmtree(cam_dir / "mask")
             assert validate_annotation_dir(root) == 0
+
+    def test_rejects_not_visible_with_nonnull_bbox(self):
+        # not_visible 对象非法回填 bbox → validator 拒绝
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cam = _make_camera(root)
+            annotate_masks_dir(root)
+            frames = _load_frames(cam)
+            r0 = next(o for o in frames[0]["objects"] if o["entity_id"] == "R0")
+            r0["bbox_xyxy"] = [50.0, 50.0, 55.0, 55.0]
+            r0["bbox_xywh"] = [50.0, 50.0, 5.0, 5.0]
+            _rewrite_annotations(cam, frames)
+            assert validate_annotation_dir(root) == 1
+
+    def test_rejects_invisible_in_mot(self):
+        # 不可见对象（R0）被注入 MOT gt.txt → 交叉校验拒绝
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cam = _make_camera(root)
+            annotate_masks_dir(root)
+            gt = (cam / "gt" / "gt.txt").read_text(encoding="utf-8")
+            (cam / "gt" / "gt.txt").write_text(
+                "1,6,50,50,5,5,1,1,1.00\n" + gt, encoding="utf-8"
+            )
+            assert validate_annotation_dir(root) == 1
+
+    def test_rejects_instance_mask_zero_pixels(self):
+        # bbox_source=instance_mask 但 visible_pixel_count=0 → 拒绝
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cam = _make_camera(root)
+            annotate_masks_dir(root)
+            frames = _load_frames(cam)
+            l0 = next(o for o in frames[0]["objects"] if o["entity_id"] == "L0")
+            l0["visible_pixel_count"] = 0
+            _rewrite_annotations(cam, frames)
+            assert validate_annotation_dir(root) == 1
+
+    def test_rejects_old_geometry_backfill(self):
+        # 旧格式：visible_pixel_count=0 但 bbox_source=geometry 且 bbox 回填 → 拒绝
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cam = _make_camera(root)
+            annotate_masks_dir(root)
+            frames = _load_frames(cam)
+            r0 = next(o for o in frames[0]["objects"] if o["entity_id"] == "R0")
+            r0["bbox_source"] = "geometry"
+            r0["bbox_xyxy"] = [50.0, 50.0, 55.0, 55.0]
+            r0["bbox_xywh"] = [50.0, 50.0, 5.0, 5.0]
+            _rewrite_annotations(cam, frames)
+            assert validate_annotation_dir(root) == 1
+
+    def test_rejects_not_visible_with_mask_pixels(self):
+        # bbox_source=not_visible 但 mask 里真有可见像素 → 拒绝（反向一致性）
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cam = _make_camera(root)
+            annotate_masks_dir(root)
+            from PIL import Image as PImage
+            mask = np.array(PImage.open(cam / "mask" / "000001.png"))
+            mask[5, 5] = 6  # R0 出现像素
+            PImage.fromarray(mask.astype(np.uint8)).save(str(cam / "mask" / "000001.png"))
+            assert validate_annotation_dir(root) == 1
+
+    def test_rejects_yolo_invisible_line(self):
+        # YOLO 出现超出 instance_mask 对象数的行（不可见泄漏）→ 拒绝
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cam = _make_camera(root)
+            annotate_masks_dir(root)
+            det = cam / "labels" / "det" / "000001.txt"
+            det.write_text(
+                det.read_text(encoding="utf-8") + "0 0.5 0.5 0.1 0.1\n",
+                encoding="utf-8",
+            )
+            assert validate_annotation_dir(root) == 1
 
 
 class TestAnnotateMasksMultiComponent:

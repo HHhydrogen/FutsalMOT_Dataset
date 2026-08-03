@@ -4,9 +4,18 @@
   读 camera.json（分辨率） + UE 导出的 annotations.jsonl（实体元数据 + 几何 bbox）
   + mask/{frame_index:06d}.png（Instance-ID Mask，像素值 == mask_id）
   → 每实体由 mask 像素计算 pixel-tight bbox / visible_pixel_count / 模态分割 polygon
-  → 覆盖写 annotations.jsonl（bbox_source="instance_mask"，几何 bbox 保留在 geometry_*）
+  → 覆盖写 annotations.jsonl（bbox_source="instance_mask"；几何 bbox 保留在 geometry_*）
   → 重写 MOT gt.txt、写 YOLO detect/segment 标签
   → 写 mask_config.json（记录解码参数，供 validator 复用）
+
+语义约定（可见像素 GT 与几何投影 GT 严格分离）：
+  - mask 中该实体有像素  → bbox_source="instance_mask"，in_frame=true，
+    bbox_xyxy/xywh = mask 可见 bbox，visible_pixel_count > 0，segmentation 为模态多边形。
+  - mask 中该实体像素为 0（完全遮挡/离屏）→ bbox_source="not_visible"，in_frame=false，
+    bbox_xyxy/xywh = null、visible_pixel_count = 0、segmentation = null；
+    几何投影只保留在 geometry_bbox_*，绝不回填到 bbox_*。
+  - 无 mask 数据（无 mask/ 目录或缺某帧 mask）→ 保持 UE 几何标注原样（legacy fallback，
+    无 bbox_source 字段）。MOT / YOLO 只导出 bbox_source="instance_mask" 的对象。
 
 幂等：可重复运行。几何 fallback 每次从 geometry_bbox_*（无则首次的 bbox_*）读取，
 mask 则重新解码计算，结果一致。
@@ -26,7 +35,12 @@ _UE_DIR = _REPO_ROOT / "ue"
 if str(_UE_DIR) not in sys.path:
     sys.path.insert(0, str(_UE_DIR))
 
-from annotation_utils import entity_id_to_mask_id, xyxy_to_xywh  # noqa: E402
+from annotation_utils import (  # noqa: E402
+    BBOX_SOURCE_INSTANCE_MASK,
+    BBOX_SOURCE_NOT_VISIBLE,
+    entity_id_to_mask_id,
+    xyxy_to_xywh,
+)
 from dataset_export import (  # noqa: E402
     build_mot_gt,
     ensure_dir,
@@ -169,7 +183,7 @@ def _annotate_camera(cam_dir: Path, mask_channel: str, include_ball: bool,
 
     print(
         f"  [OK] {cam_dir.name}: {mask_used}/{len(frames)} 帧 mask 已转为标注"
-        f"（bbox_source=instance_mask，MOT/YOLO 已更新）"
+        f"（可见 → bbox_source=instance_mask，不可见 → not_visible；MOT/YOLO 已更新）"
     )
     return True
 
@@ -209,7 +223,13 @@ def _check_area_quality(ring, binary, width, height):
 def _upgrade_object(obj: dict, mask_img, width: int, height: int,
                     polygon_tolerance_px: float, max_polygon_points: int,
                     id_scale: float, id_offset: float) -> None:
-    """就地升级单个 object：mask 可见 → mask bbox；mask 空 → 几何 fallback。"""
+    """就地升级单个 object：mask 可见 → bbox_source=instance_mask；mask 空 → not_visible。
+
+    可见像素 GT 与几何投影 GT 严格分离：
+      - mask 有像素：bbox_xyxy/xywh 为 mask 可见 bbox，geometry_bbox_* 保留几何投影。
+      - mask 无像素：in_frame=false、bbox_xyxy/xywh/raw_bbox_* 全部为 null，
+        segmentation 为 null，geometry 只保留在 geometry_bbox_*（不回填）。
+    """
     entity_id = obj.get("entity_id")
     try:
         mask_id = entity_id_to_mask_id(entity_id)
@@ -243,7 +263,7 @@ def _upgrade_object(obj: dict, mask_img, width: int, height: int,
                 fallback_reason = reason
         obj.update({
             "mask_id": mask_id,
-            "bbox_source": "instance_mask",
+            "bbox_source": BBOX_SOURCE_INSTANCE_MASK,
             "in_frame": True,
             "truncated": False,  # mask bbox 必在图像内
             "visibility": None,
@@ -259,21 +279,26 @@ def _upgrade_object(obj: dict, mask_img, width: int, height: int,
             "geometry_bbox_xywh": [round(v, 3) for v in geo_xywh] if geo_xywh else None,
         })
     else:
-        # 完全不可见（遮挡 / 离屏）：模态 GT 无可见 bbox，回退几何
+        # 完全不可见（遮挡 / 离屏）：模态 GT 无可见 bbox。几何投影只保留在
+        # geometry_bbox_*，可见 bbox 与 raw bbox 一律为 null，绝不回填（不进入 MOT/YOLO）。
         obj.update({
             "mask_id": mask_id,
-            "bbox_source": "geometry",
+            "bbox_source": BBOX_SOURCE_NOT_VISIBLE,
             "in_frame": False,
+            "truncated": False,
+            "visibility": None,
             "visible_pixel_count": 0,
             "segmentation": None,
             "segmentation_components": 0,
             "segmentation_merged": False,
             "segmentation_fallback": None,
             "segmentation_fallback_reason": None,
-            "bbox_xyxy": geo_xyxy,
-            "bbox_xywh": geo_xywh,
-            "geometry_bbox_xyxy": geo_xyxy,
-            "geometry_bbox_xywh": geo_xywh,
+            "bbox_xyxy": None,
+            "bbox_xywh": None,
+            "raw_bbox_xyxy": None,
+            "raw_bbox_xywh": None,
+            "geometry_bbox_xyxy": [round(v, 3) for v in geo_xyxy] if geo_xyxy else None,
+            "geometry_bbox_xywh": [round(v, 3) for v in geo_xywh] if geo_xywh else None,
         })
 
 
@@ -289,8 +314,12 @@ def _write_yolo_labels(cam_dir: Path, frames: List[dict], width: int, height: in
         det_lines: List[str] = []
         seg_lines: List[str] = []
         for obj in frame.get("objects", []):
-            if not obj.get("in_frame") or obj.get("bbox_source") != "instance_mask":
+            # 只导出具有有效 instance-mask 可见 GT 的对象；不可见（not_visible /
+            # 无 mask 的 legacy 几何）不进入 YOLO 训练标签。
+            if obj.get("bbox_source") != BBOX_SOURCE_INSTANCE_MASK:
                 continue
+            if not obj.get("in_frame") or not obj.get("bbox_xyxy"):
+                continue  # 防御：schema 不一致时跳过（validator 会报）
             cls = obj.get("class")
             if cls == "ball" and not include_ball:
                 continue

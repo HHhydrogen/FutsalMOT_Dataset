@@ -24,6 +24,7 @@ code/
 │   ├── import_grf_episode.py     #   读取 JSONL，生成 Level Sequence / 编排标注导出
 │   ├── annotation_exporter.py    #   UE 内运行：读 Camera 标定与 Actor bounds 生成标注
 │   ├── render_episode.py         #   MRQ 异步渲染 RGB + Instance-ID Mask
+│   ├── render_preset.py          #   CV GT deterministic preset（纯配置，pytest 可测）
 │   ├── instance_mask.py          #   纯 numpy：mask 解码 / bbox / 轮廓 / 多边形（pytest 可测）
 │   ├── debug_object_id_exr.py    #   诊断：检查 Cryptomatte EXR 的 manifest/通道
 │   ├── camera_projection.py      #   纯数学：相机投影（pytest 可测）
@@ -387,10 +388,31 @@ py "D:/.../code/ue/import_grf_episode.py" --mode render
 | 字段 | 默认值 | 说明 |
 |------|--------|------|
 | `enabled` | `false` | 是否渲染 RGB |
+| `preset` | `cv_gt` | CV 渲染预设：`cv_gt`（默认，deterministic GT）/ `cinematic`（保留模式，未实现）/ `null`（不覆盖，保持关卡/相机现状） |
+| `cv_gt` | 见下 | cv_gt 预设的详细开关（motion_blur / depth_of_field / chromatic_aberration / lens_distortion / anti_aliasing / temporal_sampling） |
 | `output_resolution_x/y` | `1920/1080` | 渲染分辨率（默认复用 image_width/height） |
 | `frame_rate` | `30` | 渲染帧率（须与 Sequence display rate 一致，默认 playback_fps） |
 | `file_name_format` | `{frame_number}` | MRQ 输出文件名格式 |
 | `zero_pad_frame_numbers` | `6` | MRQ 帧号补零位数 |
+
+### CV GT deterministic preset
+
+**正式 CV 数据集默认使用 `preset="cv_gt"`**（deterministic）：显式关闭会破坏「RGB 空间边界 == Instance-ID Mask 边界」的空间扩散效果，并把时间采样固定为单时刻，使 pixel-tight bbox / segmentation 与 RGB 严格对齐。
+
+| cv_gt 字段 | 默认 | 说明 |
+|-----------|------|------|
+| `motion_blur` | `false` | 关闭运动模糊（后处理 `motion_blur_amount=0` + MRQ shutter 时间积分关闭）。运动模糊会让高速移动球员的 RGB 边缘沿运动方向拖尾，导致 RGB 目标超出/偏离同帧 mask 边界 |
+| `depth_of_field` | `false` | 关闭景深（DOF 方法置 off + 大 f-stop 兜底）。景深模糊会让失焦目标的 RGB 边缘外扩，与 mask 硬边界不一致 |
+| `chromatic_aberration` | `false` | 关闭色差（`chromatic_aberration_intensity=0`）。色差把 RGB 边缘拆成 R/G/B 色散，破坏与 mask 的像素级对应 |
+| `lens_distortion` | `false` | 关闭镜头畸变。UE 无内置后处理属性，畸变仅来自失真后处理材质；管线不添加任何失真材质即默认关闭（文档保证） |
+| `anti_aliasing` | `taa` | 保留合理 anti-aliasing（`taa` / `tsr` / `none`）。AA 只做亚像素边缘混合，不改变目标空间边界；`none` 时边缘完全硬边 |
+| `temporal_sampling` | `false` | 单时刻渲染。`false` = 每输出帧单采样（`temporal_accumulation_method=NONE`、`temporal_sample_count=1`、`render_warm_up_count=0`），无 shutter 时间积分 |
+
+**为什么关闭这些效果**：Instance-ID Mask（Object ID pass）表示的是**单一时刻**的几何覆盖像素；RGB 若启用运动模糊 / DOF / 时间累积，则表示**一段曝光时间**或空间上被模糊扩散后的结果——二者空间边界不再一致，pixel-tight bbox / segmentation 就会与 RGB 实际可见区域错位。cv_gt 模式强制 RGB 与 mask 都退化为同一时刻、无空间扩散的渲染，从而保证标注语义成立。保留的 lighting / shadow / material / texture 与合理 AA 不影响边界一致性。
+
+**强制应用的位置**（不依赖关卡手工设置）：渲染前脚本把后处理覆盖写到每个 **CineCameraComponent 的 `post_process_settings`**（`post_process_blend_weight=1.0` 完全覆盖关卡 Post Process Volume）并保存关卡；MRQ RGB job 显式添加 **`MoviePipelineAntiAliasingSetting`**（AA 方法 + warm-up=0）与 **`MoviePipelineCameraSetting`**（motion_blur=false、shutter_timing=0）；RGB 与 mask 两个 job 都施加时间确定性（temporal_accumulation=NONE）。这些设置在每次渲染时由脚本显式应用，避免不同机器/关卡产生不同 GT 语义。
+
+**切换方式**：把 `ue_import_config.json` 里 `annotation_export.render_rgb.preset` 改为 `null`（保持关卡现状）或 `"cinematic"`（未来模式，放开画质）。`cv_gt` 内部各开关也可按需覆盖（如 `anti_aliasing: "none"` 关 AA）。切换后重新 `--mode full` 或 `--mode render` 即生效。
 
 **Camera Cut**：脚本在创建 Sequence 时会尝试自动设置 Camera Cut（`import_grf_episode.py` 的 `_add_camera_cut`）。若自动设置失败（不同 UE 版本 API 差异），需在 Sequencer 手动设置一次（右键摄像机轨道 → "Set as Camera Cut"）。没有 Camera Cut 时 MRQ 会用默认视角渲染，与标注投影不一致。
 

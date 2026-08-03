@@ -32,7 +32,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from annotation_utils import entity_id_to_mask_id  # noqa: E402
 from dataset_export import ensure_dir, load_episode, load_mapping, write_json_atomic  # noqa: E402
-from scene_apply import find_all_actors  # noqa: E402
+from render_preset import (  # noqa: E402
+    camera_post_process_overrides,
+    mrq_aa_overrides,
+    mrq_temporal_overrides,
+    resolve_preset,
+)
+from scene_apply import find_all_actors, find_actor  # noqa: E402
 
 # 模块级：当前活跃的异步渲染管线。脚本（main）返回后 MRQ delegate 仍持有它的
 # 方法引用，但显式保留模块级引用可防止任何环境下对象被垃圾回收。
@@ -385,6 +391,128 @@ def _clear_dir(path: Path) -> None:
             p.unlink()
 
 
+# ── CV GT deterministic preset 应用（render_preset.py 的 UE 侧执行）────────
+
+def _set_config_overrides(obj, overrides: dict, label: str) -> None:
+    """把 overrides（property → 值或 ("EnumClass","Member")）应用到对象。
+
+    enum 值解析：先取完整成员名，再取去掉前缀的短名（UE 生成的枚举成员名因版本而异）。
+    """
+    import unreal
+
+    for prop, val in overrides.items():
+        if isinstance(val, tuple) and len(val) == 2 and isinstance(val[0], str):
+            enum_name, member = val
+            enum_cls = getattr(unreal, enum_name, None)
+            target = None
+            if enum_cls is not None:
+                for cand in (member, member.rsplit("_", 1)[-1]):
+                    v = getattr(enum_cls, cand, None)
+                    if v is not None:
+                        target = v
+                        break
+            if target is None:
+                print(
+                    f"  WARNING: 无法解析枚举 {enum_name}.{member}"
+                    f"（跳过 {label}.{prop}）"
+                )
+                continue
+            val = target
+        try:
+            obj.set_editor_property(prop, val)
+        except Exception as e:
+            print(f"  WARNING: 设置 {label}.{prop} 失败: {e}")
+
+
+def _find_or_add_overrides(config, cls_name: str, overrides: dict, label: str) -> None:
+    """find_or_add 一个 MRQ 设置类并应用 overrides（类不存在/失败时告警跳过）。"""
+    import unreal
+
+    if not overrides:
+        return
+    cls = getattr(unreal, cls_name, None)
+    if cls is None:
+        print(f"  WARNING: 无 unreal.{cls_name}，跳过 cv_gt {label} 覆盖")
+        return
+    try:
+        setting = config.find_or_add_setting_by_class(cls)
+    except Exception as e:
+        print(f"  WARNING: 添加 {cls_name} 失败: {e}")
+        return
+    _set_config_overrides(setting, overrides, label)
+
+
+def _apply_mrq_preset(config, preset, cv_gt, is_mask: bool) -> None:
+    """向 MRQ job 配置施加 cv_gt preset。
+
+    - 时间确定性（motion_blur/shutter + temporal_accumulation=NONE）：RGB 与 mask
+      job 都应用，保证两路都表示单时刻（无 temporal motion integration）。
+    - anti-aliasing（保留合理 AA）：仅 RGB job 应用（Object ID pass 不需要 TAA）。
+    """
+    temporal = mrq_temporal_overrides(preset, cv_gt)
+    camera_ov = {k: v for k, v in temporal.items() if k in ("motion_blur", "shutter_timing")}
+    aa_ov = {k: v for k, v in temporal.items() if k not in ("motion_blur", "shutter_timing")}
+    if not is_mask:
+        aa_ov.update(mrq_aa_overrides(preset, cv_gt))
+    _find_or_add_overrides(config, "MoviePipelineCameraSetting", camera_ov, "camera")
+    _find_or_add_overrides(config, "MoviePipelineAntiAliasingSetting", aa_ov, "antialiasing")
+
+
+def _apply_cv_gt_camera_post_process(sequences_cfg, preset, cv_gt) -> None:
+    """cv_gt 时把确定性后处理覆盖写到每个 Camera 的 CineCameraComponent。
+
+    不依赖关卡手工设置的 Post Process Volume：脚本每次渲染都显式把
+    post_process_settings（blend weight=1.0，覆盖关卡体积）写到相机并保存关卡，
+    保证不同机器/关卡得到相同的 CV GT 语义。
+    """
+    import unreal
+
+    overrides = camera_post_process_overrides(preset, cv_gt)
+    if not overrides:
+        return
+    blend = overrides.get("post_process_blend_weight")
+    pp_overrides = {k: v for k, v in overrides.items() if k != "post_process_blend_weight"}
+    applied = 0
+    for seq in (sequences_cfg or []):
+        cam_id = seq.get("camera_actor") or seq.get("name")
+        if not cam_id:
+            continue
+        actor = find_actor(cam_id)
+        if actor is None:
+            print(f"  WARNING: 找不到 Camera actor '{cam_id}'，无法应用 cv_gt 后处理")
+            continue
+        comps = actor.get_components_by_class(unreal.CineCameraComponent)
+        if not comps:
+            print(f"  WARNING: {cam_id} 无 CineCameraComponent，跳过 cv_gt 后处理")
+            continue
+        comp = comps[0]
+        pp = None
+        try:
+            pp = comp.get_editor_property("post_process_settings")
+        except Exception:
+            pass
+        if pp is None:
+            try:
+                pp = unreal.PostProcessSettings()
+            except Exception as e:
+                print(f"  WARNING: 无法创建 PostProcessSettings（{cam_id}）: {e}")
+                continue
+        _set_config_overrides(pp, pp_overrides, f"{cam_id}.post_process_settings")
+        try:
+            comp.set_editor_property("post_process_settings", pp)
+        except Exception as e:
+            print(f"  WARNING: 设置 {cam_id}.post_process_settings 失败: {e}")
+        if blend is not None:
+            try:
+                comp.set_editor_property("post_process_blend_weight", float(blend))
+            except Exception as e:
+                print(f"  WARNING: 设置 {cam_id}.post_process_blend_weight 失败: {e}")
+        applied += 1
+    if applied:
+        _save_current_level()
+    print(f"  [cv_gt] 已为 {applied} 个 Camera 应用确定性后处理 preset（blend=1.0 覆盖关卡体积）")
+
+
 def _build_mrq_job(
     queue,
     seq_asset_path: str,
@@ -395,6 +523,8 @@ def _build_mrq_job(
     frame_rate: int,
     file_name_format: str,
     zero_pad: int,
+    preset=None,
+    cv_gt=None,
 ):
     """从队列分配并配置一个 MRQ job。返回 job，失败时抛错并附 API 说明。"""
     import unreal
@@ -470,6 +600,9 @@ def _build_mrq_job(
                 "无法添加 MRQ 渲染 pass（DeferredPassBase/PathTracer/Unlit 均失败）。"
                 "请把 [MRQ 诊断] 输出贴回。"
             )
+
+        # CV GT preset：RGB job 应用 anti-aliasing + 时间确定性（is_mask=False）
+        _apply_mrq_preset(config, preset, cv_gt, is_mask=False)
 
     except Exception as e:
         _print_mrq_members(config, "config")
@@ -750,6 +883,8 @@ def _build_mask_job(
     zero_pad: int,
     mask_source: str = "object_id_pass",
     post_process_material: str = None,
+    preset=None,
+    cv_gt=None,
 ):
     """构建渲染 Instance-ID Mask 的 MRQ job（输出到 mask_dir）。
 
@@ -772,7 +907,7 @@ def _build_mask_job(
     try:
         _configure_mask_job(job, seq_asset_path, map_path, mask_dir, image_width,
                             image_height, frame_rate, file_name_format, zero_pad,
-                            mask_source, post_process_material)
+                            mask_source, post_process_material, preset, cv_gt)
     except Exception:
         _delete_queue_job(queue, job)
         raise
@@ -805,6 +940,8 @@ def _configure_mask_job(
     zero_pad: int,
     mask_source: str,
     post_process_material: str,
+    preset=None,
+    cv_gt=None,
 ) -> None:
     """配置单个 mask job（已入队）：输出设置 + 渲染 pass。配置失败时抛错。"""
     import unreal
@@ -882,6 +1019,9 @@ def _configure_mask_job(
                 " instance_mask.mask_source='post_process_material'（需提供 stencil→颜色"
                 " 材质资产路径）。"
             )
+
+    # CV GT preset：mask job 只应用时间确定性（is_mask=True），保证 ID 也是单时刻
+    _apply_mrq_preset(config, preset, cv_gt, is_mask=True)
 
     if not _set_job_config(job, config):
         _print_mrq_members(job, "job")
@@ -1077,11 +1217,13 @@ class _AsyncRenderPipeline:
                         image_width, image_height, frame_rate, file_name_format, zero_pad,
                         mask_source=info.get("mask_source", "custom_depth_pass"),
                         post_process_material=info.get("post_process_material"),
+                        preset=info.get("preset"), cv_gt=info.get("cv_gt"),
                     )
                 else:
                     job = _build_mrq_job(
                         queue, info["seq_asset_path"], map_path, info["render_dir"],
                         image_width, image_height, frame_rate, file_name_format, zero_pad,
+                        preset=info.get("preset"), cv_gt=info.get("cv_gt"),
                     )
             except Exception as e:
                 print(f"  ERROR: 构建 MRQ job 失败 {info['name']}: {e}")
@@ -1389,6 +1531,13 @@ def render_sequences(
         print("render_rgb.enabled = false，跳过渲染")
         return
 
+    # CV GT preset：缺省 cv_gt（deterministic），null/cinematic 为保留/不覆盖模式
+    preset, cv_gt = resolve_preset(render_cfg)
+    if preset:
+        print(f"  [MRQ] render preset = {preset}")
+    else:
+        print("  [MRQ] render preset = null（不覆盖，保持关卡/相机现状）")
+
     mask_cfg = annotation_cfg.get("instance_mask") or {}
     mask_enabled = bool(mask_cfg.get("enabled", False))
     mask_source = mask_cfg.get("mask_source", "object_id_pass")
@@ -1435,6 +1584,9 @@ def render_sequences(
         print("WARNING: sequences 为空，无可渲染的 Sequence")
         return
 
+    # CV GT preset：先把确定性后处理写到每个 Camera（覆盖关卡 Post Process Volume）
+    _apply_cv_gt_camera_post_process(sequences_cfg, preset, cv_gt)
+
     # 收集要渲染的 Sequence（资产必须已存在）
     jobs = []
     for seq_entry in sequences_cfg:
@@ -1459,6 +1611,8 @@ def render_sequences(
             "render_dir": render_dir,
             "img1_dir": img1_dir,
             "kind": "rgb",
+            "preset": preset,
+            "cv_gt": cv_gt,
         })
         print(f"  待渲染 RGB: {seq_name} -> {img1_dir}")
 
@@ -1478,6 +1632,8 @@ def render_sequences(
                 "kind": "mask",
                 "mask_source": mask_source,
                 "post_process_material": post_process_material,
+                "preset": preset,
+                "cv_gt": cv_gt,
             })
             print(f"  待渲染 MASK: {seq_name} -> {mask_dir}")
 

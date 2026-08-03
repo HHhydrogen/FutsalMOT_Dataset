@@ -6,6 +6,8 @@
 |------|------|
 | `import_grf_episode.py` | **主脚本** — 在 Unreal Editor Python Console 中执行 |
 | `actor_mapping.example.json` | 实体 ID (L0~L4, R0~R4, BALL) → UE Actor 标签 映射 |
+| `render_episode.py` | MRQ 异步渲染 RGB + Instance-ID Mask（含 CV GT preset 应用） |
+| `render_preset.py` | CV GT deterministic render preset（纯配置，pytest 可测） |
 
 ## 要求
 

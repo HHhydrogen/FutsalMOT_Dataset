@@ -68,6 +68,15 @@
     },
     "render_rgb": {
       "enabled": true,
+      "preset": "cv_gt",
+      "cv_gt": {
+        "motion_blur": false,
+        "depth_of_field": false,
+        "chromatic_aberration": false,
+        "lens_distortion": false,
+        "anti_aliasing": "taa",
+        "temporal_sampling": false
+      },
       "output_resolution_x": 1920,
       "output_resolution_y": 1080,
       "frame_rate": 30,
@@ -80,6 +89,7 @@
     "comment_ball_scale": "球 actor 缩放覆盖（null=不覆盖，保持关卡实际 scale）",
     "comment_ball_radius_m": "球半径（米）；设置后球 bbox 直接用该半径生成，不依赖 mesh bounds。0.11=GRF 球半径",
     "comment_player_bbox": "球员 bbox 数据源：source='mesh'=用 SkeletalMesh.get_bounds() 模型参考姿势边界（严格贴合模型、随朝向旋转而变；若参考姿势手臂张开则侧面可能偏宽）；source='capsule'=用胶囊缩放（radius=35→70cm 宽，比真人肩宽~50cm 宽，width_scale 收窄消余量，height_scale 一般 1.0）。两种可用 annotate-overlay 目视对比后选一种",
+    "comment_render_preset": "CV GT deterministic preset：preset='cv_gt'（默认）显式关闭 motion_blur/depth_of_field/chromatic_aberration/lens_distortion，并把时间采样固定为单时刻（无 shutter 时间积分），使 RGB 空间边界与 Instance-ID Mask 严格一致；preset=null 保持关卡/相机现状；preset='cinematic' 为保留模式（未实现）",
     "comment_render_rgb": "MRQ 自动渲染 RGB（--mode full / render 时使用）；分辨率/帧率默认复用 image_width/image_height 与 playback_fps；渲染前需为每个 Sequence 手动设置 Camera Cut",
     "instance_mask": {
       "enabled": true,

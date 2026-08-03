@@ -41,6 +41,15 @@
     },
     "render_rgb": {
       "enabled": true,
+      "preset": "cv_gt",
+      "cv_gt": {
+        "motion_blur": false,
+        "depth_of_field": false,
+        "chromatic_aberration": false,
+        "lens_distortion": false,
+        "anti_aliasing": "taa",
+        "temporal_sampling": false
+      },
       "output_resolution_x": 1920,
       "output_resolution_y": 1080,
       "frame_rate": 30,

@@ -504,6 +504,47 @@ def det_xyxy_to_yolo_norm(
     )
 
 
+# ── mask 彩色可视化（仅查看，不改变数据契约）──────────────────────────────
+
+# 背景深色 + 11 个鲜艳实例色（固定调色板，mask_id 1..11 → 对应颜色）
+_MASK_BG_COLOR = (24, 24, 34)
+_MASK_COLOR_PALETTE = [
+    (230, 84, 84),     # 1  L0 红
+    (76, 178, 240),    # 2  L1 蓝
+    (76, 216, 118),    # 3  L2 绿
+    (240, 202, 62),    # 4  L3 黄
+    (196, 116, 240),   # 5  L4 紫
+    (242, 140, 40),    # 6  R0 橙
+    (56, 216, 216),    # 7  R1 青
+    (242, 120, 180),   # 8  R2 粉
+    (162, 216, 78),    # 9  R3 黄绿
+    (138, 140, 255),   # 10 R4 浅蓝
+    (255, 92, 200),    # 11 BALL 品红
+]
+
+
+def mask_to_color_image(mask_arr):
+    """把单通道实例 ID 数组转成 (H, W, 3) uint8 彩色可视化图。
+
+    背景(0)=深色；mask_id 1..11 → 固定鲜艳调色板（与数据值无关，仅供肉眼查看）；
+    非法 ID → 亮黄（醒目提示）。**不改写 mask 数据本身**（数据契约仍是 0/1..11）。
+    """
+    mask = np.asarray(mask_arr)
+    h, w = mask.shape
+    out = np.zeros((h, w, 3), dtype=np.uint8)
+    out[..., 0] = _MASK_BG_COLOR[0]
+    out[..., 1] = _MASK_BG_COLOR[1]
+    out[..., 2] = _MASK_BG_COLOR[2]
+    for mid, rgb in enumerate(_MASK_COLOR_PALETTE, start=1):
+        sel = mask == mid
+        if sel.any():
+            out[sel] = rgb
+    illegal = (mask != 0) & ((mask < 1) | (mask > len(_MASK_COLOR_PALETTE)))
+    if illegal.any():
+        out[illegal] = (255, 240, 0)  # 非法 ID 亮黄
+    return out
+
+
 # ── mask 输出校准探针（纯函数部分）─────────────────────────────────────
 
 def analyze_mask_dir(mask_dir, sample_frames: int = 5) -> Optional[dict]:

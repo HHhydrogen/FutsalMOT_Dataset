@@ -15,8 +15,11 @@ from .validator import validate_episode
 app = typer.Typer()
 
 
-def _draw_overlay(camera_dataset_dir: Path, include_ball: bool) -> int:
+def _draw_overlay(camera_dataset_dir: Path, include_ball: bool, mask_color: bool = False) -> int:
     """把标注 bbox 绘制到 img1/ 中对应的 RGB 帧上，输出到 debug/。
+
+    mask_color=True 时额外把 mask/*.png 转成彩色可视化到 debug/{frame}_mask_color.png
+    （仅查看，不改写 mask 数据契约）。
 
     需要 pillow（可选依赖，`uv sync --extra overlay` 安装）。无 RGB 帧时跳过。
     """
@@ -63,7 +66,34 @@ def _draw_overlay(camera_dataset_dir: Path, include_ball: bool) -> int:
             out_path = out_dir / f"{frame_index:06d}_bbox.png"
             img.save(out_path)
             drawn += 1
-    typer.echo(f"Overlay 完成: {drawn} 帧 -> {out_dir}")
+
+    # 彩色 mask 可视化（仅查看）：mask_id 1..11 → 固定鲜艳调色板，与背景区分
+    if mask_color:
+        try:
+            import sys
+            from pathlib import Path
+
+            _ue_dir = Path(__file__).resolve().parent.parent.parent / "ue"
+            if str(_ue_dir) not in sys.path:
+                sys.path.insert(0, str(_ue_dir))
+            from instance_mask import load_mask_array, mask_to_color_image
+        except ImportError:
+            typer.echo("WARNING: 无法 import instance_mask（缺 numpy），跳过 mask 彩色输出", err=True)
+            mask_color = False
+    mask_drawn = 0
+    if mask_color:
+        mask_dir = camera_dataset_dir / "mask"
+        if mask_dir.exists():
+            for p in sorted(mask_dir.glob("*.png")):
+                arr = load_mask_array(p, "r")
+                col = Image.fromarray(mask_to_color_image(arr))
+                col.save(out_dir / f"{p.stem}_mask_color.png")
+                mask_drawn += 1
+        else:
+            typer.echo(f"  (无 mask/ 目录，跳过彩色 mask 输出: {camera_dataset_dir})")
+
+    typer.echo(f"Overlay 完成: {drawn} 帧 bbox -> {out_dir}"
+               + (f"；{mask_drawn} 帧彩色 mask -> {out_dir}" if mask_drawn else ""))
     return 0
 
 
@@ -157,9 +187,13 @@ def annotate_overlay(
     include_ball: bool = typer.Option(
         False, "--include-ball", help="是否绘制球"
     ),
+    mask_color: bool = typer.Option(
+        False, "--mask-color",
+        help="额外输出彩色 mask 可视化到 debug/{frame}_mask_color.png（仅查看，不改写 mask 数据）",
+    ),
 ):
     """把标注 bbox 绘制到 img1/ 中对应的 RGB 帧上，输出到 debug/。需要 pillow。"""
-    raise typer.Exit(_draw_overlay(camera_dataset_dir.resolve(), include_ball))
+    raise typer.Exit(_draw_overlay(camera_dataset_dir.resolve(), include_ball, mask_color))
 
 
 @app.command()

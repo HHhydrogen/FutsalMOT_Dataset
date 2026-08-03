@@ -16,6 +16,7 @@ from render_preset import (
     mrq_aa_overrides,
     mrq_temporal_overrides,
     normalize_cv_gt,
+    post_process_console_vars,
     resolve_preset,
 )
 
@@ -126,3 +127,22 @@ class TestMrqAaOverrides:
 
     def test_cinematic_no_override(self):
         assert mrq_aa_overrides(PRESET_CINEMATIC, {}) == {}
+
+
+class TestPostProcessConsoleVars:
+    def test_cv_gt_disables_effects(self):
+        cv = post_process_console_vars(PRESET_CV_GT, {})
+        assert cv["r.MotionBlur.Amount"] == 0.0
+        assert cv["r.DepthOfFieldQuality"] == 0.0
+        assert cv["r.SceneColorFringeQuality"] == 0.0
+
+    def test_motion_blur_enabled_keeps_cvar(self):
+        cv = post_process_console_vars(PRESET_CV_GT, {"motion_blur": True})
+        assert "r.MotionBlur.Amount" not in cv
+        assert "r.DepthOfFieldQuality" in cv
+
+    def test_null_no_override(self):
+        assert post_process_console_vars(None, {}) == {}
+
+    def test_cinematic_no_override(self):
+        assert post_process_console_vars(PRESET_CINEMATIC, {}) == {}

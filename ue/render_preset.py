@@ -141,3 +141,22 @@ def mrq_aa_overrides(preset, cv_gt) -> Dict[str, object]:
         "anti_aliasing_method": method,
         "render_warm_up_count": 0,
     }
+
+
+def post_process_console_vars(preset, cv_gt) -> Dict[str, float]:
+    """cv_gt → MRQ job 后处理控制台变量（cvar，强制关闭空间扩散）。
+
+    与相机 post_process 覆盖互补：即使相机后处理覆盖位在特定 UE 版本不生效，
+    cvar 也强制把 motion blur / DOF / 色差关闭，保证 RGB 与 mask 边界一致。
+    """
+    if preset != PRESET_CV_GT:
+        return {}
+    cg = normalize_cv_gt(cv_gt)
+    cvars: Dict[str, float] = {}
+    if not cg["motion_blur"]:
+        cvars["r.MotionBlur.Amount"] = 0.0
+    if not cg["depth_of_field"]:
+        cvars["r.DepthOfFieldQuality"] = 0.0
+    if not cg["chromatic_aberration"]:
+        cvars["r.SceneColorFringeQuality"] = 0.0
+    return cvars

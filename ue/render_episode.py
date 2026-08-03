@@ -36,6 +36,7 @@ from render_preset import (  # noqa: E402
     camera_post_process_overrides,
     mrq_aa_overrides,
     mrq_temporal_overrides,
+    post_process_console_vars,
     resolve_preset,
 )
 from scene_apply import find_all_actors, find_actor  # noqa: E402
@@ -458,6 +459,48 @@ def _apply_mrq_preset(config, preset, cv_gt, is_mask: bool) -> None:
     _find_or_add_overrides(config, "MoviePipelineAntiAliasingSetting", aa_ov, "antialiasing")
 
 
+def _add_job_console_variables(config, cvar_map: dict) -> None:
+    """向 MRQ job 配置添加控制台变量（cvar），确定性关闭后处理效果。
+
+    与相机 post_process 覆盖互补：即使某 UE 版本的相机后处理覆盖位不生效，
+    cvar 仍强制关闭 motion blur / DOF / 色差，保证 RGB 与 mask 边界一致。
+    """
+    import unreal
+
+    if not cvar_map:
+        return
+    cls = getattr(unreal, "MoviePipelineConsoleVariableSetting", None)
+    if cls is None:
+        print("  WARNING: 无 MoviePipelineConsoleVariableSetting，无法设置 cv_gt 后处理 cvar")
+        return
+    try:
+        cvar = config.find_or_add_setting_by_class(cls)
+    except Exception as e:
+        print(f"  WARNING: 添加 MoviePipelineConsoleVariableSetting 失败: {e}")
+        return
+    entry_cls = getattr(unreal, "MoviePipelineConsoleVariableEntry", None)
+    if entry_cls is None:
+        print("  WARNING: 无 MoviePipelineConsoleVariableEntry，无法设置 cvar")
+        return
+    prop = "cvars"
+    for name, value in cvar_map.items():
+        entry = entry_cls()
+        if not _set_console_entry(entry, name, float(value)):
+            print(f"  WARNING: 无法设置 cvar 字段 {name}={value}")
+            continue
+        try:
+            current = list(cvar.get_editor_property(prop) or [])
+        except Exception:
+            current = []
+        if not any(name in str(x) for x in current):
+            current.append(entry)
+        try:
+            cvar.set_editor_property(prop, current)
+            print(f"  [cv_gt] cvar: {name}={value}")
+        except Exception as e:
+            print(f"  WARNING: 设置 cvar {name} 失败: {e}")
+
+
 def _apply_cv_gt_camera_post_process(sequences_cfg, preset, cv_gt) -> None:
     """cv_gt 时把确定性后处理覆盖写到每个 Camera 的 CineCameraComponent。
 
@@ -498,6 +541,15 @@ def _apply_cv_gt_camera_post_process(sequences_cfg, preset, cv_gt) -> None:
                 print(f"  WARNING: 无法创建 PostProcessSettings（{cam_id}）: {e}")
                 continue
         _set_config_overrides(pp, pp_overrides, f"{cam_id}.post_process_settings")
+        # 显式设置 bOverride_* 位：PostProcessSettings 只有置位的字段才参与混合，
+        # 否则关卡 Post Process Volume 的 motion blur / DOF / 色差会照常生效
+        for prop in pp_overrides:
+            for flag in (f"b_override_{prop}", f"override_{prop}"):
+                try:
+                    pp.set_editor_property(flag, True)
+                    break
+                except Exception:
+                    continue
         try:
             comp.set_editor_property("post_process_settings", pp)
         except Exception as e:
@@ -603,6 +655,8 @@ def _build_mrq_job(
 
         # CV GT preset：RGB job 应用 anti-aliasing + 时间确定性（is_mask=False）
         _apply_mrq_preset(config, preset, cv_gt, is_mask=False)
+        # CV GT preset：cvar 强制关闭 motion blur / DOF / 色差（后处理确定性兜底）
+        _add_job_console_variables(config, post_process_console_vars(preset, cv_gt))
 
     except Exception as e:
         _print_mrq_members(config, "config")

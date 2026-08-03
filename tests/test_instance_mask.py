@@ -453,3 +453,30 @@ class TestMaskToPolygonsWithAreas:
     def test_empty(self):
         polys, areas = mask_to_polygons_with_areas(np.zeros((10, 10), dtype=bool))
         assert polys == [] and areas == []
+
+
+class TestMaskToColorImage:
+    def test_background_dark_and_instances_vivid(self):
+        from instance_mask import mask_to_color_image
+        m = np.zeros((10, 10), dtype=np.int64)
+        m[0, 0] = 0    # 背景
+        m[1, 1] = 1    # L0
+        m[2, 2] = 11   # BALL
+        img = mask_to_color_image(m)
+        assert img.shape == (10, 10, 3)
+        assert img.dtype == np.uint8
+        # 背景为深色，实例为鲜艳色（非灰）
+        assert list(img[0, 0]) == [24, 24, 34]
+        assert tuple(img[1, 1]) == (230, 84, 84)    # mask_id 1 红
+        assert tuple(img[2, 2]) == (255, 92, 200)   # mask_id 11 品红
+
+    def test_illegal_id_bright_yellow(self):
+        from instance_mask import mask_to_color_image
+        m = np.array([[0, 50]], dtype=np.int64)
+        img = mask_to_color_image(m)
+        assert tuple(img[0, 1]) == (255, 240, 0)  # 非法 ID 亮黄
+
+    def test_palette_eleven_distinct(self):
+        from instance_mask import mask_to_color_image, _MASK_COLOR_PALETTE
+        assert len(_MASK_COLOR_PALETTE) == 11
+        assert len(set(_MASK_COLOR_PALETTE)) == 11  # 各实例色互不相同

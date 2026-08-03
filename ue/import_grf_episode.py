@@ -399,6 +399,10 @@ def _add_camera_cut(sequence, camera_binding, total_output_frames: int) -> bool:
 
     UE 5.8：LevelSequence.add_track(MovieSceneCameraCutTrack) + add_section() +
     set_camera_binding_id(...) + set_range(...)。
+
+    注意：MRQ 渲染的**第 0 帧**必须落在 Camera Cut 内，否则首帧会用默认视角
+    （实测首帧渲成原点视角）。这里除了 set_range，还显式设置起始/结束帧边界
+    （FrameNumber）与 is_active，确保覆盖第 0 帧。
     """
     import unreal
 
@@ -410,8 +414,21 @@ def _add_camera_cut(sequence, camera_binding, total_output_frames: int) -> bool:
             print("  WARNING: 无法获取相机 binding id，未设置 Camera Cut（MRQ 渲染会无画面）")
             return False
         section.set_camera_binding_id(binding_id)
-        section.set_range(0, int(total_output_frames))
-        print("  Camera Cut 已设置")
+        end = int(total_output_frames)
+        section.set_range(0, end)
+        # 显式帧边界 + 激活（best-effort，兼容 5.8 的 API 差异）
+        for setter in (
+            lambda: section.set_start_frame(unreal.FrameNumber(0)),
+            lambda: section.set_end_frame(unreal.FrameNumber(end)),
+            lambda: section.set_start_frame_bounded(True),
+            lambda: section.set_end_frame_bounded(True),
+            lambda: section.set_is_active(True),
+        ):
+            try:
+                setter()
+            except Exception:
+                pass
+        print(f"  Camera Cut 已设置 [0, {end})")
         return True
     except Exception as e:
         print(f"  WARNING: 设置 Camera Cut 失败: {e}")

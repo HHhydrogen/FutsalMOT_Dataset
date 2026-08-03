@@ -36,6 +36,7 @@ from render_preset import (  # noqa: E402
     camera_post_process_overrides,
     mrq_aa_overrides,
     mrq_temporal_overrides,
+    mrq_warmup_overrides,
     post_process_console_vars,
     resolve_preset,
 )
@@ -470,16 +471,17 @@ def _find_or_add_overrides(config, cls_name: str, overrides: dict, label: str) -
 def _apply_mrq_preset(config, preset, cv_gt, is_mask: bool) -> None:
     """向 MRQ job 配置施加 cv_gt preset。
 
-    - 时间确定性（motion_blur/shutter + temporal_accumulation=NONE）：RGB 与 mask
+    - 时间确定性（temporal_accumulation=NONE、temporal_sample_count=1）：RGB 与 mask
       job 都应用，保证两路都表示单时刻（无 temporal motion integration）。
+    - warm-up 契约（engine_warm_up_count=2 等）：RGB 与 mask job 相同，让 PIE/Camera Cut
+      在输出帧 0 前完成初始化（修复首帧默认视角），不改变 frame 映射、不重开时间采样。
     - anti-aliasing（保留合理 AA）：仅 RGB job 应用（Object ID pass 不需要 TAA）。
     """
-    temporal = mrq_temporal_overrides(preset, cv_gt)
-    camera_ov = {k: v for k, v in temporal.items() if k in ("motion_blur", "shutter_timing")}
-    aa_ov = {k: v for k, v in temporal.items() if k not in ("motion_blur", "shutter_timing")}
+    aa_ov: dict = {}
+    aa_ov.update(mrq_temporal_overrides(preset, cv_gt))
+    aa_ov.update(mrq_warmup_overrides(preset, cv_gt))
     if not is_mask:
         aa_ov.update(mrq_aa_overrides(preset, cv_gt))
-    _find_or_add_overrides(config, "MoviePipelineCameraSetting", camera_ov, "camera")
     _find_or_add_overrides(config, "MoviePipelineAntiAliasingSetting", aa_ov, "antialiasing")
 
 

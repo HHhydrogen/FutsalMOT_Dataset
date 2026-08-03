@@ -15,6 +15,7 @@ from render_preset import (
     camera_post_process_overrides,
     mrq_aa_overrides,
     mrq_temporal_overrides,
+    mrq_warmup_overrides,
     normalize_cv_gt,
     post_process_console_vars,
     resolve_preset,
@@ -114,7 +115,7 @@ class TestMrqAaOverrides:
     def test_default_taa(self):
         o = mrq_aa_overrides(PRESET_CV_GT, {})
         assert o["anti_aliasing_method"] == ("MoviePipelineAntiAliasingMethod", "TAA")
-        assert o["render_warm_up_count"] == 0
+        # render_warm_up_count 等 warm-up 契约由 mrq_warmup_overrides 提供（RGB/mask 相同）
 
     def test_aa_none(self):
         o = mrq_aa_overrides(PRESET_CV_GT, {"anti_aliasing": AA_NONE})
@@ -125,6 +126,34 @@ class TestMrqAaOverrides:
 
     def test_cinematic_no_override(self):
         assert mrq_aa_overrides(PRESET_CINEMATIC, {}) == {}
+
+
+class TestMrqWarmupOverrides:
+    def test_cv_gt_contract(self):
+        """cv_gt 默认 warm-up 契约：engine 预热 2 tick 让 PIE/Camera Cut 初始化，
+        但不输出 warm-up 帧、不引入时间采样。"""
+        o = mrq_warmup_overrides(PRESET_CV_GT, {})
+        assert o["engine_warm_up_count"] == 2
+        assert o["render_warm_up_count"] == 0
+        assert o["render_warm_up_frames"] is False
+        assert o["use_camera_cut_for_warm_up"] is False
+
+    def test_motion_blur_still_off_unchanged(self):
+        # warm-up 不重开时间采样 / 运动模糊：temporal 契约仍在 mrq_temporal_overrides
+        o = mrq_temporal_overrides(PRESET_CV_GT, {})
+        assert o["temporal_accumulation_method"] == ("MoviePipelineTemporalAccumulationMethod", "NONE")
+        assert o["temporal_sample_count"] == 1
+        assert mrq_warmup_overrides(PRESET_CV_GT, {})["render_warm_up_count"] == 0
+
+    def test_temporal_sampling_true_allows_default_warmup(self):
+        # 未来模式：显式允许时间采样 → 不强制 warm-up 契约
+        assert mrq_warmup_overrides(PRESET_CV_GT, {"temporal_sampling": True}) == {}
+
+    def test_null_no_override(self):
+        assert mrq_warmup_overrides(None, {}) == {}
+
+    def test_cinematic_no_override(self):
+        assert mrq_warmup_overrides(PRESET_CINEMATIC, {}) == {}
 
 
 from render_episode import _resolve_enum_member  # noqa: E402

@@ -122,10 +122,10 @@ def mrq_temporal_overrides(preset, cv_gt) -> Dict[str, object]:
 
 
 def mrq_aa_overrides(preset, cv_gt) -> Dict[str, object]:
-    """cv_gt → RGB job 的 anti-aliasing（保留合理 AA，确定性 warm-up）。
+    """cv_gt → RGB job 的 anti-aliasing（保留合理 AA）。
 
     - anti_aliasing_method: taa / tsr / none
-    - render_warm_up_count = 0（无历史帧预热，时间确定）
+    （render_warm_up_count 等 warm-up 契约见 mrq_warmup_overrides，RGB/mask 相同）
     """
     if preset != PRESET_CV_GT:
         return {}
@@ -137,7 +137,34 @@ def mrq_aa_overrides(preset, cv_gt) -> Dict[str, object]:
     }[cg["anti_aliasing"]]
     return {
         "anti_aliasing_method": method,
+    }
+
+
+def mrq_warmup_overrides(preset, cv_gt) -> Dict[str, object]:
+    """cv_gt → warm-up 契约（RGB 与 mask 两个 job 使用相同策略）。
+
+    修复 MRQ 首帧视角错误：PIE/MRQ 启动后立即采集 frame 0，possessable camera /
+    Camera Cut 尚未完成初始化 → 首帧用默认视角（世界原点）；下一个 engine tick 后正常。
+
+    设置 engine_warm_up_count=2 让引擎在输出帧 0 前预热 2 tick（PIE / Sequencer /
+    Camera Cut 完成初始化），同时保持 render_warm_up_count=0 / render_warm_up_frames=false /
+    use_camera_cut_for_warm_up=false：
+      - warm-up 帧**不输出**（不改变 Sequence 时间与 dataset frame 映射；frame 0 仍对应
+        GRF step 0，不丢弃首帧、不做 frame shift）
+      - 不引入时间采样（不重开 temporal accumulation / motion blur）
+      - 不用 camera cut 做 warm-up（它正是未初始化的对象）
+    temporal_sampling=true 时返回空 dict（未来模式，显式允许时间采样）。
+    """
+    if preset != PRESET_CV_GT:
+        return {}
+    cg = normalize_cv_gt(cv_gt)
+    if cg["temporal_sampling"]:
+        return {}  # 未来模式：允许时间采样（会破坏 frame-exact GT，仅显式开启时生效）
+    return {
+        "engine_warm_up_count": 2,
         "render_warm_up_count": 0,
+        "render_warm_up_frames": False,
+        "use_camera_cut_for_warm_up": False,
     }
 
 

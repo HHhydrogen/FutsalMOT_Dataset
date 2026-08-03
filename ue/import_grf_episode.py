@@ -418,6 +418,43 @@ def _add_camera_cut(sequence, camera_binding, total_output_frames: int) -> bool:
         return False
 
 
+def _add_camera_transform_track(sequence, camera_binding, cam_actor, total_output_frames) -> bool:
+    """把相机世界变换烘焙进 Sequence 的 3D Transform 轨道（帧 0 起有效）。
+
+    相机是 possessable；若只有 Camera Cut 而没有任何轨道，MRQ 在第 0 帧可能拿不到
+    相机变换而退回默认视角（实测首帧渲成原点视角）。烘焙静态变换（首尾各一帧）
+    保证帧 0 起就是相机视角。
+
+    旋转通道沿用项目约定（球员 yaw 写 Rotation.Z）：X=Roll、Y=Pitch、Z=Yaw。
+    """
+    import unreal
+
+    try:
+        transform_track = camera_binding.add_track(unreal.MovieScene3DTransformTrack)
+        section = transform_track.add_section()
+        section.set_range(0, int(total_output_frames))
+        cmap = _build_channel_map(section.get_all_channels())
+        loc = cam_actor.get_actor_location()
+        rot = cam_actor.get_actor_rotation()
+        px, py, pz = float(loc.x), float(loc.y), float(loc.z)
+        pitch, yaw, roll = float(rot.pitch), float(rot.yaw), float(rot.roll)
+        for kf in (0, max(0, int(total_output_frames) - 1)):
+            add_double_channel_key(cmap["Location.X"], kf, px)
+            add_double_channel_key(cmap["Location.Y"], kf, py)
+            add_double_channel_key(cmap["Location.Z"], kf, pz)
+            add_double_channel_key(cmap["Rotation.X"], kf, roll)
+            add_double_channel_key(cmap["Rotation.Y"], kf, pitch)
+            add_double_channel_key(cmap["Rotation.Z"], kf, yaw)
+        print(
+            f"  Camera transform baked: loc=({px:.0f},{py:.0f},{pz:.0f})"
+            f" rot=(p{pitch:.0f} y{yaw:.0f} r{roll:.0f})"
+        )
+        return True
+    except Exception as e:
+        print(f"  WARNING: 烘焙相机变换失败: {e}")
+        return False
+
+
 # ── Sequence 模式 ───────────────────────────────────────────────────────
 
 def create_sequence(meta: dict, frames: list, mapping: dict, replace_existing: bool = False,
@@ -507,6 +544,8 @@ def create_sequence(meta: dict, frames: list, mapping: dict, replace_existing: b
                 # 自动设置 Camera Cut（MRQ 渲染必需）。若自动设置失败，
                 # 需在 Sequencer 手动右键摄像机轨道 → "Set as Camera Cut"。
                 _add_camera_cut(seq, camera_binding, total_output_frames)
+                # 烘焙相机变换轨道：保证帧 0 起就是相机视角（否则 MRQ 首帧退回默认视角）
+                _add_camera_transform_track(seq, camera_binding, cam_actor, total_output_frames)
                 unreal.log(f"  Camera bound: {camera_actor_name} (Camera Cut set)")
 
         # ── 为每个 actor 写入变换关键帧 ──────────────────────────────

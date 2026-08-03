@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import List, Optional
 
 import typer
 
@@ -15,6 +16,25 @@ from .validator import validate_episode
 app = typer.Typer()
 
 
+def _draw_frame_overlay(img, objects: list, include_ball: bool):
+    """把一帧 objects 的 bbox + 标签画到 PIL Image 上，返回新 Image（annotate-overlay / make-video 共用）。"""
+    from PIL import Image, ImageDraw
+
+    img = img.convert("RGB")
+    draw = ImageDraw.Draw(img)
+    for obj in objects:
+        if not obj.get("in_frame"):
+            continue
+        if obj.get("class") == "ball" and not include_ball:
+            continue
+        xmin, ymin, xmax, ymax = obj["bbox_xyxy"]
+        color = (0, 255, 0) if obj.get("class") == "player" else (255, 128, 0)
+        draw.rectangle([xmin, ymin, xmax, ymax], outline=color, width=2)
+        label = f"{obj['entity_id']} #{obj['track_id']}"
+        draw.text((xmin, max(0, ymin - 14)), label, fill=color)
+    return img
+
+
 def _draw_overlay(camera_dataset_dir: Path, include_ball: bool, mask_color: bool = False) -> int:
     """把标注 bbox 绘制到 img1/ 中对应的 RGB 帧上，输出到 debug/。
 
@@ -24,7 +44,7 @@ def _draw_overlay(camera_dataset_dir: Path, include_ball: bool, mask_color: bool
     需要 pillow（可选依赖，`uv sync --extra overlay` 安装）。无 RGB 帧时跳过。
     """
     try:
-        from PIL import Image, ImageDraw
+        from PIL import Image
     except ImportError:
         typer.echo(
             "需要 pillow：请运行 `uv sync --extra overlay` 或 `uv pip install pillow`",
@@ -51,18 +71,7 @@ def _draw_overlay(camera_dataset_dir: Path, include_ball: bool, mask_color: bool
             img_path = img_dir / f"{frame_index:06d}.png"
             if not img_path.exists():
                 continue
-            img = Image.open(img_path).convert("RGB")
-            draw = ImageDraw.Draw(img)
-            for obj in frame.get("objects", []):
-                if not obj.get("in_frame"):
-                    continue
-                if obj.get("class") == "ball" and not include_ball:
-                    continue
-                xmin, ymin, xmax, ymax = obj["bbox_xyxy"]
-                color = (0, 255, 0) if obj.get("class") == "player" else (255, 128, 0)
-                draw.rectangle([xmin, ymin, xmax, ymax], outline=color, width=2)
-                label = f"{obj['entity_id']} #{obj['track_id']}"
-                draw.text((xmin, max(0, ymin - 14)), label, fill=color)
+            img = _draw_frame_overlay(Image.open(img_path), frame.get("objects", []), include_ball)
             out_path = out_dir / f"{frame_index:06d}_bbox.png"
             img.save(out_path)
             drawn += 1
@@ -246,6 +255,126 @@ def annotate_masks(
         typer.echo("ANNOTATE MASKS FAILED", err=True)
         raise typer.Exit(exit_code)
     typer.echo("ANNOTATE MASKS DONE")
+
+
+# ── make-video：把 img1/ 帧（可选 bbox 叠加）编码成 mp4 标注视频 ────────
+
+def _read_seqinfo_fps(cam_dir: Path) -> Optional[int]:
+    """从 seqinfo.ini 读取 frameRate（缺省 None）。"""
+    p = cam_dir / "seqinfo.ini"
+    if not p.exists():
+        return None
+    try:
+        for line in p.read_text(encoding="utf-8").splitlines():
+            if line.strip().lower().startswith("framerat"):
+                return int(line.split("=", 1)[1].strip())
+    except Exception:
+        return None
+    return None
+
+
+def _png_frame_numbers(img_dir: Path) -> List[int]:
+    """从目录里的 PNG 文件名解析帧号集合（有序）。"""
+    nums = []
+    for p in img_dir.glob("*.png"):
+        digits = "".join(ch for ch in p.stem if ch.isdigit())
+        if digits:
+            nums.append(int(digits))
+    return sorted(nums)
+
+
+def _make_video(camera_dataset_dir: Path, fps: Optional[int], out: Optional[Path],
+                plain: bool, include_ball: bool, max_frames: Optional[int]) -> int:
+    """把 img1/ 帧编码成 mp4 标注视频（默认叠加 bbox；多视角 = 每相机跑一次）。
+
+    帧顺序取 annotations.jsonl 的 frame_index（默认），否则按 img1/ 文件名排序。
+    需要 opencv-python（可选依赖，`uv sync --extra video`）。
+    """
+    import numpy as np
+
+    try:
+        import cv2
+    except ImportError:
+        typer.echo(
+            "需要 opencv-python：请运行 `uv sync --extra video` 或 `uv pip install opencv-python`",
+            err=True,
+        )
+        return 1
+    from PIL import Image
+
+    img_dir = camera_dataset_dir / "img1"
+    ann_path = camera_dataset_dir / "annotations.jsonl"
+    if not img_dir.exists():
+        typer.echo(f"ERROR: 缺 img1/: {camera_dataset_dir}", err=True)
+        return 1
+
+    if fps is None:
+        fps = _read_seqinfo_fps(camera_dataset_dir) or 30
+    out_path = out or (camera_dataset_dir / f"video_{fps}fps.mp4")
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # 帧列表：annotations（默认，带 bbox 信息）或 img1 文件名
+    frames: List[dict] = []
+    if ann_path.exists() and not plain:
+        with open(ann_path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    frames.append(json.loads(line))
+    else:
+        frames = [{"frame_index": n} for n in _png_frame_numbers(img_dir)]
+    if max_frames:
+        frames = frames[:max_frames]
+
+    first = next((f for f in frames if (img_dir / f"{f['frame_index']:06d}.png").exists()), None)
+    if first is None:
+        typer.echo(f"ERROR: 无可用的 img1 帧: {img_dir}", err=True)
+        return 1
+    with Image.open(img_dir / f"{first['frame_index']:06d}.png") as im:
+        W, H = im.size
+
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    writer = cv2.VideoWriter(str(out_path), fourcc, float(fps), (W, H))
+    written = 0
+    for fr in frames:
+        p = img_dir / f"{fr['frame_index']:06d}.png"
+        if not p.exists():
+            continue
+        img = Image.open(p)
+        if not plain:
+            img = _draw_frame_overlay(img, fr.get("objects", []), include_ball)
+        writer.write(cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR))
+        written += 1
+    writer.release()
+    typer.echo(f"视频已写: {out_path}（{written} 帧 @ {fps}fps，{'bbox 叠加' if not plain else '原图'}）")
+    return 0 if written else 1
+
+
+@app.command()
+def make_video(
+    camera_dataset_dir: Path = typer.Argument(
+        ...,
+        help="单个 camera 的 dataset 目录（含 img1/ 与可选 annotations.jsonl）",
+    ),
+    fps: Optional[int] = typer.Option(
+        None, "--fps", help="视频帧率（默认读 seqinfo.ini frameRate，否则 30）"
+    ),
+    out: Optional[Path] = typer.Option(
+        None, "--out", help="输出 mp4 路径（默认 <camera_dir>/video_<fps>fps.mp4）"
+    ),
+    plain: bool = typer.Option(
+        False, "--plain", help="不画 bbox，直接编码 img1/ 原图"
+    ),
+    include_ball: bool = typer.Option(
+        False, "--include-ball", help="叠加球 bbox"
+    ),
+    max_frames: Optional[int] = typer.Option(
+        None, "--max-frames", help="只编码前 N 帧（smoke 用）"
+    ),
+):
+    """把 img1/ 帧编码成 mp4 标注视频（默认叠加 bbox）。多视角 = 对每个 camera 目录各跑一次。"""
+    raise typer.Exit(_make_video(camera_dataset_dir.resolve(), fps, out, plain, include_ball, max_frames))
 
 
 @app.command()

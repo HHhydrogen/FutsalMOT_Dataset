@@ -495,6 +495,17 @@ uv run grf-ue annotate-overlay G:/FutsalMOT_Dataset/episode_0001/Camera_01 --inc
 
 把 bbox + entity_id + track_id 画到 `img1/` 的 RGB 帧上，输出到 `debug/000001_bbox.png`。没有 RGB 时跳过。需要 pillow（已是核心依赖）。
 
+### 多视角标注视频（make-video）
+
+把 `img1/` 帧编码成 **mp4 标注视频**（默认叠加 bbox；多视角 = 对每个 camera 目录各跑一次）：
+
+```powershell
+uv run grf-ue make-video G:/FutsalMOT_Dataset/episode_0001/CineCam_01 --include-ball
+# → CineCam_01/video_30fps.mp4（默认读 seqinfo.ini frameRate 或 30fps）
+```
+
+参数：`--fps`（默认 30）、`--out`（输出路径）、`--plain`（不画 bbox，编码原图）、`--max-frames N`（smoke 只取前 N 帧）。帧序取 `annotations.jsonl` 的 `frame_index`。需要 `opencv-python`（`uv sync --extra video`）。配合 30fps 标注（`target_fps=30`）可生成平滑的多视角标注视频。
+
 ### 验证
 
 ```powershell

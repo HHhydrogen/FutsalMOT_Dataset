@@ -25,5 +25,10 @@ dev = [
     "pytest",
 ]
 
+[project.optional-dependencies]
+video = [
+    "opencv-python",  # make-video：把 img1/ 标注帧编码成 mp4
+]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/grf_ue_bridge"]

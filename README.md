@@ -83,6 +83,7 @@ uv run grf-ue export --config configs/mvp_builtin_5v5.json --output outputs/epis
 | `scenario`                               | `"5_vs_5"` | GRF 场景名                                        |
 | `seed`                                   | `42`       | 随机种子                                          |
 | `num_steps`                              | `300`      | 运行步数（GRF 仿真 10 FPS）                       |
+| `target_fps`                             | `0`        | 目标导出帧率：`0`/`10`=原生 10fps（不插值）；`30`=把 10fps 位置线性插值到 30fps 导出（渲 900 标 900，1:1）。须为 10 的倍数 |
 | `playback_fps`                           | `30`       | UE 回放帧率                                       |
 | `field_length_m`                         | `40.0`     | 场地长度（米）                                    |
 | `field_width_m`                          | `20.0`     | 场地宽度（米）                                    |
@@ -90,6 +91,20 @@ uv run grf-ue export --config configs/mvp_builtin_5v5.json --output outputs/epis
 | `write_video`                            | `false`    | 是否录视频                                        |
 | `number_of_left_players_agent_controls`  | `0`        | 左队由 agent 控制的玩家数（0 = 全部 built-in AI） |
 | `number_of_right_players_agent_controls` | `0`        | 右队由 agent 控制的玩家数                         |
+
+### 30fps 标注模式（target_fps=30）
+
+GRF 仿真固定 **10fps**（每步 0.1s），只给球 + 10 球员的位置。默认导出为 10fps episode（每 GRF 步一条标注），渲染 30fps 全量但只标注每 3 帧（渲 900 标 300，3:1）。
+
+设置 `target_fps=30`（示例 `configs/mvp_5v5_30fps.json`）后，导出时把 10fps 位置**线性插值到 30fps**，得到自洽的 30fps episode：
+
+- `meta.timing.num_steps` = 300×3 = 900，`source_step_seconds` = 1/30；`frames.jsonl` 900 行。
+- 每 3 帧中整数倍下标帧 = **原 GRF 真值**原样保留；中间 2 帧为线性插值近似（非 GRF 真值）。
+- 帧映射自动 1:1：`frame_index=step+1`（1..900）↔ `img1/000001..000900`，渲 900 标 900。
+- 朝向（yaw）渲染与标注共用同一套 `build_yaw`（位置增量 + 低速滞回），在插值帧序列上自动一致。
+- 插值只作用于位置；`frame_start/frame_end` 的单位变为导出帧（30fps 帧）。
+
+> 注意：插值帧的位置是**近似**（GRF 只在每 3 帧有真值）；适合生成平滑的多视角标注视频，若需要纯 GRF 真值请用默认 10fps 模式。
 
 ### 导出产物
 

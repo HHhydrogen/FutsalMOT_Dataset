@@ -85,9 +85,18 @@ def export_episode(
     # ── 构建实体 ──────────────────────────────────────────────
     entities = _build_entities()
 
-    # ── 构建 meta ─────────────────────────────────────────────
+    # ── 目标帧率：GRF 原生 10fps，可选插值到更高帧率（如 30） ──
     source_step_seconds = 0.1  # GRF 默认：10 FPS 仿真
+    factor = 1
+    if config.target_fps and config.target_fps != 10:
+        if config.target_fps % 10 != 0 or config.target_fps < 10:
+            raise ValueError(
+                f"target_fps 必须是 10 的倍数且 >= 10（GRF 原生 10fps）：{config.target_fps}"
+            )
+        factor = config.target_fps // 10
+        source_step_seconds = 1.0 / config.target_fps
 
+    # ── 构建 meta ─────────────────────────────────────────────
     meta = Meta(
         schema="grf_ue_episode",
         version=1,
@@ -103,7 +112,7 @@ def export_episode(
         timing=TimingInfo(
             source_step_seconds=source_step_seconds,
             playback_fps=config.playback_fps,
-            num_steps=config.num_steps,
+            num_steps=config.num_steps * factor,
         ),
         field=FieldInfo(
             length_m=config.field_length_m,
@@ -121,25 +130,39 @@ def export_episode(
         f.write(meta.model_dump_json(indent=2, by_alias=True))
     print(f"Wrote: {meta_path}")
 
-    # ── 写入 frames.jsonl ─────────────────────────────────────
+    # ── 构建 frames（先 GRF 10fps，再按需插值到目标帧率）──────
     entity_ids = [e.id for e in entities]
     player_entity_ids = [e.id for e in entities if e.id != "BALL"]
     ball_entity_id = "BALL"
 
+    frames = []
+    for snapshot in result.snapshots:
+        frames.append(_build_frame(
+            step=snapshot.step,
+            ob=snapshot.observation,
+            transform=transform,
+            player_entity_ids=player_entity_ids,
+            source_step_seconds=0.1,
+        ))
+
+    if factor > 1:
+        from .interpolate import interpolate_frames
+
+        interpolated = interpolate_frames(
+            [f.model_dump() for f in frames], factor, source_step_seconds
+        )
+        frames = [Frame(**f) for f in interpolated]
+        print(
+            f"插值到 {config.target_fps}fps：{len(frames)} 帧"
+            f"（factor={factor}，source_step_seconds={source_step_seconds:.6f}）"
+        )
+
+    # ── 写入 frames.jsonl ─────────────────────────────────────
     frames_path = output_dir / "frames.jsonl"
     with open(frames_path, "w", encoding="utf-8") as f:
-        for snapshot in result.snapshots:
-            ob = snapshot.observation
-            step = snapshot.step
-            frame = _build_frame(
-                step=step,
-                ob=ob,
-                transform=transform,
-                player_entity_ids=player_entity_ids,
-                source_step_seconds=source_step_seconds,
-            )
+        for frame in frames:
             f.write(frame.model_dump_json() + "\n")
-    print(f"Wrote: {frames_path} ({len(result.snapshots)} lines)")
+    print(f"Wrote: {frames_path} ({len(frames)} lines)")
 
     # ── 调试：按需导出完整原始观测 ───────────────────────────
     if config.dump_full_raw_observation:

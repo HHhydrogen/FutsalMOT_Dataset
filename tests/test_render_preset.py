@@ -75,14 +75,14 @@ class TestCameraPostProcessOverrides:
         o = camera_post_process_overrides(PRESET_CV_GT, {})
         assert o["post_process_blend_weight"] == 1.0
         assert o["motion_blur_amount"] == 0.0
-        assert o["chromatic_aberration_intensity"] == 0.0
+        assert o["scene_fringe_intensity"] == 0.0  # UE 色差属性名
         assert o["depth_of_field_method"] == ("EDepthOfFieldMethod", "DOFM_None")
         assert o["depth_of_field_fstop"] == 32.0
 
     def test_motion_blur_enabled_keeps_amount(self):
         o = camera_post_process_overrides(PRESET_CV_GT, {"motion_blur": True})
         assert "motion_blur_amount" not in o
-        assert o["chromatic_aberration_intensity"] == 0.0
+        assert o["scene_fringe_intensity"] == 0.0
 
     def test_dof_enabled_skips_method(self):
         o = camera_post_process_overrides(PRESET_CV_GT, {"depth_of_field": True})
@@ -101,8 +101,6 @@ class TestMrqTemporalOverrides:
         o = mrq_temporal_overrides(PRESET_CV_GT, {})
         assert o["temporal_accumulation_method"] == ("MoviePipelineTemporalAccumulationMethod", "NONE")
         assert o["temporal_sample_count"] == 1
-        assert o["motion_blur"] is False
-        assert o["shutter_timing"] == 0.0
 
     def test_temporal_sampling_true_allows_accumulation(self):
         # 显式开启时间采样 → 未来模式，不强制 NONE（此时才允许 temporal integration）
@@ -127,6 +125,36 @@ class TestMrqAaOverrides:
 
     def test_cinematic_no_override(self):
         assert mrq_aa_overrides(PRESET_CINEMATIC, {}) == {}
+
+
+from render_episode import _resolve_enum_member  # noqa: E402
+
+
+class _FakeEnum:
+    """模拟 UE 枚举（成员命名可能为 TAA / TA_A、NONE / None 等变体）。"""
+    TAA = 2
+    NONE = 0
+    AMORTIZED = 1
+    None_ = 0
+    BokehDOF = 4
+
+
+class TestResolveEnumMember:
+    def test_exact(self):
+        assert _resolve_enum_member(_FakeEnum, "TAA") == 2
+
+    def test_case_insensitive(self):
+        assert _resolve_enum_member(_FakeEnum, "none") == 0
+        assert _resolve_enum_member(_FakeEnum, "amortized") == 1
+
+    def test_normalized(self):
+        # TA_A → 归一化 taa → 命中 TAA
+        assert _resolve_enum_member(_FakeEnum, "TA_A") == 2
+        assert _resolve_enum_member(_FakeEnum, "None") == 0
+
+    def test_no_match(self):
+        assert _resolve_enum_member(_FakeEnum, "DOFM_None") is None  # 无对应成员
+        assert _resolve_enum_member(_FakeEnum, "BOGUS") is None
 
 
 class TestPostProcessConsoleVars:

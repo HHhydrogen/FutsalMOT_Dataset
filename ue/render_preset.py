@@ -94,7 +94,8 @@ def camera_post_process_overrides(preset, cv_gt) -> Dict[str, object]:
         # 兜底：即使 DOF 方法枚举不可用，超大 f-stop 也使 DOF 深度极大、近似无景深
         overrides["depth_of_field_fstop"] = 32.0
     if not cg["chromatic_aberration"]:
-        overrides["chromatic_aberration_intensity"] = 0.0
+        # UE 色差的 PostProcessSettings 属性名是 scene_fringe_intensity（Scene Color Fringe）
+        overrides["scene_fringe_intensity"] = 0.0
     # lens_distortion：UE 无内置后处理属性；畸变仅来自失真后处理材质，管线不添加即关闭。
     return overrides
 
@@ -103,9 +104,10 @@ def mrq_temporal_overrides(preset, cv_gt) -> Dict[str, object]:
     """cv_gt → 时间采样确定性（RGB 与 mask 两个 job 都应用）。
 
     使 RGB 表示单个时刻（而非一段曝光时间），与 mask 的时间域一致：
-      - MoviePipelineCameraSetting: motion_blur=false、shutter_timing=0（无快门积分）
       - MoviePipelineAntiAliasingSetting: temporal_accumulation_method=NONE、
-        temporal_sample_count=1（每输出帧 = 单采样，无 temporal motion integration）
+        temporal_sample_count=1（每输出帧 = 单采样，无 temporal motion integration）。
+    UE 5.8 实测：MoviePipelineCameraSetting 无 motion_blur 属性、shutter_timing 为枚举，
+    故不设置它们；单采样（temporal NONE + sample_count=1）已足以消除时间域运动模糊。
     temporal_sampling=true 时返回空 dict（显式允许时间采样的未来模式）。
     """
     if preset != PRESET_CV_GT:
@@ -113,14 +115,10 @@ def mrq_temporal_overrides(preset, cv_gt) -> Dict[str, object]:
     cg = normalize_cv_gt(cv_gt)
     if cg["temporal_sampling"]:
         return {}  # 未来模式：允许时间采样（会破坏 frame-exact GT，仅显式开启时生效）
-    overrides: Dict[str, object] = {
+    return {
         "temporal_accumulation_method": ("MoviePipelineTemporalAccumulationMethod", "NONE"),
         "temporal_sample_count": 1,
     }
-    if not cg["motion_blur"]:
-        overrides["motion_blur"] = False
-        overrides["shutter_timing"] = 0.0
-    return overrides
 
 
 def mrq_aa_overrides(preset, cv_gt) -> Dict[str, object]:

@@ -397,7 +397,8 @@ def _clear_dir(path: Path) -> None:
 def _set_config_overrides(obj, overrides: dict, label: str) -> None:
     """把 overrides（property → 值或 ("EnumClass","Member")）应用到对象。
 
-    enum 值解析：先取完整成员名，再取去掉前缀的短名（UE 生成的枚举成员名因版本而异）。
+    enum 值解析：先精确匹配，再大小写不敏感，再归一化（去下划线/前缀）——
+    UE 各版本的枚举成员命名差异较大（如 TAA / TA_A、NONE / None / DOFM_None）。
     """
     import unreal
 
@@ -407,11 +408,7 @@ def _set_config_overrides(obj, overrides: dict, label: str) -> None:
             enum_cls = getattr(unreal, enum_name, None)
             target = None
             if enum_cls is not None:
-                for cand in (member, member.rsplit("_", 1)[-1]):
-                    v = getattr(enum_cls, cand, None)
-                    if v is not None:
-                        target = v
-                        break
+                target = _resolve_enum_member(enum_cls, member)
             if target is None:
                 print(
                     f"  WARNING: 无法解析枚举 {enum_name}.{member}"
@@ -423,6 +420,33 @@ def _set_config_overrides(obj, overrides: dict, label: str) -> None:
             obj.set_editor_property(prop, val)
         except Exception as e:
             print(f"  WARNING: 设置 {label}.{prop} 失败: {e}")
+
+
+def _resolve_enum_member(enum_cls, desired: str):
+    """在枚举类里找与 desired 匹配的成员：精确 → 大小写不敏感 → 归一化。"""
+
+    def _norm(s: str) -> str:
+        return "".join(ch for ch in s if ch.isalnum()).lower()
+
+    members = []
+    for name in dir(enum_cls):
+        if name.startswith("__"):
+            continue
+        v = getattr(enum_cls, name, None)
+        if v is not None:
+            members.append((name, v))
+    for name, v in members:  # 1. 精确
+        if name == desired:
+            return v
+    nd = desired.lower()
+    for name, v in members:  # 2. 大小写不敏感
+        if name.lower() == nd:
+            return v
+    nn = _norm(desired)
+    for name, v in members:  # 3. 归一化（忽略大小写/下划线/前缀）
+        if _norm(name) == nn:
+            return v
+    return None
 
 
 def _find_or_add_overrides(config, cls_name: str, overrides: dict, label: str) -> None:

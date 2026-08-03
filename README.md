@@ -410,7 +410,7 @@ py "D:/.../code/ue/import_grf_episode.py" --mode render
 
 **为什么关闭这些效果**：Instance-ID Mask（Object ID pass）表示的是**单一时刻**的几何覆盖像素；RGB 若启用运动模糊 / DOF / 时间累积，则表示**一段曝光时间**或空间上被模糊扩散后的结果——二者空间边界不再一致，pixel-tight bbox / segmentation 就会与 RGB 实际可见区域错位。cv_gt 模式强制 RGB 与 mask 都退化为同一时刻、无空间扩散的渲染，从而保证标注语义成立。保留的 lighting / shadow / material / texture 与合理 AA 不影响边界一致性。
 
-**强制应用的位置**（不依赖关卡手工设置）：渲染前脚本把后处理覆盖写到每个 **CineCameraComponent 的 `post_process_settings`**（`post_process_blend_weight=1.0` 完全覆盖关卡 Post Process Volume）并保存关卡；MRQ RGB job 显式添加 **`MoviePipelineAntiAliasingSetting`**（AA 方法 + warm-up=0）与 **`MoviePipelineCameraSetting`**（motion_blur=false、shutter_timing=0）；RGB 与 mask 两个 job 都施加时间确定性（temporal_accumulation=NONE）。这些设置在每次渲染时由脚本显式应用，避免不同机器/关卡产生不同 GT 语义。
+**强制应用的位置**（不依赖关卡手工设置）：渲染前脚本把后处理覆盖写到每个 **CineCameraComponent 的 `post_process_settings`**（`post_process_blend_weight=1.0` 完全覆盖关卡 Post Process Volume）并保存关卡；MRQ RGB job 显式添加 **`MoviePipelineAntiAliasingSetting`**（`temporal_accumulation_method=NONE`、`temporal_sample_count=1`、`render_warm_up_count=0`，把每输出帧固定为单采样，消除时间域运动模糊）与 **`MoviePipelineConsoleVariableSetting`**（cvar `r.MotionBlur.Amount 0` / `r.DepthOfFieldQuality 0` / `r.SceneColorFringeQuality 0`，强制关闭后处理运动模糊 / 景深 / 色差，即使相机覆盖位在特定版本不生效也兜底）。RGB 与 mask 两个 job 都施加时间确定性。这些设置在每次渲染时由脚本显式应用，避免不同机器/关卡产生不同 GT 语义。
 
 **切换方式**：把 `ue_import_config.json` 里 `annotation_export.render_rgb.preset` 改为 `null`（保持关卡现状）或 `"cinematic"`（未来模式，放开画质）。`cv_gt` 内部各开关也可按需覆盖（如 `anti_aliasing: "none"` 关 AA）。切换后重新 `--mode full` 或 `--mode render` 即生效。
 

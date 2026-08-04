@@ -19,9 +19,11 @@
 
 import json
 import math
+import os
 import sys
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 # 把仓库的 ue/ 目录加入 sys.path（与 tests/conftest.py 一致），以便 import 纯模块
 _UE_DIR = Path(__file__).resolve().parent.parent.parent / "ue"
@@ -42,9 +44,15 @@ _BBOX_SOURCES = (
     BBOX_SOURCE_NOT_VISIBLE,
 )
 
+# quick 验证级别下每相机最多重算的 mask 帧数（均匀抽样，保证确定性）
+_QUICK_MASK_SAMPLE = 10
 
-def _validate_camera(cam_dir: Path) -> List[str]:
-    """验证单个 camera 子目录。返回错误列表（空表示通过）。"""
+
+def _validate_camera(cam_dir: Path, validation_level: str = "full") -> List[str]:
+    """验证单个 camera 子目录。返回错误列表（空表示通过）。
+
+    validation_level：full=完整逐帧重算；quick=结构检查 + 抽样重算 mask 帧。
+    """
     errors: List[str] = []
     cam_label = cam_dir.name
 
@@ -169,7 +177,8 @@ def _validate_camera(cam_dir: Path) -> List[str]:
 
     # ── Instance-ID Mask 校验（存在 mask/ 时生效）────────────────
     if (cam_dir / "mask").exists():
-        _validate_mask_dir(errors, cam_label, cam_dir, width, height)
+        sample = None if validation_level != "quick" else _QUICK_MASK_SAMPLE
+        _validate_mask_dir(errors, cam_label, cam_dir, width, height, sample_frames=sample)
 
     # ── YOLO 标签校验（行数须与 instance_mask 可见对象一致，不可见对象不得进入）──
     _validate_yolo(errors, cam_label, cam_dir, "det", yolo_counts_by_frame)
@@ -277,9 +286,18 @@ def _read_mask_config(cam_dir: Path) -> dict:
 
 
 def _validate_mask_dir(
-    errors: List[str], cam_label: str, cam_dir: Path, width: int, height: int
+    errors: List[str],
+    cam_label: str,
+    cam_dir: Path,
+    width: int,
+    height: int,
+    sample_frames: Optional[int] = None,
 ) -> None:
-    """校验 Instance-ID Mask：RGB/mask 帧一一对应、分辨率、合法 ID、bbox==mask、YOLO。"""
+    """校验 Instance-ID Mask：RGB/mask 帧一一对应、分辨率、合法 ID、bbox==mask、YOLO。
+
+    sample_frames 非 None 时只对该数量的帧做昂贵的逐帧 mask 重算（均匀抽样，
+    确定性），但帧集合对应关系（glob 文件名）仍全量检查——即 quick 验证模式。
+    """
     from instance_mask import (
         load_mask_array,
         mask_to_bbox,
@@ -297,7 +315,7 @@ def _validate_mask_dir(
         errors.append(f"[{cam_label}] mask/ 目录为空")
         return
 
-    # RGB 与 mask 帧一一对应
+    # RGB 与 mask 帧一一对应（结构检查，全量）
     img_frames = _frame_numbers(cam_dir / "img1")
     if img_frames and img_frames != mask_frames:
         only_img = sorted(img_frames - mask_frames)[:5]
@@ -310,65 +328,72 @@ def _validate_mask_dir(
     if not ann_path.exists():
         return
     with open(ann_path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
+        lines = [ln.strip() for ln in f if ln.strip()]
+    n = len(lines)
+    if sample_frames is not None and n > sample_frames:
+        step = max(1, math.ceil(n / sample_frames))
+        sampled_idx = list(range(0, n, step))
+    else:
+        sampled_idx = list(range(n))
+    for li in sampled_idx:
+        try:
+            frame = json.loads(lines[li])
+        except json.JSONDecodeError:
+            continue  # 行级 JSON 错误由主循环报告
+        fi = frame.get("frame_index")
+        if not isinstance(fi, int):
+            continue
+        mask_path = mask_dir / f"{fi:06d}.png"
+        if not mask_path.exists():
+            continue
+        mask_img = load_mask_array(mask_path, channel)
+        mh, mw = mask_img.shape
+        if (mw, mh) != (width, height):
+            errors.append(
+                f"[{cam_label}] mask {fi} 分辨率 {mw}x{mh} != camera {width}x{height}"
+            )
+        quantized = quantize_mask_pixels(mask_img, id_scale, id_offset)
+        vals = set(quantized.reshape(-1).tolist())
+        legal = {0} | set(range(1, 12))  # 背景 0 + 合法实体 mask_id 1..11
+        illegal = sorted(v for v in vals if v not in legal)
+        if illegal:
+            errors.append(
+                f"[{cam_label}] mask {fi} 含非法实例 ID 值: {illegal[:10]}"
+            )
+        for obj in frame.get("objects", []):
+            entity_id = obj.get("entity_id")
+            mask_id = obj.get("mask_id")
+            try:
+                expected = entity_id_to_mask_id(entity_id)
+            except (ValueError, TypeError):
                 continue
-            frame = json.loads(line)
-            fi = frame.get("frame_index")
-            if not isinstance(fi, int):
-                continue
-            mask_path = mask_dir / f"{fi:06d}.png"
-            if not mask_path.exists():
-                continue
-            mask_img = load_mask_array(mask_path, channel)
-            mh, mw = mask_img.shape
-            if (mw, mh) != (width, height):
+            if isinstance(mask_id, int) and mask_id != expected:
                 errors.append(
-                    f"[{cam_label}] mask {fi} 分辨率 {mw}x{mh} != camera {width}x{height}"
+                    f"[{cam_label}] frame {fi} {entity_id} mask_id={mask_id} != 期望 {expected}"
                 )
-            quantized = quantize_mask_pixels(mask_img, id_scale, id_offset)
-            vals = set(quantized.reshape(-1).tolist())
-            legal = {0} | set(range(1, 12))  # 背景 0 + 合法实体 mask_id 1..11
-            illegal = sorted(v for v in vals if v not in legal)
-            if illegal:
-                errors.append(
-                    f"[{cam_label}] mask {fi} 含非法实例 ID 值: {illegal[:10]}"
-                )
-            for obj in frame.get("objects", []):
-                entity_id = obj.get("entity_id")
-                mask_id = obj.get("mask_id")
-                try:
-                    expected = entity_id_to_mask_id(entity_id)
-                except (ValueError, TypeError):
-                    continue
-                if isinstance(mask_id, int) and mask_id != expected:
+            if obj.get("bbox_source") == BBOX_SOURCE_INSTANCE_MASK and isinstance(mask_id, int):
+                bbox = mask_to_bbox(quantized == mask_id)
+                xyxy = obj.get("bbox_xyxy")
+                if bbox is None or not isinstance(xyxy, list) or len(xyxy) != 4:
                     errors.append(
-                        f"[{cam_label}] frame {fi} {entity_id} mask_id={mask_id} != 期望 {expected}"
+                        f"[{cam_label}] frame {fi} {entity_id} bbox_source=instance_mask"
+                        f" 但 mask 空或 bbox 缺失"
                     )
-                if obj.get("bbox_source") == BBOX_SOURCE_INSTANCE_MASK and isinstance(mask_id, int):
-                    bbox = mask_to_bbox(quantized == mask_id)
-                    xyxy = obj.get("bbox_xyxy")
-                    if bbox is None or not isinstance(xyxy, list) or len(xyxy) != 4:
+                    continue
+                for a, b in zip(bbox, xyxy):
+                    if abs(float(a) - float(b)) > 0.5:
                         errors.append(
-                            f"[{cam_label}] frame {fi} {entity_id} bbox_source=instance_mask"
-                            f" 但 mask 空或 bbox 缺失"
+                            f"[{cam_label}] frame {fi} {entity_id} bbox_xyxy 与 mask"
+                            f" min/max 不一致: mask={[round(v,2) for v in bbox]}, ann={xyxy}"
                         )
-                        continue
-                    for a, b in zip(bbox, xyxy):
-                        if abs(float(a) - float(b)) > 0.5:
-                            errors.append(
-                                f"[{cam_label}] frame {fi} {entity_id} bbox_xyxy 与 mask"
-                                f" min/max 不一致: mask={[round(v,2) for v in bbox]}, ann={xyxy}"
-                            )
-                            break
-                elif obj.get("bbox_source") == BBOX_SOURCE_NOT_VISIBLE and isinstance(mask_id, int):
-                    # 反向一致性：标记为不可见的实体，mask 里必须真的没有可见像素
-                    if (quantized == mask_id).any():
-                        errors.append(
-                            f"[{cam_label}] frame {fi} {entity_id} bbox_source=not_visible"
-                            f" 但 mask 含可见像素（{int((quantized == mask_id).sum())} px）"
-                        )
+                        break
+            elif obj.get("bbox_source") == BBOX_SOURCE_NOT_VISIBLE and isinstance(mask_id, int):
+                # 反向一致性：标记为不可见的实体，mask 里必须真的没有可见像素
+                if (quantized == mask_id).any():
+                    errors.append(
+                        f"[{cam_label}] frame {fi} {entity_id} bbox_source=not_visible"
+                        f" 但 mask 含可见像素（{int((quantized == mask_id).sum())} px）"
+                    )
 
 
 def _validate_yolo(
@@ -523,7 +548,35 @@ def _report(errors: List[str]) -> None:
         print(f"  ... and {len(errors) - 50} more errors")
 
 
-def validate_annotation_dir(annotation_dir: Path) -> int:
+def _validate_camera_task(task: tuple) -> List[str]:
+    """进程池 worker：验证单个 camera（结构校验 + 可选 dataset regression）。
+
+    模块级函数（可 pickle，Windows spawn 安全）。返回错误列表。
+    """
+    cam_str, validation_level = task
+    cam_dir = Path(cam_str)
+    errors = _validate_camera(cam_dir, validation_level=validation_level)
+    if validation_level != "quick":
+        try:
+            from .dataset_regression import _validate_camera as _reg_camera
+            errors += _reg_camera(cam_dir)
+        except Exception as e:
+            errors.append(f"[{cam_dir.name}] DATASET REGRESSION: 执行异常: {e}")
+    return errors
+
+
+def _resolve_workers(workers: int, n_tasks: int) -> int:
+    """解析 --workers：0=自动（min(任务数, max(1, cpu_count//2))），1=串行，>1=指定。"""
+    if workers == 0:
+        return min(max(1, n_tasks), max(1, (os.cpu_count() or 1) // 2))
+    return max(1, workers)
+
+
+def validate_annotation_dir(
+    annotation_dir: Path,
+    workers: int = 0,
+    validation_level: str = "full",
+) -> int:
     """验证一个标注输出目录。
 
     支持两种层级：<root>/<camera>/ 或 <root>/<episode_id>/<camera>/。
@@ -532,22 +585,35 @@ def validate_annotation_dir(annotation_dir: Path) -> int:
     除逐字段语义/掩码校验外，还会运行端到端 dataset regression（RGB/mask/annotation
     帧数、分辨率、MOT/YOLO 重新派生比对、多连通域 quality gate 复验），作为最终验收。
 
+    workers：0=自动，1=串行，>1=相机级多进程并行（结果与串行一致）。
+    validation_level：
+      full  —— 完整语义：逐帧 mask 重算、重新派生并比较 MOT/YOLO、完整检查全部帧
+                （默认，保持现有行为）。
+      quick —— 结构检查（文件存在/帧数/文件名对应/mask ID 合法/bbox 范围/track
+                映射/MOT/YOLO 语法）+ 每相机抽样有限帧的 mask 重算；跳过昂贵的
+                全量重派生。
+
     Returns:
         0 表示通过，1 表示失败。
     """
+    if validation_level not in ("full", "quick"):
+        raise ValueError(f"未知 validation_level: {validation_level!r}（可选 full/quick）")
     errors: List[str] = []
     camera_dirs = sorted(d.parent for d in annotation_dir.rglob("camera.json"))
     if not camera_dirs:
         errors.append(f"目录 {annotation_dir} 下没有 camera 子目录（缺少 camera.json）")
-    for cam_dir in camera_dirs:
-        errors += _validate_camera(cam_dir)
-    # 端到端回归：重新派生 bbox/MOT/YOLO 并与落盘产物比对（统一入口）
-    try:
-        from .dataset_regression import collect_dataset_regression_errors
-
-        errors += collect_dataset_regression_errors(annotation_dir)
-    except Exception as e:
-        errors.append(f"DATASET REGRESSION: 执行异常: {e}")
+    nworkers = _resolve_workers(workers, len(camera_dirs))
+    if nworkers <= 1 or len(camera_dirs) <= 1:
+        for cam_dir in camera_dirs:
+            errors += _validate_camera_task((str(cam_dir), validation_level))
+    else:
+        tasks = [(str(cam_dir), validation_level) for cam_dir in camera_dirs]
+        with ProcessPoolExecutor(max_workers=nworkers) as ex:
+            results = list(ex.map(_validate_camera_task, tasks))
+        for cam_errors in results:
+            errors += cam_errors
+    # 端到端回归（重新派生 bbox/MOT/YOLO 并与落盘产物比对）已包含在
+    # _validate_camera_task 的逐 camera 校验中（full 级别）；quick 级别跳过。
     _report(errors)
     if not errors:
         print(f"ANNOTATION VALIDATOR: {annotation_dir} PASSED all checks")

@@ -472,14 +472,14 @@ uv run python ue/debug_object_id_exr.py G:/FutsalMOT_Dataset/episode_demo/CineCa
 
 ```powershell
 # 1. Cryptomatte EXR → mask/*.png（每实体像素 = mask_id 1~11）
-uv run grf-ue cryptomatte-to-mask G:/FutsalMOT_Dataset/episode_demo
+uv run grf-ue cryptomatte-to-mask G:/FutsalMOT_Dataset/episode_demo [--workers 4] [--png-compress-level 1]
 
 # 2. mask → mask-primary bbox / 分割 / MOT / YOLO
-uv run grf-ue annotate-masks G:/FutsalMOT_Dataset/episode_demo --include-ball [--polygon-tolerance-px 1.0] [--max-polygon-points 64]
+uv run grf-ue annotate-masks G:/FutsalMOT_Dataset/episode_demo --include-ball [--polygon-tolerance-px 1.0] [--max-polygon-points 64] [--workers 4]
 ```
 
-`cryptomatte-to-mask`：读 `render_mask/*.exr` 的 manifest + `RGBA` 层 R 通道，对每实体按 float32 ID 匹配生成 mask（缺省从 `ue_import_config.json` 读 mapping/episode，可用 `--mapping`/`--episode` 覆盖）。
-`annotate-masks`：读 `mask/{frame}.png` + UE 导出的 `annotations.jsonl` → 每实体由可见 mask 像素算 tight bbox / `visible_pixel_count` / 模态分割多边形 → 覆盖写 `annotations.jsonl`（`bbox_source="instance_mask"`，几何 bbox 保留在 `geometry_bbox_*`；mask 像素为 0 → `bbox_source="not_visible"`、可见 bbox 置 null）→ 重写 MOT `gt/gt.txt` → 写 YOLO `labels/det/` 与 `labels/seg/` → 写 `mask_config.json`（解码参数）。幂等，可重复运行；原始 `mask/*.png` 永不修改。无 `mask/` 的 camera 或缺某帧 mask 保持几何 bbox（legacy fallback）。
+`cryptomatte-to-mask`：读 `render_mask/*.exr` 的 manifest + `RGBA` 层 R 通道，对每实体按 float32 位模式（uint32 bit-exact）匹配生成 mask（缺省从 `ue_import_config.json` 读 mapping/episode，可用 `--mapping`/`--episode` 覆盖）。支持 `--workers`/`--chunk-size` 并行与 `--png-compress-level 0–9`。
+`annotate-masks`：读 `mask/{frame}.png` + UE 导出的 `annotations.jsonl` → 每实体由可见 mask 像素算 tight bbox / `visible_pixel_count` / 模态分割多边形 → 覆盖写 `annotations.jsonl`（`bbox_source="instance_mask"`，几何 bbox 保留在 `geometry_bbox_*`；mask 像素为 0 → `bbox_source="not_visible"`、可见 bbox 置 null）→ 重写 MOT `gt/gt.txt` → 写 YOLO `labels/det/` 与 `labels/seg/` → 写 `mask_config.json`（解码参数）。幂等，可重复运行；原始 `mask/*.png` 永不修改。无 `mask/` 的 camera 或缺某帧 mask 保持几何 bbox（legacy fallback）。支持 `--workers`/`--chunk-size` 并行、`--formats`（all/mot/yolo-det/yolo-seg/json 逗号组合）与 `--no-segmentation`（跳过分割多边形，见下节 Performance）。
 
 **MOT / YOLO 导出**：
 - MOT `gt/gt.txt`：bbox 为 mask 可见 bbox，`visibility` 按 `mot_visibility_mode`（默认 `unoccluded` 写 1.0）；完全不可见实体（`bbox_source="not_visible"`）不写入。
@@ -504,7 +504,7 @@ uv run grf-ue make-video G:/FutsalMOT_Dataset/episode_0001/CineCam_01 --include-
 # → CineCam_01/video_30fps.mp4（默认读 seqinfo.ini frameRate 或 30fps）
 ```
 
-参数：`--fps`（默认 30）、`--out`（输出路径）、`--plain`（不画 bbox，编码原图）、`--max-frames N`（smoke 只取前 N 帧）。帧序取 `annotations.jsonl` 的 `frame_index`。需要 `opencv-python`（`uv sync --extra video`）。配合 30fps 标注（`target_fps=30`）可生成平滑的多视角标注视频。
+参数：`--fps`（默认 30）、`--out`（输出路径）、`--plain`（不画 bbox，编码原图）、`--max-frames N`（smoke 只取前 N 帧）。帧序取 `annotations.jsonl` 的 `frame_index`。需要 `opencv-python`（已是核心依赖）。配合 30fps 标注（`target_fps=30`）可生成平滑的多视角标注视频。
 
 ### 验证
 
@@ -533,6 +533,92 @@ uv run grf-ue validate-annotations G:/FutsalMOT_Dataset
 > 说明：对缺 `mask/` 的 legacy 纯几何目录，mask 相关检查自动放行；但若 `mask/` 存在（mask-primary 数据集），则要求 RGB / mask / annotation 全链路完整——任一帧缺 mask 或 RGB 都会判定不完整。
 
 最小回归锚点：`tests/test_golden_fixture.py` 用确定性合成 64×64 fixture（2 帧、L0/L1/BALL 可见、R0 不可见），**手工核算 + 锁定** mask → bbox → MOT → YOLO Detect → YOLO Seg 的精确输出值；任何一环改动都会让 golden 断言失败。`tests/test_dataset_regression.py` 单独覆盖 regression validator 的负例（全背景 mask、分辨率不符、帧数缺失、MOT/YOLO 与 mask bbox 不一致）。
+
+---
+
+## Performance（后处理性能）
+
+三个后处理命令（`cryptomatte-to-mask` / `annotate-masks` / `validate-annotations`）已针对 Windows 多核优化：
+
+- **多进程并行**：`--workers N`（`0`=自动，`1`=串行，`>1`=多进程）。自动值 = `min(相机数, cpu//2)`；相机数少于 worker 数时自动按 `--chunk-size` 对相机内帧分块。**输出逐字节确定**，与串行完全一致（worker 只做计算，主进程统一排序合并后原子写盘）。
+- **NumPy 向量化单次扫描**：每帧只读/量化一次 mask，`np.bincount` + 稀疏坐标 min/max 一次拿到所有实例的 pixel_count / bbox / ROI。
+- **OpenCV 原生连通域/轮廓**：`cv2.connectedComponentsWithStats` + `findContours`（反转对齐 Moore 点序，输出与旧实现逐点一致）+ 只在实例 ROI 内处理。无 cv2 时自动回退纯 Python（更慢）。
+- **快速 Mask 读取**：单通道 `L` PNG 直接读二维 uint8（不做 RGBA 转换）；整数实例 ID 量化零复制透传。
+- **Cryptomatte 位模式匹配**：float32 Actor ID 按位解释为 uint32 后精确整数比较（bit-exact，绝无浮点 ID 混淆）。
+- **PNG 压缩等级**：`--png-compress-level 0–9`（默认 1，性能推荐；像素值不变）。
+
+### 推荐的 worker 数
+
+| 场景 | 建议 |
+|------|------|
+| 默认（自动） | 不传 `--workers`：按 `min(相机数, cpu//2)` 自动选择 |
+| 4 相机、8+ 核 | `--workers 4`（相机级并行）或 `--workers 8`（含帧分块） |
+| 单相机大 episode | `--workers <cpu//2>` + `--chunk-size 50`（帧级并行） |
+| 低内存设备 / 串行调试 | `--workers 1`（峰值内存最低） |
+
+### 磁盘建议
+
+- **NVMe**：`--workers` 可用满核（I/O 不成为瓶颈）。
+- **SATA SSD**：`--workers <cpu//2`（避免过多 worker 抢 I/O 带宽），并行仍有效。
+- **机械硬盘**：串行或 `--workers 2`；`cryptomatte-to-mask` 的 EXR 解码是磁盘+解压为主，并行收益小（建议保持默认）。
+- **低内存设备**：`--workers 1`；并行时峰值内存约为「每 worker 一帧 mask」的倍数，不会无界增长（worker 逐帧处理，不整 episode 载入）。
+
+### 完整标注 vs 快速 MOT 模式
+
+`annotate-masks` 默认导出全量（bbox + 分割 + MOT + YOLO）。若只需要检测/跟踪，用 `--no-segmentation` 跳过轮廓/polygon/桥接/质量检查（`segmentation=null`，不生成 `labels/seg/`），再配合 `--formats` 只写需要的派生产物：
+
+```powershell
+# 完整（默认）：bbox + 分割 + MOT + YOLO det/seg
+uv run grf-ue annotate-masks <episode_dir> --workers 4 --formats all
+
+# 仅 MOT + 检测，跳过分割（最快；bbox/像素数/MOT/YOLO det 正常生成）
+uv run grf-ue annotate-masks <episode_dir> `
+  --workers 4 `
+  --formats json,mot,yolo-det `
+  --no-segmentation
+```
+
+`--formats` 可选：`all` / `mot` / `yolo-det` / `yolo-seg` / `json`，逗号组合。`annotations.jsonl` 总是写入。
+
+### PNG 压缩等级
+
+`cryptomatte-to-mask --png-compress-level 1`（默认）在像素不变的前提下显著加快写入；`0` 无压缩最快但文件更大；`9` 最小但最慢。不同等级解码后的 mask 逐像素一致（有测试保证）。
+
+### full vs quick validation
+
+```powershell
+# 完整（默认）：逐帧重算 mask bbox/像素数，重新派生并比较 MOT/YOLO，检查全部帧
+uv run grf-ue validate-annotations <episode_dir> --workers 4 --validation-level full
+
+# quick：结构检查（文件/帧数/文件名对应/mask ID 合法/bbox 范围/track 映射/MOT·YOLO 语法）
+# + 每相机抽样有限帧重算（快一个数量级，适合 CI / 快速门禁）
+uv run grf-ue validate-annotations <episode_dir> --workers 4 --validation-level quick
+```
+
+`full` 是默认，保持完整语义；`quick` 牺牲逐帧全量重派生换取速度，二者对同一份正确数据都通过。
+
+### 端到端基准（`scripts/benchmark_postprocess.py`）
+
+```powershell
+uv run python scripts/benchmark_postprocess.py `
+  --input G:/FutsalMOT_Dataset/episode_demo `
+  --repeat 3 `
+  --workers 4
+```
+
+按命令报告 `cryptomatte-to-mask` / `annotate-masks` / `validate-annotations` 总耗时、annotate 的逐阶段分解、峰值 RSS（psutil）、帧数与 FPS。样例数据（episode_demo，10 帧/相机，4 相机，单机 20 核）实测：
+
+| 命令 | baseline（优化前） | 优化后串行 | 优化后并行（4 worker） |
+|------|-------------------|-----------|------------------------|
+| cryptomatte-to-mask | 1.03 s/相机 | 0.99 s/相机 | 0.64 s/相机 |
+| annotate-masks | **29.48 s/相机** | **0.36 s/相机（82×）** | 0.22 s/相机（134×） |
+| validate-annotations | 1.55 s/相机 | 1.09 s/相机 | 0.38 s/相机 |
+
+> `annotate-masks` 的瓶颈从优化前的纯 Python 全图泛洪（每帧 ~3 s）变为 ROI 内 OpenCV 轮廓（每帧 ~16 ms，175×）。`cryptomatte-to-mask` 的 EXR 解码（PIZ 压缩，整帧解压）是固有 I/O+解压成本，主要靠并行摊薄。
+
+### GPU 后端
+
+未引入。CPU 优化后 `annotate-masks` 已从每相机 ~30 s 降到 <0.4 s，I/O（EXR 解码、PNG 读写、JSON 写入）成为主要剩余瓶颈——这些不适合 GPU。详见交付报告。
 
 ---
 

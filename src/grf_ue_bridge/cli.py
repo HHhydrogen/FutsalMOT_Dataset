@@ -176,11 +176,23 @@ def validate_annotations(
         ...,
         help="标注输出目录（含多个 camera 子目录）",
     ),
+    workers: int = typer.Option(
+        0, "--workers",
+        help="并行 worker 数：0=自动（min(相机数, cpu//2)），1=串行，>1=多进程",
+    ),
+    validation_level: str = typer.Option(
+        "full", "--validation-level",
+        help="验证级别：full（完整重新派生并比较，默认）/ quick（结构 + 抽样重算，快）",
+    ),
 ):
     """验证导出的 CV 标注目录。"""
     from .annotation_validator import validate_annotation_dir
 
-    exit_code = validate_annotation_dir(annotation_dir.resolve())
+    exit_code = validate_annotation_dir(
+        annotation_dir.resolve(),
+        workers=workers,
+        validation_level=validation_level,
+    )
     if exit_code != 0:
         typer.echo("ANNOTATION VALIDATION FAILED", err=True)
         raise typer.Exit(exit_code)
@@ -234,11 +246,31 @@ def annotate_masks(
         0.0, "--id-offset",
         help="mask 解码偏移：像素值量化 = round((v - id_offset) / id_scale)",
     ),
+    workers: int = typer.Option(
+        0, "--workers",
+        help="并行 worker 数：0=自动（min(相机数, cpu//2)），1=串行，>1=多进程",
+    ),
+    chunk_size: int = typer.Option(
+        0, "--chunk-size",
+        help="单相机内帧分块大小（>0 时；相机数少于 worker 数时自动分块）",
+    ),
+    formats: str = typer.Option(
+        "all", "--formats",
+        help="导出的派生产物格式：all/mot/yolo-det/yolo-seg/json 或逗号组合",
+    ),
+    no_segmentation: bool = typer.Option(
+        False, "--no-segmentation",
+        help="跳过实例分割多边形（轮廓/polygon/桥接/质量检查），不生成 labels/seg/；"
+             "bbox、像素数、MOT、YOLO Det 正常生成",
+    ),
 ):
     """从 Instance-ID Mask 计算 pixel-tight bbox / 分割标注，覆盖写 annotations.jsonl 并导出 MOT / YOLO。
 
     bbox 由 mask 像素 min/max 直接计算（primary GT），原几何 bbox 保留在
     geometry_bbox_* 字段作为 fallback。原始 mask/*.png 永不修改。
+
+    快速模式示例（仅 MOT + 检测、跳过分割）：
+      grf-ue annotate-masks <dir> --formats json,mot,yolo-det --no-segmentation --workers 4
     """
     from .mask_annotator import annotate_masks_dir
 
@@ -250,6 +282,10 @@ def annotate_masks(
         max_polygon_points=max_polygon_points,
         id_scale=id_scale,
         id_offset=id_offset,
+        workers=workers,
+        chunk_size=chunk_size,
+        formats=formats,
+        no_segmentation=no_segmentation,
     )
     if exit_code != 0:
         typer.echo("ANNOTATE MASKS FAILED", err=True)
@@ -389,6 +425,18 @@ def cryptomatte_to_mask(
     episode: Path = typer.Option(
         None, "--episode", help="episode 目录（读时序）；缺省读 ue_import_config.json",
     ),
+    workers: int = typer.Option(
+        0, "--workers",
+        help="并行 worker 数：0=自动，1=串行，>1=帧级多进程并行",
+    ),
+    chunk_size: int = typer.Option(
+        0, "--chunk-size",
+        help="进程池批大小（>0 时，传给 executor.map 的 chunksize）",
+    ),
+    png_compress_level: int = typer.Option(
+        1, "--png-compress-level",
+        help="实例 ID mask PNG 压缩等级 0–9（1 为性能推荐值，像素不变）",
+    ),
 ):
     """把 Object ID Pass 的 Cryptomatte multilayer EXR 转为 mask/{frame}.png（mask_id 值）。
 
@@ -429,7 +477,12 @@ def cryptomatte_to_mask(
         if not rmask.exists():
             typer.echo(f"  SKIP {cam.name}: 无 render_mask/")
             continue
-        status, per = convert_render_mask_dir(rmask, mapping_dict, mdir, num_steps, step_sec, fps)
+        status, per = convert_render_mask_dir(
+            rmask, mapping_dict, mdir, num_steps, step_sec, fps,
+            png_compress_level=png_compress_level,
+            workers=workers,
+            chunk_size=chunk_size,
+        )
         typer.echo(f"  [{status.upper()}] {cam.name}: {len(per)} 帧 mask 已生成")
         if status == "success":
             total_ok += 1

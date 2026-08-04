@@ -10,6 +10,7 @@ dependencies = [
     "gfootball>=2.10.2",
     "gym<0.26",
     "numpy",
+    "opencv-python",  # 后处理性能依赖：实例 mask 的连通域/轮廓（annotate-masks 快速路径）；无 cv2 时自动回退纯 Python（更慢）
     "openexr",  # 读取 Object ID Pass 的 Cryptomatte multilayer EXR
     "pillow",  # 读取 mask PNG（annotate-masks）/ annotate-overlay 调试可视化
     "pydantic",
@@ -23,11 +24,6 @@ grf-ue = "grf_ue_bridge.cli:app"
 [dependency-groups]
 dev = [
     "pytest",
-]
-
-[project.optional-dependencies]
-video = [
-    "opencv-python",  # make-video：把 img1/ 标注帧编码成 mp4
 ]
 
 [tool.hatch.build.targets.wheel]

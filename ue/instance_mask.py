@@ -15,10 +15,21 @@ bbox 约定（与 geometry 投影一致的连续坐标）：
 
 import glob
 import math
+from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
+
+# OpenCV 快速路径（connectedComponents / findContours / contourArea）。
+# 仅作可选加速依赖：不可用（如 UE 侧 Python）时自动回退到下方纯 Python 实现，
+# 输出语义完全一致（逐点等价，见 _cv2_contours 的说明）。
+try:  # pragma: no cover - 环境探测
+    import cv2 as _cv2
+    _HAS_CV2 = True
+except ImportError:  # pragma: no cover
+    _cv2 = None
+    _HAS_CV2 = False
 
 # 8 邻域方向（图像坐标：x 向右、y 向下），顺时针排列（索引增大 = 顺时针）
 _DIRS: Tuple[Tuple[int, int], ...] = [
@@ -43,17 +54,32 @@ def load_mask_array(path, channel: str = "r"):
     """读取 mask PNG 并返回携带实例 ID 的单通道数组 (H, W) uint8。
 
     channel: "r"/"g"/"b"/"a" → 取 RGBA 的对应通道；"gray"/"l" → 转灰度单通道。
+
+    性能约定：
+      - 若 PNG 本身就是单通道 "L" 模式（cryptomatte 输出即如此），直接读取为
+        二维 uint8 数组（一次复制），不做 RGBA 转换——避免整张图 ×4 的临时数组。
+      - 只有输入确实为多通道图像时，才读取指定通道。
+      - 使用上下文管理器管理 PIL 资源，退出前复制一次使数组拥有独立缓冲。
     """
     from PIL import Image
 
-    img = Image.open(str(path))
-    if channel in ("r", "g", "b", "a"):
-        rgba = img.convert("RGBA")
-        idx = {"r": 0, "g": 1, "b": 2, "a": 3}[channel]
-        arr = np.asarray(rgba, dtype=np.uint8)[:, :, idx]
-    else:
-        arr = np.asarray(img.convert("L"), dtype=np.uint8)
-    return arr
+    idx = {"r": 0, "g": 1, "b": 2, "a": 3}.get(channel)
+    with Image.open(str(path)) as img:
+        mode = img.mode
+        if mode == "L":
+            if channel == "a":
+                # 单通道图无 alpha：转换为 RGBA 时 alpha 恒为 255（保留旧语义）
+                return np.full((img.size[1], img.size[0]), 255, dtype=np.uint8)
+            # 单通道：R=G=B=L，任意 r/g/b/gray 通道取值相同 → 直接读二维数组
+            return np.array(img, dtype=np.uint8)
+        if idx is not None:
+            if mode == "RGBA":
+                arr = np.array(img, dtype=np.uint8)
+            else:
+                arr = np.array(img.convert("RGBA"), dtype=np.uint8)
+            return arr[:, :, idx]
+        # gray/l：转灰度单通道
+        return np.array(img.convert("L"), dtype=np.uint8)
 
 
 def quantize_mask_pixels(
@@ -65,12 +91,22 @@ def quantize_mask_pixels(
 
     量化值 = round((v - id_offset) / id_scale)，用于吸收抗锯齿边缘混叠、
     以及材质把 stencil 乘了 id_scale / 加了 id_offset 的情形。
+
+    性能约定：
+      - 默认 id_scale=1.0 / id_offset=0.0 且输入已是整数（cryptomatte 输出的
+        uint8 实例 ID 即如此）时，直接返回原数组（零复制），不转 float64/int64。
+      - 必须量化时优先使用 float32 中间计算（默认路径），仅在非默认
+        scale/offset 的罕见路径保留 float64 以与历史实现逐位一致。
+      - 返回值均为整数类型（uint8 或 int64），下游 == 比较与 bincount 均可直接用。
     """
     if id_scale != 1.0 or id_offset != 0.0:
+        # 罕见路径：保留 float64，保证与历史实现逐位一致的量化结果
         vals = (mask_img.astype(np.float64) - id_offset) / id_scale
-    else:
-        vals = mask_img.astype(np.float64)
-    return np.rint(vals).astype(np.int64)
+        return np.rint(vals).astype(np.int64)
+    if np.issubdtype(mask_img.dtype, np.integer):
+        return mask_img
+    vals = np.rint(mask_img.astype(np.float32))
+    return vals.astype(np.int64)
 
 
 def decode_mask_pixels(
@@ -107,6 +143,79 @@ def mask_to_bbox(binary_mask: np.ndarray) -> Optional[Tuple[float, float, float,
         float(xs.max() + 1),
         float(ys.max() + 1),
     )
+
+
+# ── 单次扫描获取所有实例统计（避免对每个实体重复全图扫描）────────────
+
+@dataclass(frozen=True)
+class InstanceStats:
+    """单个 mask_id 的实例统计（由 compute_instance_stats 单次扫描一次性算出）。
+
+    bbox_xyxy 与 mask_to_bbox 约定一致：(xmin, ymin, xmax, ymax)，其中
+    xmax = max_x + 1、ymax = max_y + 1（左闭右开的连续区间）。
+    roi_slice 为 (row_slice, col_slice)，`mask_ids[roi_slice]` 恰好是该实体的
+    紧凑 ROI 视图，供多边形提取在 ROI 内而非整图进行。
+    """
+
+    mask_id: int
+    pixel_count: int
+    bbox_xyxy: Tuple[int, int, int, int]
+    roi_slice: Tuple[slice, slice]
+
+    @property
+    def x0(self) -> int:
+        return self.bbox_xyxy[0]
+
+    @property
+    def y0(self) -> int:
+        return self.bbox_xyxy[1]
+
+    @property
+    def x1(self) -> int:
+        return self.bbox_xyxy[2]
+
+    @property
+    def y1(self) -> int:
+        return self.bbox_xyxy[3]
+
+
+def compute_instance_stats(
+    mask_ids: np.ndarray,
+    max_mask_id: int = 11,
+) -> Dict[int, InstanceStats]:
+    """单次扫描标签图，返回所有实例的 {mask_id: InstanceStats}。
+
+    - 像素数：np.bincount 一次统计全部 mask_id。
+    - bbox / ROI：只对前景像素（非 0）做一次 nonzero，再按出现过的 mask_id
+      在稀疏坐标数组上做 min/max 聚合——绝不为每个实体做一次全图扫描。
+    - 只生成实际出现的 mask_id 条目；完全不可见的实体（0 像素）不生成条目
+      （调用方据此判断 not_visible）。
+    """
+    if max_mask_id < 1:
+        return {}
+    counts = np.bincount(mask_ids.ravel(), minlength=max_mask_id + 1)
+    ys, xs = np.nonzero(mask_ids)
+    if xs.size == 0:
+        return {}
+    vals = mask_ids[ys, xs]
+    result: Dict[int, InstanceStats] = {}
+    # 只处理出现过的 mask_id（1..max_mask_id），跳过背景 0
+    present = np.nonzero(counts)[0]
+    for mid in present:
+        if mid == 0 or mid > max_mask_id:
+            continue
+        sel = vals == mid
+        minx = int(xs[sel].min())
+        maxx = int(xs[sel].max()) + 1
+        miny = int(ys[sel].min())
+        maxy = int(ys[sel].max()) + 1
+        result[int(mid)] = InstanceStats(
+            mask_id=int(mid),
+            pixel_count=int(counts[mid]),
+            bbox_xyxy=(minx, miny, maxx, maxy),
+            roi_slice=(slice(miny, maxy), slice(minx, maxx)),
+        )
+    return result
 
 
 # ── 连通域标记（8 连通，矢量泛洪）──────────────────────────────────────
@@ -339,12 +448,80 @@ def mask_to_polygons(
 
 # ── 多连通域 → 单 ring（YOLO 单多边形约束的派生近似）───────────────────
 
+def _cv2_contours(binary_mask: np.ndarray) -> List[Tuple[List[Tuple[int, int]], int]]:
+    """OpenCV 原生连通域 + 外轮廓提取，返回与旧实现逐点等价的结果。
+
+    返回 [(contour, pixel_area), ...]，contour 为像素坐标闭合路径（顺时针、
+    起点为最上最左像素），与 trace_outer_contour 的 Moore 跟踪结果**逐点一致**；
+    pixel_area 为该分量像素数（与 comp.sum() 一致）。按扫描顺序（最上行、
+    最左列）排列，与 connected_components 的返回顺序一致。
+
+    cv2 的 findContours 返回逆时针路径（从同一起点出发，方向相反）；反转并
+    旋转到最上最左起点后，即得到 Moore 顺时针路径。已验证多形状逐点等价。
+    """
+    b8 = binary_mask.astype(np.uint8)
+    n, labels, stats, _ = _cv2.connectedComponentsWithStats(b8, connectivity=8)
+    if n <= 1:
+        return []
+    cnts, _ = _cv2.findContours(b8, _cv2.RETR_EXTERNAL, _cv2.CHAIN_APPROX_NONE)
+    out: List[Tuple[List[Tuple[int, int]], int]] = []
+    for c in cnts:
+        pts = c.reshape(-1, 2)
+        if len(pts) < 3:
+            continue
+        lbl = int(labels[int(pts[0][1]), int(pts[0][0])])
+        area = int(stats[lbl][4])
+        r = pts[::-1]
+        xs = r[:, 0].astype(np.int64)
+        ys = r[:, 1].astype(np.int64)
+        i = int(np.lexsort((xs, ys))[0])
+        r = np.concatenate([r[i:], r[:i]])
+        out.append(([(int(x), int(y)) for x, y in r], area))
+    out.sort(key=lambda t: (t[0][0][1], t[0][0][0]))
+    return out
+
+
+def _contour_bbox(contour: Sequence[Tuple[float, float]]):
+    """轮廓像素 → pixel-tight bbox（与 mask_to_bbox(comp) 等价，无需分量全图）。"""
+    xs = [p[0] for p in contour]
+    ys = [p[1] for p in contour]
+    if not xs:
+        return None
+    return (min(xs), min(ys), max(xs) + 1.0, max(ys) + 1.0)
+
+
+def _mask_to_polygons_cv2(binary_mask, tolerance=1.0, max_points=64):
+    """cv2 快速路径：连通域/轮廓交给 OpenCV 原生实现，RDP/抽样保留纯 Python
+    （两者对 ≤数百点轮廓都很快，且保证与旧实现逐点一致）。"""
+    polys = []
+    areas = []
+    for contour, area in _cv2_contours(binary_mask):
+        if len(contour) < 3:
+            continue
+        simp = rdp_simplify(contour, tolerance)
+        simp = cap_polygon_points(simp, max_points)
+        if len(simp) < 3:
+            bb = _contour_bbox(contour)
+            if bb is not None:
+                xmin, ymin, xmax, ymax = bb
+                simp = [(xmin, ymin), (xmax, ymin), (xmax, ymax), (xmin, ymax)]
+        if len(simp) >= 3:
+            polys.append(simp)
+            areas.append(area)
+    return polys, areas
+
+
 def mask_to_polygons_with_areas(binary_mask, tolerance=1.0, max_points=64):
     """mask_to_polygons 的变体：同时返回每个多边形的连通域像素数。
 
     返回 (polys, areas)，两者同序一一对应；mask_to_polygons 跳过的极小
     连通域不计入。
+
+    优先使用 OpenCV 原生实现（connectedComponents + findContours，输出与旧
+    实现逐点等价）；OpenCV 不可用时回退到纯 Python 泛洪 + Moore 跟踪。
     """
+    if _HAS_CV2:
+        return _mask_to_polygons_cv2(binary_mask, tolerance, max_points)
     polys = []
     areas = []
     for comp in connected_components(binary_mask):

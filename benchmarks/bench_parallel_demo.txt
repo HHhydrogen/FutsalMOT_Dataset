@@ -1,0 +1,14 @@
+=== ALL CAMERAS (avg per repeat) ===
+  cryptomatte-to-mask :    2.564 s
+  annotate-masks      :    0.894 s
+  validate-annotations:    1.531 s
+  pipeline(total)     :    4.989 s
+  annotate compute breakdown (serial semantics):
+    mask_read       0.096 s
+    quantize        0.464 s
+    bbox_count      0.003 s
+    polygon         0.655 s
+    sum             1.218 s
+  frames              : 10
+  fps (pipeline)      :    2.004
+  peak_rss            :   61.241 MB

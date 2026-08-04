@@ -26,6 +26,7 @@ mask 则重新解码计算，结果一致。
 import json
 import math
 import os
+import shutil
 import sys
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
@@ -120,26 +121,47 @@ def annotate_masks_dir(
     chunk_size: int = 0,
     formats: str = "all",
     no_segmentation: bool = False,
+    clean_stale: bool = True,
 ) -> int:
     """对输出目录下所有 camera 子目录执行 mask → 标注 转换。返回退出码（0 成功 / 1 失败）。
 
-    workers：0=自动，1=串行，>1=相机级/帧级多进程并行（输出逐字节确定）。
-    chunk_size：>0 时按该帧数把单相机的帧切成连续 chunk（相机数少于 workers 时用）。
+    workers：0=自动（min(相机数, cpu//2)），1=串行，>1=多进程并行。并行策略：
+      - 多相机且相机数 >= worker 数 → 相机级并行；
+      - 相机数 < worker 数 → 剩余并行度用于相机内帧分块；
+      - 单相机 + workers>1 → 按连续帧区间分块并行（绝不退回串行）。
+    输出确定，串行/并行/不同 worker 数结果一致（worker 只计算，主进程统一
+    按 frame_index 升序合并、原子写盘）。
+    chunk_size：>0 时按该帧数切相机内帧为连续 chunk；==0 时自动按 workers 分布。
     formats：all/mot/yolo-det/yolo-seg/json 或逗号组合，控制写哪些派生产物
-      （annotations.jsonl 总是写入）。
+      （annotations.jsonl 总是核心输出）。
     no_segmentation：跳过轮廓/polygon/桥接/质量检查，segmentation=null，不生成
       labels/seg/；bbox、像素数、MOT、YOLO Det 正常生成。
+    clean_stale：默认 True。清理与当前 --formats 不符的陈旧派生产物
+      （gt/gt.txt、labels/det、labels/seg），保证目录反映本次运行的选择；
+      --no-clean-stale 保留旧文件（可能残留，见 README）。
     """
     cam_dirs = _camera_dirs(annotation_dir)
     if not cam_dirs:
         print(f"ERROR: {annotation_dir} 下没有 camera 子目录（缺少 camera.json）")
         return 1
     fmt = _parse_formats(formats)
-    nworkers = _resolve_workers(workers, len(cam_dirs))
     if no_segmentation:
         fmt.discard(_FORMAT_YOLO_SEG)
-
-    if nworkers <= 1 or len(cam_dirs) <= 1:
+    config = AnnotationConfig(
+        mask_channel=mask_channel,
+        include_ball=include_ball,
+        polygon_tolerance_px=polygon_tolerance_px,
+        max_polygon_points=max_polygon_points,
+        id_scale=id_scale,
+        id_offset=id_offset,
+        formats=frozenset(fmt),
+        no_segmentation=no_segmentation,
+        clean_stale=clean_stale,
+    )
+    nworkers = _resolve_workers(workers, len(cam_dirs))
+    tasks = build_annotation_tasks(cam_dirs, nworkers, chunk_size, config)
+    if not tasks:
+        # 串行：直接调用 _annotate_camera
         failures = 0
         for cam_dir in cam_dirs:
             try:
@@ -153,6 +175,7 @@ def annotate_masks_dir(
                     id_offset=id_offset,
                     formats=fmt,
                     no_segmentation=no_segmentation,
+                    clean_stale=clean_stale,
                 )
             except Exception as e:
                 print(f"  ERROR: {cam_dir.name}: {e}")
@@ -165,44 +188,22 @@ def annotate_masks_dir(
         print("annotate-masks 完成")
         return 0
 
-    # 并行：相机级 + 相机内帧分块
+    # 并行：ProcessPoolExecutor 跑任务，主进程统一合并写盘
     failures = 0
-    n_cameras = len(cam_dirs)
-    per_cam_chunks = max(1, nworkers // n_cameras)
-    opts = _SliceOpts(
-        mask_channel=mask_channel,
-        include_ball=include_ball,
-        polygon_tolerance_px=polygon_tolerance_px,
-        max_polygon_points=max_polygon_points,
-        id_scale=id_scale,
-        id_offset=id_offset,
-        formats=frozenset(fmt),
-        no_segmentation=no_segmentation,
-    )
-    tasks: List[tuple] = []
-    for cam_dir in cam_dirs:
-        nf = _annotation_line_count(cam_dir)
-        if nf <= 0:
-            # 空 annotations.jsonl：仍生成任务（(0,0) 切片返回空帧），保证与串行
-            # 一致的「空产物」写入（annotations.jsonl / mask_config / 空 MOT / YOLO）。
-            tasks.append((str(cam_dir), (0, 0), opts))
-            continue
-        if per_cam_chunks <= 1:
-            tasks.append((str(cam_dir), (0, nf), opts))
-        else:
-            step = chunk_size if chunk_size > 0 else max(1, math.ceil(nf / per_cam_chunks))
-            for start in range(0, nf, step):
-                tasks.append((str(cam_dir), (start, min(start + step, nf)), opts))
-
     with ProcessPoolExecutor(max_workers=nworkers) as ex:
-        results = list(ex.map(_annotate_slice_task, tasks))
+        try:
+            results = list(ex.map(_annotate_slice_task, tasks))
+        except Exception as e:
+            # 取消未完成任务并清理
+            ex.shutdown(wait=False, cancel_futures=True)
+            print(f"ERROR: annotate-masks 并行执行失败: {e}")
+            return 1
 
     # 按 camera 合并：同一相机的各 chunk 按起点排序拼接，再写最终产物
-    merged: Dict[str, List[Tuple[int, List[dict]]]] = {}
-    for (cam_str, (start, _end), _o), upgraded in zip(tasks, results):
-        merged.setdefault(cam_str, []).append((start, upgraded))
-    for cam_str, chunks in merged.items():
-        cam_dir = Path(cam_str)
+    merged: Dict[Path, List[Tuple[int, List[dict]]]] = {}
+    for task, upgraded in zip(tasks, results):
+        merged.setdefault(task.camera_dir, []).append((task.start_index, upgraded))
+    for cam_dir, chunks in merged.items():
         if not (cam_dir / "mask").exists():
             # 与串行 _annotate_camera 一致：无 mask/ 目录则跳过（保持几何 fallback）
             continue
@@ -213,9 +214,9 @@ def annotate_masks_dir(
         try:
             width, height = _camera_size(cam_dir)
             ok = _write_annotate_outputs(
-                cam_dir, all_frames, width, height, opts.include_ball, opts.mask_channel,
-                opts.polygon_tolerance_px, opts.max_polygon_points,
-                opts.id_scale, opts.id_offset, opts.formats,
+                cam_dir, all_frames, width, height, config.include_ball, config.mask_channel,
+                config.polygon_tolerance_px, config.max_polygon_points,
+                config.id_scale, config.id_offset, config.formats, config.clean_stale,
             )
         except Exception as e:
             print(f"  ERROR: {cam_dir.name}: {e}")
@@ -233,11 +234,12 @@ def _annotate_camera(cam_dir: Path, mask_channel: str, include_ball: bool,
                      polygon_tolerance_px: float, max_polygon_points: int,
                      id_scale: float, id_offset: float,
                      formats: Optional[Set[str]] = None,
-                     no_segmentation: bool = False) -> bool:
+                     no_segmentation: bool = False,
+                     clean_stale: bool = True) -> bool:
     """转换单个 camera 目录（串行路径）。返回是否成功（无 mask 目录也算跳过成功）。
 
-    formats 为 _parse_formats 解析出的集合（None = 全部格式）。输出逐字节确定，
-    与并行路径一致。
+    formats 为 _parse_formats 解析出的集合（None = 全部格式）。输出确定，
+    与并行路径一致；clean_stale=True 时清理与 formats 不符的陈旧派生产物。
     """
     if formats is None:
         formats = set(_ALL_FORMATS)
@@ -277,6 +279,7 @@ def _annotate_camera(cam_dir: Path, mask_channel: str, include_ball: bool,
     _write_annotate_outputs(
         cam_dir, upgraded, width, height, include_ball, mask_channel,
         polygon_tolerance_px, max_polygon_points, id_scale, id_offset, formats,
+        clean_stale=clean_stale,
     )
 
     print(
@@ -346,6 +349,43 @@ def _upgrade_one_frame(frame: dict, mask_dir: Path, width: int, height: int,
     return frame, True
 
 
+def _remove_tree(path: Path) -> None:
+    """安全删除已知派生产物目录/文件。对符号链接与不存在路径不做任何操作。"""
+    if path.is_symlink() or not path.exists():
+        return
+    if path.is_dir():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+
+
+def _remove_quietly(path: Path) -> None:
+    """安全删除单个已知派生产物文件（符号链接不删，不存在忽略）。"""
+    try:
+        if path.is_file() and not path.is_symlink():
+            path.unlink()
+    except FileNotFoundError:
+        pass
+
+
+def _clean_stale_outputs(cam_dir: Path, formats: Set[str]) -> None:
+    """清理与当前 --formats 不符的陈旧派生产物，保证目录反映本次运行的选择。
+
+    只删除 annotate-masks 自己生成的产物：
+      - 未选 mot      → 删 gt/gt.txt（seqinfo.ini 由 UE 侧生成且 validator 依赖，不删）；
+      - 未选 yolo-det → 删 labels/det/；
+      - 未选 yolo-seg → 删 labels/seg/。
+    annotations.jsonl（核心输出）、camera.json、mask/、mask_config.json 永不删除；
+    不会递归删除未知用户文件，不会跟随符号链接。
+    """
+    if _FORMAT_MOT not in formats:
+        _remove_quietly(cam_dir / "gt" / "gt.txt")
+    if _FORMAT_YOLO_DET not in formats:
+        _remove_tree(cam_dir / "labels" / "det")
+    if _FORMAT_YOLO_SEG not in formats:
+        _remove_tree(cam_dir / "labels" / "seg")
+
+
 def _write_annotate_outputs(
     cam_dir: Path,
     frames: List[dict],
@@ -358,11 +398,15 @@ def _write_annotate_outputs(
     id_scale: float,
     id_offset: float,
     formats: Set[str],
+    clean_stale: bool = True,
 ) -> None:
     """写 annotations.jsonl + mask_config.json +（按 formats）MOT / YOLO det / YOLO seg。
 
-    串行与并行路径共用，保证同一份 frames 得到逐字节一致的产物。
+    串行与并行路径共用，保证同一份 frames 得到确定性的产物。
+    clean_stale=True 时先清理与 formats 不符的陈旧派生产物，再写当前产物。
     """
+    if clean_stale:
+        _clean_stale_outputs(cam_dir, formats)
     ann_path = cam_dir / "annotations.jsonl"
     write_jsonl_atomic(ann_path, frames)
     write_json_atomic(
@@ -392,8 +436,11 @@ def _write_annotate_outputs(
 
 
 @dataclass(frozen=True)
-class _SliceOpts:
-    """并行任务的不变参数（可 pickle，Windows spawn 安全）。"""
+class AnnotationConfig:
+    """annotate-masks 的不变参数（可 pickle，Windows spawn 安全）。
+
+    一个配置实例贯穿整批任务，保证所有 worker 使用完全相同的解码/导出参数。
+    """
 
     mask_channel: str
     include_ball: bool
@@ -403,25 +450,112 @@ class _SliceOpts:
     id_offset: float
     formats: frozenset
     no_segmentation: bool
+    clean_stale: bool
 
 
-def _annotate_slice_task(task: tuple) -> List[dict]:
-    """进程池 worker：处理 (cam_dir, (start, end), _SliceOpts)，返回升级后的帧列表。
+@dataclass(frozen=True)
+class AnnotationTask:
+    """一个并行任务：处理某个 camera 的连续帧区间 [start_index, end_index)。"""
 
-    模块级函数（可 pickle）；只读 mask/ 与 annotations.jsonl，不写任何文件——
-    最终产物由主进程统一合并排序后原子写入（保证确定性与幂等）。
+    camera_dir: Path
+    start_index: int
+    end_index: int
+    config: AnnotationConfig
+
+
+def _chunk_counts(n_items: int, n_chunks: int) -> List[int]:
+    """把 n_chunks 个任务尽量均匀地分给 n_items 个项（每项至少 1 个）。
+
+    返回长度 n_items 的列表，和为 n_chunks（当 n_items <= n_chunks 时）。
+    例如 _chunk_counts(4, 6) == [2, 2, 1, 1]。
     """
-    cam_str, (start, end), opts = task
-    cam_dir = Path(cam_str)
+    if n_items <= 0:
+        return []
+    if n_items >= n_chunks:
+        return [1] * n_items
+    base = n_chunks // n_items
+    rem = n_chunks % n_items
+    return [base + (1 if i < rem else 0) for i in range(n_items)]
+
+
+def _split_range(n: int, n_chunks: int) -> List[Tuple[int, int]]:
+    """把 [0, n) 切成 n_chunks 个连续区间（0 基，前多后少，保证不丢/不重帧）。"""
+    if n <= 0:
+        return []
+    n_chunks = max(1, min(n_chunks, n))
+    base = n // n_chunks
+    rem = n % n_chunks
+    out: List[Tuple[int, int]] = []
+    start = 0
+    for i in range(n_chunks):
+        size = base + (1 if i < rem else 0)
+        out.append((start, start + size))
+        start += size
+    return out
+
+
+def build_annotation_tasks(
+    camera_dirs: List[Path],
+    workers: int,
+    chunk_size: int,
+    config: AnnotationConfig,
+) -> List[AnnotationTask]:
+    """统一生成 annotate-masks 的并行任务列表。
+
+    并行策略（串行由调用方处理，本函数 workers<=1 时返回 []）：
+      1. 多相机且相机数 >= worker 数 → 相机级并行（每相机 1 个任务）；
+      2. 相机数 < worker 数 → 剩余并行度用于帧分块（总任务数 ≈ workers）；
+      3. 单相机 + workers>1 → 帧分块并行（按连续帧区间）。
+    chunk_size>0 时用用户给定块大小；==0 时自动按 workers 分布。
+
+    约束：
+      - 不允许创建空任务（start_index == end_index 的任务仅在 annotations 为空时
+        为「写空产物」而创建一个 (0, 0) 任务）；
+      - 任务只携带相机路径与帧区间，不加载任何图像——worker 逐帧读取。
+    """
+    if workers <= 1:
+        return []
+    n_cameras = len(camera_dirs)
+    tasks: List[AnnotationTask] = []
+    if chunk_size > 0:
+        # 用户显式给定块大小：每相机按 chunk_size 切连续区间
+        for cam_dir in camera_dirs:
+            nf = _annotation_line_count(cam_dir)
+            if nf <= 0:
+                tasks.append(AnnotationTask(cam_dir, 0, 0, config))
+                continue
+            for start in range(0, nf, chunk_size):
+                tasks.append(AnnotationTask(cam_dir, start, min(start + chunk_size, nf), config))
+        return tasks
+    # 自动：把「至少一相机一任务」扩展到总共 ≈ max(cameras, workers) 个任务
+    counts = _chunk_counts(n_cameras, max(n_cameras, workers))
+    for cam_dir, n_chunks in zip(camera_dirs, counts):
+        nf = _annotation_line_count(cam_dir)
+        if nf <= 0:
+            tasks.append(AnnotationTask(cam_dir, 0, 0, config))
+            continue
+        for start, end in _split_range(nf, n_chunks):
+            tasks.append(AnnotationTask(cam_dir, start, end, config))
+    return tasks
+
+
+def _annotate_slice_task(task: AnnotationTask) -> List[dict]:
+    """进程池 worker：处理一个 AnnotationTask（相机 + 帧区间），返回升级后的帧列表。
+
+    模块级函数（可 pickle，Windows spawn 安全）；只读 mask/ 与 annotations.jsonl，
+    不写任何文件——最终产物由主进程统一合并排序后原子写入（保证确定性与幂等）。
+    异常向上传播，由调用方携带相机/帧区间上下文记录。
+    """
+    cam_dir = task.camera_dir
     width, height = _camera_size(cam_dir)
-    frames = _read_frames_slice(cam_dir, start, end)
+    frames = _read_frames_slice(cam_dir, task.start_index, task.end_index)
     mask_dir = cam_dir / "mask"
     upgraded: List[dict] = []
     for frame in frames:
         up, _used = _upgrade_one_frame(
-            frame, mask_dir, width, height, opts.mask_channel,
-            opts.polygon_tolerance_px, opts.max_polygon_points,
-            opts.id_scale, opts.id_offset, opts.no_segmentation,
+            frame, mask_dir, width, height, task.config.mask_channel,
+            task.config.polygon_tolerance_px, task.config.max_polygon_points,
+            task.config.id_scale, task.config.id_offset, task.config.no_segmentation,
         )
         upgraded.append(up)
     return upgraded

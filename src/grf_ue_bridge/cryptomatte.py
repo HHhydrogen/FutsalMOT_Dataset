@@ -182,6 +182,7 @@ def convert_render_mask_dir(
     png_compress_level: int = 1,
     workers: int = 0,
     chunk_size: int = 0,
+    max_frames: Optional[int] = None,
 ) -> Tuple[str, Dict[str, dict]]:
     """把 render_mask/*.exr 全部转成 mask/{frame_index:06d}.png。
 
@@ -189,9 +190,10 @@ def convert_render_mask_dir(
     返回 (status, per_frame)。status ∈ {"success","partial","failed"}。
 
     workers：0=自动（min(相机内帧数, max(1, cpu_count//2))），1=串行，>1=多进程
-    并行（每帧一个任务，写入独立 PNG，天然无写冲突）。输出逐字节确定：
+    并行（每帧一个任务，写入独立 PNG，天然无写冲突）。输出确定：
     per_frame 按 frame_index 升序组装，与并行与否无关。
     chunk_size：传给 ProcessPoolExecutor.map 的批大小（>0 时），控制每 worker 一批任务数。
+    max_frames：>0 时只转换前 max_frames 个 annotation 帧（smoke / benchmark 截断用）。
     """
     keep_indices = select_rendered_frame_indices(num_steps, source_step_seconds, playback_fps)
     # 解析 .exr 帧号
@@ -203,6 +205,8 @@ def convert_render_mask_dir(
     if not rendered:
         return "failed", {}
     mapping_ann = map_rendered_to_annotation(sorted(rendered.keys()), keep_indices)
+    if max_frames is not None and max_frames > 0:
+        mapping_ann = dict(list(mapping_ann.items())[:max_frames])
     plan = _resolve_actor_plan(mapping)
     if workers == 0:
         workers = min(max(1, len(mapping_ann)), max(1, _cpu_count() // 2))

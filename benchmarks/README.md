@@ -45,5 +45,16 @@
 | annotate-masks 串行 ≥2× | **82×**（episode_demo）/ **~90×**（episode_0001） |
 | 四相机并行端到端 ≥3× | **3.47×**（episode_0001 pipeline） |
 | 仅 MOT/检测、关闭分割 ≥5× | **~9.6×** |
-| 峰值内存不随 worker 数无界增长 | 并行峰值 RSS 129 MB（≤ 串行 142 MB；worker 逐帧处理） |
-| 输出语义通过完整 regression | 串行/并行/不同 worker 数输出**逐字节一致**，full validation 通过 |
+| 峰值内存不随 worker 数无界增长 | 进程树峰值 RSS 随 worker 数以可解释方式增长，不出现任务堆积 |
+| 输出语义通过完整 regression | 串行/并行/不同 worker 数文本产物一致，full validation 通过 |
+
+## 兼容性声明
+
+> 默认输出在**数据语义和解码像素层面**向后兼容：mask 解码像素、bbox、
+> visible_pixel_count、in_frame、MOT、YOLO 和 JSON 语义一致。当前优化版在
+> **相同配置**下文本产物与 mask 保持确定性。**PNG / EXR 等压缩二进制文件不保证
+> 与旧版本逐字节相同**——压缩等级、Pillow / zlib / OpenEXR 版本都可能改变文件字节，
+> 尽管解码后的像素一致。
+
+进程树 RSS 限制：进程 RSS 存在共享内存页重复计数问题，进程树 RSS 是各进程 RSS 的
+求和，可能重复计算共享页，主要用于比较相同环境下不同 worker 数的相对趋势。

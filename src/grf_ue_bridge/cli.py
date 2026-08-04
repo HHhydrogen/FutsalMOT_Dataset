@@ -263,13 +263,19 @@ def annotate_masks(
         help="跳过实例分割多边形（轮廓/polygon/桥接/质量检查），不生成 labels/seg/；"
              "bbox、像素数、MOT、YOLO Det 正常生成",
     ),
+    clean_stale: bool = typer.Option(
+        True, "--clean-stale/--no-clean-stale",
+        help="清理与当前 --formats 不符的陈旧派生产物（gt/gt.txt、labels/det、labels/seg），"
+             "保证目录反映本次运行的选择；默认开启。--no-clean-stale 保留旧文件",
+    ),
 ):
     """从 Instance-ID Mask 计算 pixel-tight bbox / 分割标注，覆盖写 annotations.jsonl 并导出 MOT / YOLO。
 
     bbox 由 mask 像素 min/max 直接计算（primary GT），原几何 bbox 保留在
     geometry_bbox_* 字段作为 fallback。原始 mask/*.png 永不修改。
 
-    快速模式示例（仅 MOT + 检测、跳过分割）：
+    并行策略：多相机优先相机级并行；单相机（或相机数少于 worker 数）自动按连续
+    帧区间分块并行。快速模式示例（仅 MOT + 检测、跳过分割）：
       grf-ue annotate-masks <dir> --formats json,mot,yolo-det --no-segmentation --workers 4
     """
     from .mask_annotator import annotate_masks_dir
@@ -286,6 +292,7 @@ def annotate_masks(
         chunk_size=chunk_size,
         formats=formats,
         no_segmentation=no_segmentation,
+        clean_stale=clean_stale,
     )
     if exit_code != 0:
         typer.echo("ANNOTATE MASKS FAILED", err=True)

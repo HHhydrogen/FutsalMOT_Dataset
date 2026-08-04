@@ -540,12 +540,12 @@ uv run grf-ue validate-annotations G:/FutsalMOT_Dataset
 
 三个后处理命令（`cryptomatte-to-mask` / `annotate-masks` / `validate-annotations`）已针对 Windows 多核优化：
 
-- **多进程并行**：`--workers N`（`0`=自动，`1`=串行，`>1`=多进程）。自动值 = `min(相机数, cpu//2)`；相机数少于 worker 数时自动按 `--chunk-size` 对相机内帧分块。**输出逐字节确定**，与串行完全一致（worker 只做计算，主进程统一排序合并后原子写盘）。
+- **多进程并行**：`--workers N`（`0`=自动，`1`=串行，`>1`=多进程）。**多相机优先相机级并行**；**单相机（或相机数少于 worker 数）自动按连续帧区间分块并行**（绝不退回串行），`--chunk-size` 可显式给定块大小。worker 只做计算，主进程统一按 `frame_index` 升序合并、原子写盘——**相同配置下文本产物与 mask 逐字节确定**，与 worker 数无关。
 - **NumPy 向量化单次扫描**：每帧只读/量化一次 mask，`np.bincount` + 稀疏坐标 min/max 一次拿到所有实例的 pixel_count / bbox / ROI。
 - **OpenCV 原生连通域/轮廓**：`cv2.connectedComponentsWithStats` + `findContours`（反转对齐 Moore 点序，输出与旧实现逐点一致）+ 只在实例 ROI 内处理。无 cv2 时自动回退纯 Python（更慢）。
 - **快速 Mask 读取**：单通道 `L` PNG 直接读二维 uint8（不做 RGBA 转换）；整数实例 ID 量化零复制透传。
 - **Cryptomatte 位模式匹配**：float32 Actor ID 按位解释为 uint32 后精确整数比较（bit-exact，绝无浮点 ID 混淆）。
-- **PNG 压缩等级**：`--png-compress-level 0–9`（默认 1，性能推荐；像素值不变）。
+- **PNG 压缩等级**：`--png-compress-level 0–9`（默认 1，性能推荐；解码像素值不变）。
 
 ### 推荐的 worker 数
 
@@ -553,7 +553,7 @@ uv run grf-ue validate-annotations G:/FutsalMOT_Dataset
 |------|------|
 | 默认（自动） | 不传 `--workers`：按 `min(相机数, cpu//2)` 自动选择 |
 | 4 相机、8+ 核 | `--workers 4`（相机级并行）或 `--workers 8`（含帧分块） |
-| 单相机大 episode | `--workers <cpu//2>` + `--chunk-size 50`（帧级并行） |
+| **单相机大 episode** | **`--workers <cpu//2>`（帧级并行）+ `--chunk-size 50` 可选**；不再退回串行 |
 | 低内存设备 / 串行调试 | `--workers 1`（峰值内存最低） |
 
 ### 磁盘建议
@@ -575,14 +575,30 @@ uv run grf-ue annotate-masks <episode_dir> --workers 4 --formats all
 uv run grf-ue annotate-masks <episode_dir> `
   --workers 4 `
   --formats json,mot,yolo-det `
-  --no-segmentation
+  --no-segmentation `
+  --clean-stale
 ```
 
-`--formats` 可选：`all` / `mot` / `yolo-det` / `yolo-seg` / `json`，逗号组合。`annotations.jsonl` 总是写入。
+`--formats` 可选：`all` / `mot` / `yolo-det` / `yolo-seg` / `json`，逗号组合。`annotations.jsonl` 始终是核心输出。
+
+### 陈旧派生产物清理（--clean-stale）
+
+`annotate-masks` 是派生产物生成命令，运行后目录应准确反映本次选择的 `--formats`。默认 `--clean-stale`：
+
+- 未选 `mot` → 删除 `gt/gt.txt`（`seqinfo.ini` 由 UE 侧生成且 validator 依赖，**不删**）；
+- 未选 `yolo-det` → 删除 `labels/det/`；
+- 未选 `yolo-seg` → 删除 `labels/seg/`；
+- `annotations.jsonl`、`camera.json`、`mask/`、`mask_config.json` 永不删除。
+
+只删除已知派生产物，不跟随符号链接，不递归删除未知用户文件。`--no-clean-stale` 保留旧文件（可能残留与当前命令声明不一致的目录）。该流程幂等：`formats=all` → `json,mot`（清理）→ `formats=all` 可恢复全部派生产物。
 
 ### PNG 压缩等级
 
 `cryptomatte-to-mask --png-compress-level 1`（默认）在像素不变的前提下显著加快写入；`0` 无压缩最快但文件更大；`9` 最小但最慢。不同等级解码后的 mask 逐像素一致（有测试保证）。
+
+### 兼容性声明（重要）
+
+> 默认输出在**数据语义和解码像素层面**向后兼容（mask 解码像素、bbox、visible_pixel_count、in_frame、MOT、YOLO、JSON 语义一致）。当前优化版在**相同配置**下文本产物与 mask 保持确定性。**PNG / EXR 等压缩二进制文件不保证与旧版本逐字节相同**——压缩等级、Pillow / zlib / OpenEXR 版本都可能改变文件字节，尽管解码后的像素一致。
 
 ### full vs quick validation
 
@@ -603,10 +619,28 @@ uv run grf-ue validate-annotations <episode_dir> --workers 4 --validation-level 
 uv run python scripts/benchmark_postprocess.py `
   --input G:/FutsalMOT_Dataset/episode_demo `
   --repeat 3 `
-  --workers 4
+  --workers 4 `
+  --stage-img1
+
+# 大数据集：cryptomatte/annotate 在 staging 子集测量，validate 在真实输入上只读运行
+uv run python scripts/benchmark_postprocess.py `
+  --input G:/FutsalMOT_Dataset/episode_0001 `
+  --repeat 1 `
+  --workers 8 `
+  --validate-on-input
 ```
 
-按命令报告 `cryptomatte-to-mask` / `annotate-masks` / `validate-annotations` 总耗时、annotate 的逐阶段分解、峰值 RSS（psutil）、帧数与 FPS。样例数据（episode_demo，10 帧/相机，4 相机，单机 20 核）实测：
+按命令报告 `cryptomatte-to-mask` / `annotate-masks` / `validate-annotations` 总耗时、
+各阶段处理帧数与 FPS、camera-frame 总量（expected_total = Σ 每相机帧数）、
+完整进程树峰值 RSS（root + 子进程，psutil 轮询）、以及结果元数据
+（git commit / timestamp / python / platform / cpu / workers 等）。
+每个阶段都校验执行状态与帧数：任一阶段不完整（cryptomatte 非 success、
+退出码非 0、帧数不匹配）则 benchmark 以非零码失败，绝不输出伪成功耗时。
+
+**进程树 RSS 限制**：进程 RSS 存在共享内存页重复计数问题，进程树 RSS 是各进程
+RSS 的求和，可能重复计算共享页，主要用于比较相同环境下不同 worker 数的相对趋势。
+
+样例数据（episode_demo，10 帧/相机，4 相机，单机 20 核）实测：
 
 | 命令 | baseline（优化前） | 优化后串行 | 优化后并行（4 worker） |
 |------|-------------------|-----------|------------------------|

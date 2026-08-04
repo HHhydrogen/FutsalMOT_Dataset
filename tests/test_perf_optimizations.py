@@ -321,16 +321,17 @@ class TestParallelDeterminism:
     def test_windows_multiprocessing_runs(self, tmp_path):
         # 直接在 pytest（Windows spawn）里触发 ProcessPoolExecutor，验证可正常执行
         from concurrent.futures import ProcessPoolExecutor
-        from grf_ue_bridge.mask_annotator import _SliceOpts, _annotate_slice_task
+        from grf_ue_bridge.mask_annotator import AnnotationConfig, AnnotationTask, _annotate_slice_task
         cam_dir = _make_camera(Path(tmp_path))
-        opts = _SliceOpts(
+        config = AnnotationConfig(
             mask_channel="r", include_ball=False, polygon_tolerance_px=1.0,
             max_polygon_points=64, id_scale=1.0, id_offset=0.0,
             formats=frozenset({"json", "mot", "yolo-det", "yolo-seg"}),
-            no_segmentation=False,
+            no_segmentation=False, clean_stale=True,
         )
+        task = AnnotationTask(camera_dir=cam_dir, start_index=0, end_index=2, config=config)
         with ProcessPoolExecutor(max_workers=2) as ex:
-            result = list(ex.map(_annotate_slice_task, [(str(cam_dir), (0, 2), opts)]))
+            result = list(ex.map(_annotate_slice_task, [task]))
         assert len(result[0]) == 2  # 2 帧升级成功
 
 

@@ -11,6 +11,7 @@ import typer
 from .config import ExportConfig
 from .exporter import export_episode
 from .grf_runner import run_episode
+from .seeds import derive_episode_seeds
 from .validator import validate_episode
 
 app = typer.Typer()
@@ -118,6 +119,11 @@ def export(
         "--output",
         help="episode 的输出目录",
     ),
+    seed: Optional[int] = typer.Option(
+        None,
+        "--seed",
+        help="覆盖配置文件的 root seed（优先级：CLI > 配置文件 > 默认值）",
+    ),
 ):
     """运行一个 GRF episode 并导出为 GRF-UE JSONL 格式。"""
     # 加载配置
@@ -130,8 +136,20 @@ def export(
         config_data = json.load(f)
     export_cfg = ExportConfig(**config_data)
 
+    # CLI --seed 覆盖配置文件的 seed（不修改磁盘上的配置文件）
+    if seed is not None and seed != export_cfg.seed:
+        export_cfg = export_cfg.model_copy(update={"seed": seed})
+
     typer.echo(f"Export config: {export_cfg.model_dump_json(indent=2)}")
     typer.echo(f"Running episode: scenario={export_cfg.scenario}, steps={export_cfg.num_steps}")
+
+    # 派生并打印完整种子信息（root / GRF game-engine / policy）
+    seeds = derive_episode_seeds(export_cfg.seed)
+    typer.echo(
+        f"Seed: root={seeds.root_seed}  "
+        f"grf_game_engine={seeds.grf_game_engine_seed}  "
+        f"policy={seeds.policy}"
+    )
 
     # 运行 episode
     result = run_episode(
@@ -168,6 +186,137 @@ def validate(
         typer.echo("VALIDATION FAILED", err=True)
         raise typer.Exit(exit_code)
     typer.echo("VALIDATION PASSED")
+
+
+@app.command("build-manifest")
+def build_manifest_cmd(
+    dataset_root: Path = typer.Argument(
+        ...,
+        help="数据集根目录（manifest 写入 <root>/dataset_manifest.json，校验和写入 <root>/checksums/）",
+    ),
+    episode: List[str] = typer.Option(
+        None,
+        "--episode",
+        help="要纳入的 episode id（可重复指定）。缺省只纳入满足合法 episode 结构（含 camera.json）的目录",
+    ),
+    dataset_id: str = typer.Option(
+        "futsalmot_local_v001",
+        "--dataset-id",
+        help="数据集标识（不进 fingerprint）",
+    ),
+    checksum_profile: str = typer.Option(
+        "final",
+        "--checksum-profile",
+        help="checksum profile：metadata / final（默认）/ all",
+    ),
+    workers: int = typer.Option(
+        4,
+        "--workers",
+        help="并行 hash worker 数（磁盘 I/O 瓶颈，保守默认 4）",
+    ),
+    hash_chunk_size_mb: int = typer.Option(
+        1,
+        "--hash-chunk-size-mb",
+        help="流式 SHA-256 的 chunk 大小（MB）",
+    ),
+    strict_duplicates: bool = typer.Option(
+        False,
+        "--strict-duplicates",
+        help="检测到重复轨迹时以非零退出码结束",
+    ),
+):
+    """构建数据集级 manifest（索引、校验和、去重检测、fingerprint）。"""
+    from .dataset_manifest import build_manifest
+
+    manifest = build_manifest(
+        dataset_root.resolve(),
+        episode_ids=episode,
+        dataset_id=dataset_id,
+        checksum_profile=checksum_profile,
+        workers=workers,
+        chunk_mb=hash_chunk_size_mb,
+    )
+    typer.echo(f"Manifest 构建完成: {dataset_root / 'dataset_manifest.json'}")
+    typer.echo(f"  dataset_id: {manifest.dataset_id}")
+    typer.echo(f"  episodes: {len(manifest.episodes)}")
+    for e in manifest.episodes:
+        typer.echo(
+            f"    {e.episode_id}: {e.camera_count} 相机, "
+            f"{e.frames_per_camera} 帧/相机, root_seed={e.root_seed}, "
+            f"trajectory={e.content_hashes.get('trajectory_hash', 'N/A')[:12]}"
+        )
+    typer.echo(f"  totals: rgb={manifest.totals.rgb_final} mask={manifest.totals.instance_mask} "
+               f"annotation_frames={manifest.totals.annotation_frames} "
+               f"raw_rgb={manifest.totals.raw_rgb} raw_exr={manifest.totals.raw_object_id_exr}")
+    typer.echo(f"  duplicate_seed_groups: {manifest.duplicate_seed_groups}")
+    typer.echo(f"  duplicate_trajectory_groups: {manifest.duplicate_trajectory_groups}")
+    typer.echo(f"  dataset_fingerprint: {manifest.dataset_fingerprint}")
+    for w in manifest.warnings:
+        typer.echo(f"  WARNING: {w}", err=True)
+    if manifest.duplicate_seed_groups:
+        typer.echo("  WARNING: possible duplicate seed/config combination", err=True)
+    if manifest.duplicate_trajectory_groups:
+        typer.echo("  WARNING: duplicate trajectory detected", err=True)
+    if strict_duplicates and manifest.duplicate_trajectory_groups:
+        typer.echo("  --strict-duplicates：存在重复轨迹，非零退出", err=True)
+        raise typer.Exit(1)
+
+
+@app.command("verify-manifest")
+def verify_manifest_cmd(
+    dataset_root: Path = typer.Argument(
+        ...,
+        help="数据集根目录",
+    ),
+    manifest: Optional[Path] = typer.Option(
+        None,
+        "--manifest",
+        help="manifest 路径（默认 <root>/dataset_manifest.json）",
+    ),
+    workers: int = typer.Option(
+        4,
+        "--workers",
+        help="并行校验 worker 数",
+    ),
+    hash_chunk_size_mb: int = typer.Option(
+        1,
+        "--hash-chunk-size-mb",
+        help="流式 SHA-256 的 chunk 大小（MB）",
+    ),
+    strict: bool = typer.Option(
+        False,
+        "--strict",
+        help="存在未记录的额外文件时也以非零退出码结束",
+    ),
+):
+    """校验 dataset manifest 与实际内容的一致性。"""
+    from .dataset_manifest import verify_manifest
+
+    result = verify_manifest(
+        dataset_root.resolve(),
+        manifest_path=manifest,
+        workers=workers,
+        chunk_mb=hash_chunk_size_mb,
+        strict_extra=strict,
+    )
+    typer.echo(f"verify-manifest: {'PASS' if result.exit_code == 0 else 'FAIL'} "
+               f"(checked={result.checked}, matched={result.matched}, "
+               f"missing={len(result.missing)}, size_mismatch={len(result.size_mismatch)}, "
+               f"hash_mismatch={len(result.hash_mismatch)}, extra={len(result.extra)})")
+    for w in result.warnings:
+        typer.echo(f"  WARNING: {w}", err=True)
+    for e in result.errors[:20]:
+        typer.echo(f"  ERROR: {e}", err=True)
+    for m in result.missing[:20]:
+        typer.echo(f"  MISSING: {m}", err=True)
+    for m in result.size_mismatch[:20]:
+        typer.echo(f"  SIZE-MISMATCH: {m}", err=True)
+    for m in result.hash_mismatch[:20]:
+        typer.echo(f"  HASH-MISMATCH: {m}", err=True)
+    for m in result.extra[:20]:
+        typer.echo(f"  EXTRA: {m}", err=True)
+    if result.exit_code != 0:
+        raise typer.Exit(result.exit_code)
 
 
 @app.command()

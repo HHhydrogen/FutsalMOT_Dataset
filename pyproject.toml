@@ -26,5 +26,12 @@ dev = [
     "pytest",
 ]
 
+[tool.pytest.ini_options]
+markers = [
+    "grf_integration: 真实 GRF 引擎集成测试（本地运行：uv run pytest -m grf_integration -q）",
+]
+# 默认不运行需要完整 GRF 引擎的集成测试；显式 -m grf_integration 覆盖
+addopts = ["-m", "not grf_integration"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/grf_ue_bridge"]

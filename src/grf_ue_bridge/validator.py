@@ -8,6 +8,8 @@ import sys
 from pathlib import Path
 from typing import List, Tuple
 
+from .seeds import SEED_POLICY, derive_seed
+
 
 class ValidationError(Exception):
     """验证失败时抛出。"""
@@ -60,6 +62,9 @@ def validate_episode(episode_dir: Path) -> int:
         errors.append(f"meta.schema is '{meta.get('schema')}', expected 'grf_ue_episode'")
     if meta.get("version") != 1:
         errors.append(f"meta.version is {meta.get('version')}, expected 1")
+
+    # 随机种子体系
+    _check_randomness(meta, errors)
 
     timing = meta.get("timing", {})
     expected_steps = timing.get("num_steps", 300)
@@ -187,6 +192,60 @@ def validate_episode(episode_dir: Path) -> int:
     print(f"  Source step seconds: {source_step}")
     print(f"  Field: {field_length}m x {field_width}m")
     return 0
+
+
+def _check_randomness(meta: dict, errors: List[str]) -> None:
+    """校验 meta.randomness（若有）并核对派生一致性。
+
+    - 无 randomness：legacy seed metadata（旧 episode），不伪装成已验证可复现。
+    - policy 非空、所有 seed 为合法整数。
+    - source.seed == randomness.root_seed。
+    - 当 policy 为当前 SEED_POLICY 时，子 seed 必须等于按 root_seed 派生结果；
+      其他 policy 版本无法用当前算法复验，仅检查字段合法性并提示。
+    """
+    randomness = meta.get("randomness")
+    source = meta.get("source", {})
+    if randomness is None:
+        print("  Note: meta.randomness 缺失（legacy seed metadata，未验证可复现）")
+        return
+
+    policy = randomness.get("policy")
+    if not isinstance(policy, str) or not policy:
+        errors.append("meta.randomness.policy 为空")
+        return
+
+    root = randomness.get("root_seed")
+    if not isinstance(root, int) or isinstance(root, bool) or not (0 <= root <= 0x7FFFFFFF):
+        errors.append(f"meta.randomness.root_seed 非法: {root!r}")
+        return
+
+    if source.get("seed") != root:
+        errors.append(
+            f"meta.source.seed ({source.get('seed')}) != "
+            f"meta.randomness.root_seed ({root})"
+        )
+
+    ns_map = {
+        "grf_game_engine_seed": "grf_game_engine",
+        "python_seed": "python",
+        "numpy_seed": "numpy",
+        "ue_visual_seed": "ue_visual",
+    }
+    for field, namespace in ns_map.items():
+        val = randomness.get(field)
+        if not isinstance(val, int) or isinstance(val, bool) or not (0 <= val <= 0x7FFFFFFF):
+            errors.append(f"meta.randomness.{field} 非法: {val!r}")
+            continue
+        if policy == SEED_POLICY:
+            expect = derive_seed(root, namespace)
+            if val != expect:
+                errors.append(
+                    f"meta.randomness.{field} ({val}) != 按 policy {policy!r} "
+                    f"从 root_seed {root} 派生 ({expect})"
+                )
+    if policy != SEED_POLICY:
+        print(f"  Note: seed policy {policy!r} 非当前 {SEED_POLICY!r}，"
+              "跳过子 seed 派生复验（字段合法性已检查）")
 
 
 def _validate_position(

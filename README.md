@@ -703,6 +703,27 @@ uv run python scripts/measure_run.py uv run grf-ue cryptomatte-to-mask <dir> --w
 
 > `render_summary.json` 对 Object ID EXR 的 mask 状态已修正：EXR 源统计对齐帧数并记 `mask_source="object_id_exr"`（mask/*.png 由 P1 生成），不再恒报 partial；`total_img1_frames`/`total_mask_frames` 分列统计。
 
+## 可复现性与数据集 Manifest
+
+详细文档见 [`docs/REPRODUCIBILITY_AND_MANIFEST.md`](docs/REPRODUCIBILITY_AND_MANIFEST.md)。
+
+**Seed 可复现**：`grf-ue export` 的 root seed 经 SHA-256 派生 `grf_game_engine`/`python`/`numpy`/`ue_visual` 子 seed，其中 `grf_game_engine_seed` 经 `other_config_options["game_engine_random_seed"]` **真正传入 GRF**（旧版本未传，用 `random.randint` 兜底不可复现）。同 seed 独立进程导出 `frames.jsonl` SHA-256 完全一致（集成测试 `-m grf_integration`）。`meta.json` 记录完整 `randomness` 与 policy；旧 episode 无该字段时标记为 legacy，不伪装可复现。
+
+```powershell
+uv run grf-ue export --config configs/mvp_builtin_5v5.json --output outputs/ep_s1001 --seed 1001
+```
+
+**Dataset manifest**：对明确指定的 episode 生成索引/逐文件校验和/重复轨迹检测/稳定 fingerprint，支持 `metadata`/`final`/`all` 三种 checksum profile：
+
+```powershell
+uv run grf-ue build-manifest G:/FutsalMOT_Dataset --episode episode_0001 --dataset-id futsalmot_v001 --checksum-profile final
+uv run grf-ue verify-manifest G:/FutsalMOT_Dataset   # 0=通过；1=内容不符/缺失；2=manifest/参数错误
+```
+
+- 输出：`dataset_root/dataset_manifest.json` + `checksums/<episode_id>.jsonl`（原子写，POSIX 相对路径，不含绝对路径/用户名）。
+- fingerprint 只由稳定内容计算，数据集整体移动后不变。
+- 重复 seed/配置、重复轨迹、不同 seed 同轨迹（seed 传播失败线索）均检测，默认警告、`--strict-duplicates`/`--strict` 可升级为非零退出。
+
 ## 当前阶段
 
 GRF → JSONL → Unreal Engine 回放 → RGB + Instance-ID Mask → mask-primary bbox / 实例分割 / MOT / YOLO 标注已跑通。以下功能**暂不包含**：

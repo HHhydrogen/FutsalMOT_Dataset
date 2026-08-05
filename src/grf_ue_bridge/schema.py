@@ -54,6 +54,23 @@ class SourceInfo(BaseModel):
     grf_marl_commit: str = ""
 
 
+class RandomnessInfo(BaseModel):
+    """episode 的随机种子体系（root seed 派生出的全部命名空间子 seed）。
+
+    只有 `grf_game_engine_seed` 真正传入 GRF 引擎；python/numpy 用于宿主进程
+    随机状态；ue_visual_seed 为未来 UE 视觉随机化预留（本轮仅记录）。
+    """
+
+    policy: str = Field("futsalmot_seed_v1", description="seed 派生算法版本标识")
+    root_seed: int = Field(..., description="用户提供的根 seed，应等于 source.seed")
+    grf_game_engine_seed: int = Field(
+        ..., description="真正传入 GRF 的 game_engine_random_seed"
+    )
+    python_seed: int = Field(..., description="Python 标准库 random seed")
+    numpy_seed: int = Field(..., description="NumPy random seed")
+    ue_visual_seed: int = Field(..., description="预留：未来 UE 视觉随机化 seed")
+
+
 class TimingInfo(BaseModel):
     """episode 的时序信息。"""
 
@@ -95,6 +112,13 @@ class Meta(BaseModel):
     version: int = 1
     episode_id: str = ""
     source: SourceInfo = Field(default_factory=SourceInfo)
+    randomness: Optional[RandomnessInfo] = Field(
+        None,
+        description=(
+            "随机种子体系（policy/root/子 seed）。旧 episode 可能缺失，"
+            "视为 legacy seed metadata，validator 不将其伪装为已验证可复现"
+        ),
+    )
     timing: TimingInfo
     field: FieldInfo = Field(default_factory=FieldInfo)
     entities: List[EntityDefinition] = Field(default_factory=list)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from pathlib import Path
 from typing import List
 
@@ -17,10 +18,12 @@ from .schema import (
     Frame,
     Meta,
     PlayerFrame,
+    RandomnessInfo,
     SourceInfo,
     TimingInfo,
     create_ball_entity,
 )
+from .seeds import derive_episode_seeds
 
 
 def _get_football_commit() -> str:
@@ -124,6 +127,16 @@ def export_episode(
         entities=entities,
     )
 
+    # 随机种子体系：优先用 run_episode 实际返回的 seeds，否则按 root seed 重新派生。
+    # source.seed 必须等于 randomness.root_seed。
+    if result.seeds is not None:
+        seeds = result.seeds
+    else:
+        seeds = derive_episode_seeds(config.seed)
+    meta.randomness = RandomnessInfo(**seeds.model_dump())
+    if meta.source.seed != seeds.root_seed:
+        meta.source.seed = seeds.root_seed
+
     # ── 写入 meta.json ────────────────────────────────────────
     meta_path = output_dir / "meta.json"
     with open(meta_path, "w", encoding="utf-8") as f:
@@ -164,6 +177,9 @@ def export_episode(
             f.write(frame.model_dump_json() + "\n")
     print(f"Wrote: {frames_path} ({len(frames)} lines)")
 
+    # ── provenance：快照实际使用的配置（供 manifest 做确定性 provenance）──
+    _write_provenance(config, output_dir)
+
     # ── 调试：按需导出完整原始观测 ───────────────────────────
     if config.dump_full_raw_observation:
         raw_path = output_dir / "raw_observations.jsonl"
@@ -171,6 +187,23 @@ def export_episode(
             for snapshot in result.snapshots:
                 f.write(json.dumps(snapshot.observation) + "\n")
         print(f"Wrote: {raw_path}")
+
+
+def _write_provenance(config: ExportConfig, output_dir: Path) -> None:
+    """把实际使用的导出配置与外部仓库锁文件快照到 <output>/provenance/。
+
+    供 dataset manifest 读取，避免「hash 当前仓库中看起来对应的配置却声称是
+    实际使用配置」的伪确定性。快照仅为记录，不参与 GRF 运行。
+    """
+    prov = output_dir / "provenance"
+    prov.mkdir(parents=True, exist_ok=True)
+    cfg_path = prov / "export_config.json"
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        f.write(config.model_dump_json(indent=2))
+    lock = Path("external_sources.lock.json")
+    if lock.exists():
+        shutil.copy2(lock, prov / "external_sources.lock.json")
+    print(f"Wrote: {cfg_path}（配置快照，供 manifest provenance）")
 
 
 def _build_frame(

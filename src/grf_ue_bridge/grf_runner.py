@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import random
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
+
+from .seeds import EpisodeSeeds, derive_episode_seeds
 
 
 @dataclass
@@ -29,6 +32,10 @@ class EpisodeResult:
     steps_left_at_start: int
     score: Tuple[int, int]
     snapshots: List[StepSnapshot] = field(default_factory=list)
+    seeds: Optional[EpisodeSeeds] = field(
+        default=None,
+        metadata={"doc": "实际使用的种子集合（含传入 GRF 的 game_engine_random_seed）"},
+    )
 
 
 _BUILTIN_AI_ACTION_INDEX = 19  # action_set='v2' 中的 action_builtin_ai
@@ -40,25 +47,48 @@ def create_env(scenario: str, seed: int, render: bool = False, **kwargs):
     使用 action_set='v2'，并只控制 1 名左队球员（动作恒为 builtin_ai），
     这样所有球员都使用内置 AI，而我们仍能拿到完整观测。
 
+    随机种子体系：从 root seed 派生命名空间子 seed，并：
+      - `game_engine_random_seed` 经 other_config_options 真正传入 GRF 引擎
+        （未设置时 gfootball 用 random.randint 兜底，非可复现）；
+      - Python 标准库 random 与 numpy 分别用派生 seed 设置（全局副作用，
+        属预期——episode 生成通常在专用进程内完成）。
+
     Args:
         scenario: GRF 场景名（例如 '5_vs_5'）。
-        seed: 随机种子。
+        seed: 随机根 seed。
         render: 是否渲染。
-        **kwargs: 传给 create_environment 的额外参数。
+        **kwargs: 传给 create_environment 的额外参数；其中
+            other_config_options 会被合并（本函数补充 action_set 与
+            game_engine_random_seed，不覆盖调用者已提供的同名键之外的选项）。
 
     Returns:
         一个 GRF 环境实例。
     """
     from gfootball.env import create_environment
 
+    root_seed = int(seed)
+    seeds = derive_episode_seeds(root_seed)
+
+    # 合并调用者的 other_config_options，但强制覆盖我们依赖的键
+    user_options = dict(kwargs.pop("other_config_options", None) or {})
+    other_config_options = {
+        **user_options,
+        "action_set": "v2",
+        "game_engine_random_seed": seeds.grf_game_engine_seed,
+    }
+
     # 移除用户传入的控制球员相关参数（我们强制使用 builtin_ai 模式）
     force_kwargs = {
         "number_of_left_players_agent_controls": 1,
         "number_of_right_players_agent_controls": 0,
-        "other_config_options": {"action_set": "v2"},
+        "other_config_options": other_config_options,
     }
     for k in force_kwargs:
         kwargs.pop(k, None)
+
+    # 明确设置 Python / NumPy 随机种子（全局副作用，见 docstring）
+    random.seed(seeds.python_seed)
+    np.random.seed(seeds.numpy_seed)
 
     env = create_environment(
         env_name=scenario,
@@ -94,9 +124,11 @@ def run_episode(
         **kwargs: 传给 create_environment 的额外参数。
 
     Returns:
-        包含所有捕获快照的 EpisodeResult。
+        包含所有捕获快照的 EpisodeResult（含实际使用的种子集合 seeds）。
     """
-    env = create_env(scenario, seed, render, **kwargs)
+    root_seed = int(seed)
+    seeds = derive_episode_seeds(root_seed)
+    env = create_env(scenario, root_seed, render, **kwargs)
     obs = env.reset()
     snapshots = []
 
@@ -133,11 +165,12 @@ def run_episode(
 
     return EpisodeResult(
         scenario=scenario,
-        seed=seed,
+        seed=root_seed,
         num_steps=num_steps,
         steps_left_at_start=steps_left_at_start,
         score=tuple(final_score),
         snapshots=snapshots,
+        seeds=seeds,
     )
 
 

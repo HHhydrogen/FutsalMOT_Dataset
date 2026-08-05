@@ -1,6 +1,6 @@
 # 审计修复后的基准结果
 
-机器：Windows 11 Pro，20 逻辑核。数据在 G: 盘。基准工具 `scripts/benchmark_postprocess.py`
+机器：Windows 11 Pro，20 逻辑核。数据在 G: 盘。基准工具 `uv run grf-ue benchmark ...`
 （repeat 1，严格校验阶段状态与帧数；任一阶段不完整即失败）。
 
 ## episode_demo（10 帧/相机 × 4 相机 = 40 camera-frames，staged validate）

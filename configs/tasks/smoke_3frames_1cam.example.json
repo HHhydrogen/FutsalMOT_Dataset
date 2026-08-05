@@ -1,0 +1,23 @@
+{
+  "schema": "futsalmot_dataset_task",
+  "version": 1,
+  "task_id": "smoke_3frames_1cam",
+  "episode_name": "episode_smoke_3f_1cam",
+  "export_profile": "../export/smoke_3steps_10fps.json",
+  "ue_profile": "../ue/1cam_1080p_cvgt.json",
+  "seed": null,
+  "paths": {
+    "trajectory_output": "outputs/episode_smoke_3f_1cam",
+    "dataset_output": "episode_smoke_3f_1cam"
+  },
+  "postprocess": {
+    "include_ball": true,
+    "workers": 2,
+    "chunk_size": 1,
+    "png_compress_level": 1,
+    "formats": ["json", "mot", "yolo-det", "yolo-seg"],
+    "clean_stale": true,
+    "validation_level": "full"
+  },
+  "audit": { "expected_cameras": 1, "expected_frames_per_camera": 3 }
+}

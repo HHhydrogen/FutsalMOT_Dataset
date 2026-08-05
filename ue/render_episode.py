@@ -1628,7 +1628,7 @@ def render_sequences(
 ) -> None:
     """异步用 MRQ 渲染所有 Sequence 的 RGB 帧（+ Instance-ID Mask），提交后立即返回。
 
-    sequences_cfg: ue_import_config.json 的 sequences 列表（每个含 name/camera_actor）。
+    sequences_cfg: ue profile 的 sequences 列表（每个含 name/camera_actor）。
     annotation_cfg: annotation_export 配置（含 render_rgb 段与 instance_mask 段）。
     mapping_path: actor 映射文件路径（instance_mask.enabled 时需要，用于给 actor 打 stencil）。
 

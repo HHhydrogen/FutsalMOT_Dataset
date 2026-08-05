@@ -1,14 +1,15 @@
 """调试：打印球员 actor 的胶囊 / 网格 bounds，用于判断 bbox 数据源选择。
 
-在 UE 编辑器 Python Console 中运行：
-    py "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/ue/debug_player_bounds.py"
+在 UE 编辑器 Python Console 中运行（需显式提供 episode 与 mapping，不再读根目录配置）：
+    py "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/ue/debug_player_bounds.py" \
+       --episode ".../outputs/episode_0001" --mapping ".../ue/actor_mapping.example.json"
 
 把球员放到 episode 第 1 帧后，打印 L0/L1/BALL 的：
   - Capsule：radius / half_height / 世界中心 → 当前 bbox 数据源。
   - Mesh 组件本地 bounds（origin/extent）→ 判断改用 mesh bounds 是否更紧。
 """
 
-import json
+import argparse
 import sys
 from pathlib import Path
 
@@ -19,18 +20,18 @@ import unreal
 from dataset_export import load_episode, load_mapping  # noqa: E402
 from scene_apply import apply_preview_frame, find_all_actors  # noqa: E402
 
-_CFG = Path(__file__).resolve().parent.parent / "ue_import_config.json"
-
 
 def _v3(v):
     return (round(float(v.x), 1), round(float(v.y), 1), round(float(v.z), 1))
 
 
 def main():
-    raw = json.load(open(_CFG, encoding="utf-8"))
-    cfg = {k: v for k, v in raw.items() if not k.startswith("comment_")}
-    episode_dir = Path(cfg["episode"])
-    mapping = load_mapping(Path(cfg["mapping"]))
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--episode", required=True, help="episode 目录（trajectory output）")
+    ap.add_argument("--mapping", required=True, help="actor mapping JSON")
+    args = ap.parse_args()
+    episode_dir = Path(args.episode)
+    mapping = load_mapping(Path(args.mapping))
     meta, frames = load_episode(episode_dir)
 
     actors = find_all_actors(mapping)

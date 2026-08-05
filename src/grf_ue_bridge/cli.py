@@ -576,10 +576,10 @@ def cryptomatte_to_mask(
         help="标注输出目录（含多个 camera 子目录，每个含 render_mask/*.exr）",
     ),
     mapping: Path = typer.Option(
-        None, "--mapping", help="actor 映射 JSON；缺省读 ue_import_config.json",
+        None, "--mapping", help="actor 映射 JSON（必需；推荐用 grf-ue task postprocess）",
     ),
     episode: Path = typer.Option(
-        None, "--episode", help="episode 目录（读时序）；缺省读 ue_import_config.json",
+        None, "--episode", help="episode 目录，读时序（必需；推荐用 grf-ue task postprocess）",
     ),
     workers: int = typer.Option(
         0, "--workers",
@@ -603,16 +603,15 @@ def cryptomatte_to_mask(
     from .cryptomatte import convert_render_mask_dir  # 先 import（会补 ue/ 到 sys.path）
     from dataset_export import load_episode, load_mapping  # noqa: E402
 
-    cfg = {}
-    cfg_path = Path(__file__).resolve().parent.parent.parent / "ue_import_config.json"
-    if cfg_path.exists():
-        raw = _json.load(open(cfg_path, encoding="utf-8"))
-        cfg = {k: v for k, v in raw.items() if not k.startswith("comment_")}
-    mapping_path = mapping or Path(cfg.get("mapping", ""))
-    episode_path = episode or Path(cfg.get("episode", ""))
-    if not mapping_path.exists() or not episode_path.exists():
+    # 不再读取根目录隐式 ue_import_config.json：episode/mapping 必须显式提供
+    #（推荐直接用 `grf-ue task postprocess <task>`，由 resolver 提供路径）。
+    mapping_path = mapping
+    episode_path = episode
+    if mapping_path is None or episode_path is None \
+            or not mapping_path.exists() or not episode_path.exists():
         typer.echo(
-            "需要 --mapping 与 --episode（或 ue_import_config.json 中的映射/episode）",
+            "需要显式 --mapping 与 --episode（不再从根目录 ue_import_config.json 推断）。"
+            "推荐：uv run grf-ue task postprocess <task>",
             err=True,
         )
         raise typer.Exit(1)
@@ -645,6 +644,265 @@ def cryptomatte_to_mask(
     typer.echo(f"cryptomatte-to-mask 完成（{total_ok}/{len(cam_dirs)} camera）")
     if total_ok == 0:
         raise typer.Exit(1)
+
+
+# ── task 工作流 CLI（推荐入口）────────────────────────────────────────
+
+from grf_ue_bridge.config import paths as _cfg_paths
+from grf_ue_bridge.config import resolver as _resolver
+
+task_app = typer.Typer(help="基于 dataset task 配置的工作流（推荐入口）")
+app.add_typer(task_app, name="task")
+
+
+def _resolve_task_or_active(task: Optional[Path]) -> Path:
+    """显式 task 优先；否则用 active task（无 active 时报错）。"""
+    if task is not None:
+        return Path(task).expanduser().resolve()
+    repo_root = _cfg_paths.default_repo_root()
+    active = _resolver.load_active_task(repo_root)
+    if active is None:
+        typer.echo(
+            "未提供 task 且无 active task。请先 `grf-ue task activate <task>` "
+            "或显式传入 task 文件。",
+            err=True,
+        )
+        raise typer.Exit(2)
+    typer.echo(f"Active task: {active.stem}")
+    typer.echo(f"Task file: {active}")
+    return active
+
+
+def _resolve_runtime(task: Optional[Path], allow_absolute_paths: bool = False):
+    task_file = _resolve_task_or_active(task)
+    return task_file, _resolver.resolve_task(
+        task_file, allow_absolute_paths=allow_absolute_paths
+    )
+
+
+@task_app.command("validate")
+def task_validate(
+    task: Optional[Path] = typer.Argument(
+        None, help="task 文件（缺省用 active task）"
+    ),
+    allow_absolute_paths: bool = typer.Option(
+        False, "--allow-absolute-paths", help="开发兼容：允许 task 内绝对路径"
+    ),
+):
+    """只读校验 task（schema/profile/本地配置/路径/相机/帧数）。不生成文件。"""
+    task_file = _resolve_task_or_active(task)
+    problems = _resolver.validate_task(
+        task_file, allow_absolute_paths=allow_absolute_paths
+    )
+    if problems:
+        typer.echo(f"task validate: FAIL ({len(problems)} 项)")
+        for p in problems:
+            typer.echo(f"  - {p}")
+        raise typer.Exit(1)
+    typer.echo(f"task validate: PASS  ({task_file})")
+
+
+@task_app.command("resolve")
+def task_resolve(
+    task: Optional[Path] = typer.Argument(
+        None, help="task 文件（缺省用 active task）"
+    ),
+    allow_absolute_paths: bool = typer.Option(
+        False, "--allow-absolute-paths", help="开发兼容：允许 task 内绝对路径"
+    ),
+):
+    """解析 task → 保存 resolved task，打印关键字段。"""
+    task_file, resolved = _resolve_runtime(task, allow_absolute_paths=allow_absolute_paths)
+    runtime_file = _resolver.save_resolved_task(
+        resolved, Path(resolved.repo_root)
+    )
+    cam_count = len((resolved.ue_profile.get("annotation_export") or {}).get("cameras") or [])
+    typer.echo(f"Task ID: {resolved.task_id}")
+    typer.echo(f"Trajectory output: {resolved.trajectory_output}")
+    typer.echo(f"Dataset output: {resolved.dataset_episode_dir}")
+    typer.echo(f"Export profile: scenario={resolved.export_profile.get('scenario')} "
+               f"steps={resolved.export_profile.get('num_steps')} seed={resolved.export_profile.get('seed')}")
+    typer.echo(f"UE profile: {cam_count} cameras")
+    typer.echo(f"Expected frame count: {resolved.audit.get('expected_frames_per_camera')}")
+    typer.echo(f"Postprocess formats: {resolved.postprocess.get('formats')}")
+    typer.echo(f"Resolved task saved: {runtime_file}")
+
+
+@task_app.command("export")
+def task_export(
+    task: Optional[Path] = typer.Argument(
+        None, help="task 文件（缺省用 active task）"
+    ),
+    allow_absolute_paths: bool = typer.Option(
+        False, "--allow-absolute-paths", help="开发兼容：允许 task 内绝对路径"
+    ),
+):
+    """按 task 导出轨迹（复用现有 exporter），写 provenance。"""
+    from grf_ue_bridge.workflows.task_export import run_export
+
+    _task_file, resolved = _resolve_runtime(task, allow_absolute_paths=allow_absolute_paths)
+    rc = run_export(resolved, print_fn=typer.echo)
+    if rc != 0:
+        raise typer.Exit(rc)
+
+
+@task_app.command("ue-command")
+def task_ue_command(
+    task: Optional[Path] = typer.Argument(
+        None, help="task 文件（缺省用 active task）"
+    ),
+    allow_absolute_paths: bool = typer.Option(
+        False, "--allow-absolute-paths", help="开发兼容：允许 task 内绝对路径"
+    ),
+):
+    """输出可在 Unreal Editor Python Console 复制的命令（先保存 resolved task）。"""
+    task_file, resolved = _resolve_runtime(task, allow_absolute_paths=allow_absolute_paths)
+    runtime_file = _resolver.save_resolved_task(
+        resolved, Path(resolved.repo_root)
+    )
+    run_task = Path(resolved.repo_root) / "ue" / "run_task.py"
+    typer.echo(
+        f'py "{run_task}" --resolved-task "{runtime_file}"'
+    )
+
+
+@task_app.command("postprocess")
+def task_postprocess(
+    task: Optional[Path] = typer.Argument(
+        None, help="task 文件（缺省用 active task）"
+    ),
+    skip_cryptomatte: bool = typer.Option(False, "--skip-cryptomatte"),
+    skip_annotate: bool = typer.Option(False, "--skip-annotate"),
+    skip_validate: bool = typer.Option(False, "--skip-validate"),
+    allow_absolute_paths: bool = typer.Option(
+        False, "--allow-absolute-paths", help="开发兼容：允许 task 内绝对路径"
+    ),
+):
+    """按 task 顺序执行 cryptomatte → annotate → 可选 validate。"""
+    from grf_ue_bridge.workflows.task_postprocess import run_postprocess
+
+    _task_file, resolved = _resolve_runtime(task, allow_absolute_paths=allow_absolute_paths)
+    rc = run_postprocess(
+        resolved,
+        skip_cryptomatte=skip_cryptomatte,
+        skip_annotate=skip_annotate,
+        skip_validate=skip_validate,
+        print_fn=typer.echo,
+    )
+    if rc != 0:
+        raise typer.Exit(rc)
+
+
+@task_app.command("audit")
+def task_audit(
+    task: Optional[Path] = typer.Argument(
+        None, help="task 文件（缺省用 active task）"
+    ),
+    validation_level: str = typer.Option(
+        "quick", "--validation-level", help="进程内 validate 级别（quick/full/none）"
+    ),
+    allow_absolute_paths: bool = typer.Option(
+        False, "--allow-absolute-paths", help="开发兼容：允许 task 内绝对路径"
+    ),
+):
+    """对 task 的数据集目录运行完整性审计。"""
+    from grf_ue_bridge.workflows.task_audit import main as audit_main
+
+    _task_file, resolved = _resolve_runtime(task, allow_absolute_paths=allow_absolute_paths)
+    audit_cfg = resolved.audit
+    rc = audit_main([
+        "--input", resolved.dataset_episode_dir,
+        "--expected-cameras", str(audit_cfg.get("expected_cameras", 4)),
+        "--expected-frames-per-camera", str(audit_cfg.get("expected_frames_per_camera", 300)),
+        "--episode", resolved.trajectory_output,
+        "--validation-level", validation_level,
+    ])
+    if rc != 0:
+        raise typer.Exit(rc)
+
+
+@task_app.command("status")
+def task_status(
+    task: Optional[Path] = typer.Argument(
+        None, help="task 文件（缺省用 active task）；空参数时也可只查 active"
+    ),
+    allow_absolute_paths: bool = typer.Option(
+        False, "--allow-absolute-paths", help="开发兼容：允许 task 内绝对路径"
+    ),
+):
+    """只读显示任务各产物状态（不修改文件）。"""
+    from grf_ue_bridge.workflows.task_status import collect_status, print_status
+
+    _task_file, resolved = _resolve_runtime(task, allow_absolute_paths=allow_absolute_paths)
+    st = collect_status(resolved)
+    print_status(resolved, st, print_fn=typer.echo)
+
+
+@task_app.command("activate")
+def task_activate(
+    task: Path = typer.Argument(..., help="task 文件"),
+):
+    """激活 task（可选便利；显式 task 参数始终优先）。"""
+    repo_root = _cfg_paths.default_repo_root()
+    path = _resolver.save_active_task(task, repo_root)
+    typer.echo(f"Active task set: {task}  ->  {path}")
+
+
+@task_app.command("deactivate")
+def task_deactivate():
+    """清除 active task。"""
+    repo_root = _cfg_paths.default_repo_root()
+    _resolver.clear_active_task(repo_root)
+    typer.echo("Active task cleared.")
+
+
+# ── 工具命令 ───────────────────────────────────────────────────────────
+
+@app.command("monitor")
+def monitor_cmd(
+    task: Optional[Path] = typer.Argument(
+        None, help="task 文件（缺省用 active task；监控其 dataset 目录）"
+    ),
+    interval: float = typer.Option(30.0, "--interval"),
+    out: Path = typer.Option(Path("soak_resources.csv"), "--out"),
+    allow_absolute_paths: bool = typer.Option(
+        False, "--allow-absolute-paths", help="开发兼容"
+    ),
+):
+    """渲染期间资源/目录增长监控（按 task 的 dataset 目录）。"""
+    from grf_ue_bridge.tools.resource_monitor import main as mon_main
+
+    _task_file, resolved = _resolve_runtime(task, allow_absolute_paths=allow_absolute_paths)
+    rc = mon_main(["--input", resolved.dataset_episode_dir,
+                   "--interval", str(interval), "--out", str(out)])
+    if rc != 0:
+        raise typer.Exit(rc)
+
+
+@app.command(
+    "measure",
+    context_settings={"ignore_unknown_options": True, "allow_extra_args": True},
+)
+def measure_cmd(ctx: typer.Context):
+    """运行任意命令并报告墙钟时间 + 进程树峰值 RSS。"""
+    from grf_ue_bridge.tools.process_measure import main as meas_main
+
+    rc = meas_main(ctx.args)
+    if rc != 0:
+        raise typer.Exit(rc)
+
+
+@app.command(
+    "benchmark",
+    context_settings={"ignore_unknown_options": True, "allow_extra_args": True},
+)
+def benchmark_cmd(ctx: typer.Context):
+    """后处理性能基准（透传 benchmark_postprocess 参数）。"""
+    from grf_ue_bridge.tools.benchmark_postprocess import main as bench_main
+
+    rc = bench_main(ctx.args)
+    if rc != 0:
+        raise typer.Exit(rc)
 
 
 if __name__ == "__main__":

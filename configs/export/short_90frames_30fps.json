@@ -1,4 +1,6 @@
 {
+  "schema": "futsalmot_export_profile",
+  "version": 1,
   "scenario": "5_vs_5",
   "seed": 42,
   "num_steps": 30,
@@ -9,5 +11,5 @@
   "render": false,
   "write_video": false,
   "dump_full_raw_observation": false,
-  "comment": "90 帧数据集：30 个 GRF 步(10fps) × 3 线性插值 = 90 帧标注(30fps)。MRQ 渲 90 标 90，1:1。seed 可改以获取不同比赛轨迹"
+  "comment": "短序列：30 GRF 步 ×3 插值 = 90 帧标注（30fps 1:1）。旧名 mvp_5v5_90fps / ue_import_config.90fps 不准确（90 帧不是 90 FPS），故改名"
 }

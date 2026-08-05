@@ -22,35 +22,41 @@
 
 ## 常用命令
 
-所有 P1 命令都在 `code/` 下通过 `uv` 运行（`.venv`，Python 3.9 由 `.python-version` 固定）：
+所有 P1 命令都在 `code/` 下通过 `uv` 运行（`.venv`，Python 3.9 由 `.python-version` 固定）。
+**推荐以 dataset task 为入口**（先 `Copy-Item .futsalmot.local.example.json .futsalmot.local.json` 填机器路径）：
 
 ```powershell
 uv sync                                   # 安装依赖（含 dev 组的 pytest）
-uv run grf-ue export --config configs/mvp_builtin_5v5.json --output outputs/episode_0001
-uv run grf-ue validate outputs/episode_0001
+uv run grf-ue task validate tasks/soak_local.json
+uv run grf-ue task resolve tasks/soak_local.json
+uv run grf-ue task export tasks/soak_local.json      # GRF 导出
+uv run grf-ue task postprocess tasks/soak_local.json # cryptomatte + annotate + validate
+uv run grf-ue task audit tasks/soak_local.json
 uv run pytest                             # 运行全部测试
-uv run pytest tests/test_validator.py -v  # 运行单个测试文件
-uv run grf-ue validate-annotations G:/FutsalMOT_Dataset   # 验证 CV 标注目录（数据集在 UE Content 之外）
-uv run grf-ue cryptomatte-to-mask G:/FutsalMOT_Dataset/episode_demo  # Cryptomatte EXR → mask/*.png（mask_id 1~11）
-uv run grf-ue annotate-masks G:/FutsalMOT_Dataset/episode_demo --include-ball  # mask → mask-primary bbox/分割标注
-uv run grf-ue annotate-overlay G:/FutsalMOT_Dataset/episode_0001/Camera_01  # debug 可视化（pillow 为核心依赖）
+uv run pytest -m grf_integration -q       # 真实 GRF seed 复现集成测试
 ```
 
 P2 脚本**在 Unreal Editor 内**（Python Console）运行，绝不在 .venv 中运行：
 
-```python
-py "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/ue/import_grf_episode.py"
+```powershell
+uv run grf-ue task ue-command tasks/soak_local.json
 ```
 
-脚本会自动加载仓库根目录（`ue/` 同级）的 `ue_import_config.json`，无需命令行参数；可用 `--episode`、`--mapping`、`--mode`、`--replace-existing` 覆盖。
+把输出命令复制到 UE Console，形如：
+
+```python
+py "D:/.../code/ue/run_task.py" --resolved-task "D:/.../.futsalmot/runtime/<task_id>/resolved-task.json"
+```
+
+`ue/run_task.py` 读取与 P1 相同的 resolved task；不再隐式读取根目录配置。
 
 ## 架构
 
 ### P1：导出（`src/grf_ue_bridge/`）
 
-- `cli.py` — typer 应用；提供 `grf-ue export` / `grf-ue validate` / `grf-ue validate-annotations` / `grf-ue annotate-masks` / `grf-ue annotate-overlay` 命令。
+- `cli.py` — typer 应用；提供 `grf-ue task ...` 工作流 + 既有 `export`/`validate`/`annotate-*`/`cryptomatte-to-mask`/`build-manifest` 等命令。
+- `config/` — `models.py`（LocalConfig/DatasetTaskConfig/ResolvedTask/ExportConfig）、`loader.py`、`resolver.py`（路径解析、resolved task）、`paths.py`（安全/可移植）。旧 `config.py`（ExportConfig）已并入 `config/models.py`。
 - `grf_runner.py` — 运行 GRF 环境。强制 `number_of_left_players_agent_controls=1`，每一步都发送 `action_builtin_ai`（索引 19，`action_set='v2'`），使所有球员都表现为内置 AI，同时把完整观测记录进 `EpisodeResult`/`StepSnapshot`。
-- `config.py` — 从配置文件 JSON（见 `configs/mvp_builtin_5v5.json`）解析出的 `ExportConfig` pydantic 模型。
 - `coordinate_transform.py` — `CoordinateTransform`：GRF 归一化 x/y `[-1, 1]` → 米 `[-half_field, +half_field]`；球的 z 原样透传（引擎 `Z_FIELD_SCALE=1`，地面约 0.11 m）；球员固定 z=0。
 - `exporter.py` — 写入 `meta.json` + `frames.jsonl`（`dump_full_raw_observation` 时额外写 `raw_observations.jsonl`）。从 `external_sources.lock.json` 读取固定的提交号写入 `meta.source`。
 - `schema.py` — pydantic 模型。**实体 ID 必须正好是 `L0`–`L4`、`R0`–`R4`、`BALL`；每帧恰好 10 名球员。** 注意 `Meta.schema_` 的别名为 `schema`，序列化时 `by_alias=True`。
@@ -66,7 +72,7 @@ py "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/ue/import_grf_episode
   - `preview` — 直接在关卡中设置 actor 变换。
   - `sequence` — 创建/覆盖 Level Sequence 资产，为球员和球写入关键帧的 Location/Rotation 轨道；`both`（默认）两者都执行。
 - `actor_mapping.example.json` — 实体 ID → UE actor 标签映射（必须与关卡中的 actor 标签一致）。
-- 导入约定：米→厘米（×100），球员 Z 固定为 `PLAYER_Z_CM = 90`，球 Z `+ BALL_Z_OFFSET_CM = 2`，Yaw 由位置增量计算并带低速滞回（`SPEED_THRESHOLD_CM = 5.0`）。球的滚动旋转按帧通过四元数累加实现（在 `ue_import_config.json` 的 `ball_rolling` 段配置）。
+- 导入约定：米→厘米（×100），球员 Z 固定为 `PLAYER_Z_CM = 90`，球 Z `+ BALL_Z_OFFSET_CM = 2`，Yaw 由位置增量计算并带低速滞回（`SPEED_THRESHOLD_CM = 5.0`）。球的滚动旋转按帧通过四元数累加实现（在 ue profile 的 `ball_rolling` 段配置）。
 
 ### CV 标注导出（annotation exporter）
 

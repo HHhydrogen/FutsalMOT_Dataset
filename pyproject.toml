@@ -34,4 +34,9 @@ markers = [
 addopts = ["-m", "not grf_integration"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/grf_ue_bridge"]
+packages = [
+    "src/grf_ue_bridge",
+    "src/grf_ue_bridge/config",
+    "src/grf_ue_bridge/workflows",
+    "src/grf_ue_bridge/tools",
+]

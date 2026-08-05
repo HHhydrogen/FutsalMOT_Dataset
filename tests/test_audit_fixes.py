@@ -27,10 +27,8 @@ from grf_ue_bridge.mask_annotator import (
     build_annotation_tasks,
 )
 
-# 引入 benchmark 脚本为模块（scripts 非包，用 importlib）
-_REPO_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(_REPO_ROOT / "scripts"))
-import benchmark_postprocess as bp  # noqa: E402
+# benchmark 正式实现在包内（scripts/ 仅剩弃用包装）
+from grf_ue_bridge.tools import benchmark_postprocess as bp  # noqa: E402
 
 
 def _config(**over):
@@ -199,7 +197,7 @@ class TestBenchmarkFailureStatus:
 
 
 def _run_main_with_args(args):
-    """用给定 args 调用 main（main 读取 sys.argv，通过替换 sys.argv 传入）。"""
+    """用给定 args 调用参数化后的 bp.main(argv)（argv 不含 prog）。"""
     argv = ["benchmark_postprocess"]
     for k, v in vars(args).items():
         if v is False or v is None:
@@ -208,12 +206,7 @@ def _run_main_with_args(args):
             argv.append(f"--{k.replace('_', '-')}")
         else:
             argv.extend([f"--{k.replace('_', '-')}", str(v)])
-    old = sys.argv
-    sys.argv = argv
-    try:
-        return bp.main()
-    finally:
-        sys.argv = old
+    return bp.main(argv[1:])
 
 
 # ── 6.6/6.7 陈旧产物清理 ──────────────────────────────────────────────

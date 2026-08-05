@@ -2,7 +2,7 @@
 
 机器：Windows 11 Pro，20 逻辑核。数据集在 G: 盘（`G:/FutsalMOT_Dataset`）。
 
-基准工具：`scripts/benchmark_postprocess.py`（临时 staging，不修改真实数据）。
+基准工具：`uv run grf-ue benchmark ...`（临时 staging，不修改真实数据）。
 命令级总耗时取 repeat 平均，annotate 附串行语义逐阶段分解。
 
 ## episode_demo（10 帧/相机 × 4 相机，repeat 3）

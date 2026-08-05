@@ -1,4 +1,6 @@
 {
+  "schema": "futsalmot_export_profile",
+  "version": 1,
   "scenario": "5_vs_5",
   "seed": 42,
   "num_steps": 3,
@@ -8,5 +10,5 @@
   "render": false,
   "write_video": false,
   "dump_full_raw_observation": false,
-  "comment": "最小 smoke test episode：3 个 GRF 步 = 3 帧标注，渲染 9 帧"
+  "comment": "最小 smoke：3 个 GRF 步 = 3 帧标注"
 }

@@ -31,6 +31,25 @@ Saved/
 configs/local*.json
 *.local.json
 
+# 机器本地路径配置（.example.json 入库，真实文件忽略）
+.futsalmot.local.json
+
+# 运行时产物（resolved task / active task / 本地任务）
+.futsalmot/
+tasks/local/
+runtime/
+reports/local/
+benchmarks/local/
+
+# 运行日志与临时文件
+*.csv
+*.log
+*.tmp
+resource_monitor*.csv
+benchmark_*.txt
+soak_audit_report.json
+soak_audit_report.md
+
 # Visual Studio / CMake / vcpkg build products
 .vs/
 CMakeFiles/

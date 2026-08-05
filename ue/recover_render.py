@@ -4,16 +4,17 @@
 （finished delegate / watchdog）未触发，导致 img1/ 为空。本脚本从现有
 render/ 帧复制对齐帧到 img1/，并写 render_summary.json。
 
-用法（P1，.venv python）：
-    uv run python ue/recover_render.py
+用法（推荐，读取 resolved task）：
+    uv run python ue/recover_render.py --resolved-task <resolved-task.json>
 
-或在 UE 控制台：
-    py "D:/path/to/code/ue/recover_render.py"
+或 UE 控制台：
+    py "D:/path/to/code/ue/recover_render.py" --resolved-task "<resolved-task.json>"
 
-读取脚本上两级（仓库根）的 ue_import_config.json。纯 Python，不依赖 unreal，
+旧流程（根目录 ue_import_config.json）已移除。纯 Python，不依赖 unreal，
 无需编辑器即可完成恢复。
 """
 
+import argparse
 import json
 import sys
 from pathlib import Path
@@ -22,21 +23,31 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from render_episode import recover_render_to_img1  # noqa: E402
 
-_CFG = Path(__file__).resolve().parent.parent / "ue_import_config.json"
+RESOLVED_TASK_SCHEMA = "futsalmot_resolved_task"
 
 
 def main() -> int:
-    if not _CFG.exists():
-        print(f"ERROR: 未找到配置文件: {_CFG}")
+    ap = argparse.ArgumentParser(description="从 render/ 恢复 img1/")
+    ap.add_argument("--resolved-task", required=True, help="resolved task JSON 路径")
+    args = ap.parse_args()
+
+    rt_path = Path(args.resolved_task)
+    if not rt_path.is_file():
+        print(f"ERROR: resolved task 不存在: {rt_path}")
         return 1
-    with open(_CFG, encoding="utf-8") as f:
-        raw = json.load(f)
-    cfg = {k: v for k, v in raw.items() if not k.startswith("comment_")}
-    episode = Path(cfg["episode"])
-    ann = cfg.get("annotation_export") or {}
-    output_dir = Path(ann.get("output_dir") or (episode.parent / "dataset"))
-    seqs = cfg.get("sequences") or []
-    status, _per_cam = recover_render_to_img1(seqs, ann, episode, output_dir)
+    with open(rt_path, encoding="utf-8") as f:
+        rt = json.load(f)
+    if rt.get("schema") != RESOLVED_TASK_SCHEMA:
+        print(f"ERROR: resolved task schema 非法: {rt.get('schema')!r}")
+        return 2
+
+    episode = Path(rt["trajectory_output"])
+    dataset_root = Path(rt["dataset_root"])
+    ue_profile = rt.get("ue_profile") or {}
+    ann = dict(ue_profile.get("annotation_export") or {})
+    ann["output_dir"] = str(dataset_root)
+    seqs = ue_profile.get("sequences") or []
+    status, _per_cam = recover_render_to_img1(seqs, ann, episode, dataset_root)
     print(f"恢复状态: {status}")
     return 0 if status == "success" else 1
 

@@ -10,7 +10,7 @@ Unreal Engine Python 脚本 —— 把 GRF-UE episode 导入到 Level Sequence�
   --full       一键全流程：创建 Sequence + 导出标注 + 渲染 RGB。
 
 用法（在 Unreal Editor Python Console 中执行）：
-    # 最简单（参数在 ue_import_config.json 中）
+    # 最简单（推荐用 ue/run_task.py + resolved task）
     py "D:/path/to/code/ue/import_grf_episode.py"
 
     # 临时覆盖部分参数
@@ -94,7 +94,7 @@ def _parse_args():
     )
     parser.add_argument(
         "--config", type=str, default=None,
-        help="配置文件路径；缺省用脚本同级的 ue_import_config.json。"
+        help="（已弃用）legacy 配置文件路径；推荐 ue/run_task.py --resolved-task。"
     )
     parsed = parser.parse_args()
     return parsed
@@ -678,13 +678,19 @@ def _build_entity_binding(sequence, entity_id, actor, total_output_frames):
 def main():
     args = _parse_args()
 
-    # 从固定路径加载配置（本脚本同级）
+    # 加载配置。旧流程（--config / 根目录 ue_import_config.json）已弃用：
+    # 推荐 ue/run_task.py --resolved-task <resolved-task.json>。
     cfg_defaults = {}
     if args.config:
         cfg_path = Path(args.config)
         # 相对路径按脚本目录（仓库根）解析，避免依赖 UE Python 的 CWD
         if not cfg_path.is_absolute():
             cfg_path = Path(__file__).resolve().parent.parent / args.config
+        print(
+            "WARNING: Legacy UE config mode (--config) is deprecated. "
+            "Use ue/run_task.py with a resolved task.",
+            file=sys.stderr,
+        )
     else:
         cfg_path = Path(__file__).resolve().parent.parent / "ue_import_config.json"
     if cfg_path.exists():
@@ -694,7 +700,13 @@ def main():
             if not k.startswith("comment_"):
                 cfg_defaults[k] = v
     else:
-        print(f"ERROR: 配置文件不存在: {cfg_path}", file=sys.stderr)
+        print(
+            f"ERROR: 配置文件不存在: {cfg_path}\n"
+            "根目录隐式配置已移除。请改用：\n"
+            '  py ".../ue/run_task.py" --resolved-task ".../.futsalmot/runtime/<task>/resolved-task.json"\n'
+            "（先运行 uv run grf-ue task ue-command <task> 获取该命令）",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     episode_dir = Path(

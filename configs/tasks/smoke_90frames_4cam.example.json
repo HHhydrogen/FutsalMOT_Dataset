@@ -1,0 +1,23 @@
+{
+  "schema": "futsalmot_dataset_task",
+  "version": 1,
+  "task_id": "smoke_90frames_4cam",
+  "episode_name": "episode_90f_4cam",
+  "export_profile": "../export/short_90frames_30fps.json",
+  "ue_profile": "../ue/4cam_1080p_cvgt.json",
+  "seed": null,
+  "paths": {
+    "trajectory_output": "outputs/episode_90f_4cam",
+    "dataset_output": "episode_90f_4cam"
+  },
+  "postprocess": {
+    "include_ball": true,
+    "workers": 4,
+    "chunk_size": 50,
+    "png_compress_level": 1,
+    "formats": ["json", "mot", "yolo-det", "yolo-seg"],
+    "clean_stale": true,
+    "validation_level": "full"
+  },
+  "audit": { "expected_cameras": 4, "expected_frames_per_camera": 90 }
+}

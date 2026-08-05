@@ -1,16 +1,18 @@
 {
-  "comment_episode": "30fps smoke test：30 GRF 步 → 90 帧（target_fps=30 插值），单相机验证 1:1 链路",
-  "episode": "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/outputs/episode_30fps_smoke",
+  "schema": "futsalmot_ue_profile",
+  "version": 1,
 
-  "mapping": "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/ue/actor_mapping.example.json",
+  "comment": "4 相机 1080p CV-GT 渲染 profile（episode 无关：不含本机路径/episode/dataset）。actor_mapping 相对仓库根。",
 
+  "actor_mapping": "ue/actor_mapping.example.json",
   "sequence_package_path": "/Game/FutsalMOT/Sequences",
 
   "sequences": [
-    { "name": "LS_Cam_01", "camera_actor": "CineCam_01" }
+    { "name": "LS_Cam_01", "camera_actor": "CineCam_01" },
+    { "name": "LS_Cam_02", "camera_actor": "CineCam_02" },
+    { "name": "LS_Cam_03", "camera_actor": "CineCam_03" },
+    { "name": "LS_Cam_04", "camera_actor": "CineCam_04" }
   ],
-
-  "mode": "sequence",
   "replace_existing": true,
 
   "ball_rolling": {
@@ -22,10 +24,9 @@
 
   "annotation_export": {
     "enabled": true,
-    "output_dir": "G:/FutsalMOT_Dataset",
     "image_width": 1920,
     "image_height": 1080,
-    "cameras": ["CineCam_01"],
+    "cameras": ["CineCam_01", "CineCam_02", "CineCam_03", "CineCam_04"],
     "frame_start": 0,
     "frame_end": null,
     "export_internal_jsonl": true,
@@ -56,8 +57,6 @@
       "file_name_format": "{frame_number}",
       "zero_pad_frame_numbers": 6
     },
-    "comment_frame_end": "null = 全部 90 帧（30fps 导出帧）",
-    "comment_render_rgb": "MRQ 30fps 渲 90 帧，取帧 1:1（frame_index=step+1 ↔ img1/000001..000090）",
     "instance_mask": {
       "enabled": true,
       "mask_source": "object_id_pass",
@@ -68,7 +67,6 @@
       "polygon_tolerance_px": 1.0,
       "max_polygon_points": 64,
       "post_process_material": null
-    },
-    "comment_mask_annotation": "mask 渲染完成后在 P1 运行：uv run grf-ue annotate-masks G:/FutsalMOT_Dataset/episode_30fps_smoke --include-ball"
+    }
   }
 }

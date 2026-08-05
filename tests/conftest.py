@@ -7,7 +7,15 @@ unreal/numpy，可被普通 pytest 直接测试。
 import sys
 from pathlib import Path
 
+import pytest
+
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _UE_DIR = _REPO_ROOT / "ue"
 if str(_UE_DIR) not in sys.path:
     sys.path.insert(0, str(_UE_DIR))
+
+
+@pytest.fixture
+def repo_root() -> Path:
+    """仓库根目录。"""
+    return _REPO_ROOT

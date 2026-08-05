@@ -1,16 +1,15 @@
 {
-  "comment_episode": "smoke test：3 步极小 episode，只渲 Camera_01，验证 Instance-ID Mask",
-  "episode": "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/outputs/episode_smoke",
+  "schema": "futsalmot_ue_profile",
+  "version": 1,
 
-  "mapping": "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/ue/actor_mapping.example.json",
+  "comment": "1 相机 1080p CV-GT 渲染 profile（快速验证链路用）。",
 
+  "actor_mapping": "ue/actor_mapping.example.json",
   "sequence_package_path": "/Game/FutsalMOT/Sequences",
 
   "sequences": [
     { "name": "LS_Cam_01", "camera_actor": "CineCam_01" }
   ],
-
-  "mode": "sequence",
   "replace_existing": true,
 
   "ball_rolling": {
@@ -22,12 +21,11 @@
 
   "annotation_export": {
     "enabled": true,
-    "output_dir": "G:/FutsalMOT_Dataset",
     "image_width": 1920,
     "image_height": 1080,
     "cameras": ["CineCam_01"],
     "frame_start": 0,
-    "frame_end": 3,
+    "frame_end": null,
     "export_internal_jsonl": true,
     "export_mot": true,
     "include_ball": false,

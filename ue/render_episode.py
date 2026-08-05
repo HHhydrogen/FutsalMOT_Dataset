@@ -120,11 +120,17 @@ def copy_rendered_frames(
 def find_mask_files(render_mask_dir: Path) -> Dict[int, Path]:
     """从 render_mask/ 中挑出 Instance-ID Mask 帧文件。返回 {frame_number: path}。
 
-    正常情况下 mask job 只配置 CustomDepthPass → 每帧一个输出文件，直接解析。
+    支持两种 mask 源：
+      - PNG 逐帧 mask（post_process_material 等）——与注解一致，本模块可直接复制；
+      - Object ID Pass 的 Cryptomatte **multilayer EXR**（UE 5.8 实测可用）——
+        文件名 {frame:06d}.exr，本模块只统计可用帧，真正转 mask/*.png 由
+        P1 `grf-ue cryptomatte-to-mask` 完成。
+    返回的 value 保留完整 path；调用方可用 .suffix 区分 EXR / PNG。
+    正常情况下 mask job 只配置一个输出 → 每帧一个文件，直接解析。
     若与其它 pass 混出（文件名出现多前缀），优先取文件名含
     mask/depth/stencil/custom/object 前缀的组；否则取帧数最多的组兜底。
     """
-    files = list(render_mask_dir.rglob("*.png"))
+    files = list(render_mask_dir.rglob("*.png")) + list(render_mask_dir.rglob("*.exr"))
     groups: Dict[str, Dict[int, Path]] = {}
     for p in files:
         digits = "".join(ch for ch in p.stem if ch.isdigit())
@@ -148,17 +154,31 @@ def copy_mask_frames(
     mask_dir: Path,
     keep_indices: Sequence[int],
 ) -> int:
-    """把 render_mask/ 中与 annotation 对齐的 mask 帧复制为 mask/{frame_index:06d}.png。
+    """把 render_mask/ 中与 annotation 对齐的 mask 帧落到 mask/，或统计其可用性。
+
+    返回对齐帧数（frame_index ↔ rendered frame）：
+      - PNG 源（post_process_material 等）→ 复制为 mask/{frame_index:06d}.png；
+      - Object ID EXR 源（Cryptomatte）→ 无法在 UE/纯 Python 侧解码成 mask PNG，
+        不复制，仅返回对齐帧数（真正转换由 P1 `grf-ue cryptomatte-to-mask` 完成）。
 
     与 img1/ 使用同一帧号（frame_index），保证 RGB 与 mask 一一对应。
     """
     rendered = find_mask_files(render_mask_dir)
     mapping = map_rendered_to_annotation(sorted(rendered.keys()), keep_indices)
+    if not mapping:
+        return 0
+    srcs = [rendered[num] for num in mapping.values()]
+    # Object ID EXR：仅统计可用帧，不复制（解码/转 PNG 在 P1 完成）
+    if all(s.suffix.lower() == ".exr" for s in srcs):
+        return len(mapping)
     ensure_dir(mask_dir)
     copied = 0
     for frame_index, num in mapping.items():
+        src = rendered[num]
+        if src.suffix.lower() != ".png":
+            continue
         dst = mask_dir / f"{frame_index:06d}.png"
-        shutil.copy2(rendered[num], dst)
+        shutil.copy2(src, dst)
         copied += 1
     return copied
 
@@ -223,10 +243,14 @@ def recover_render_to_img1(
         if mask_render.exists():
             mask_copied = copy_mask_frames(mask_render, mask_dir, keep_indices)
             total_mask_copied += mask_copied
+            mask_srcs = [p.suffix.lower() for p in find_mask_files(mask_render).values()]
+            is_exr = bool(mask_srcs) and all(s == ".exr" for s in mask_srcs)
             per_camera[cam_id]["mask_frames"] = mask_copied
+            per_camera[cam_id]["mask_source"] = "object_id_exr" if is_exr else "png"
             per_camera[cam_id]["ok"] = per_camera[cam_id]["ok"] and (mask_copied == expected)
             m_mark = "MISSING" if mask_copied == 0 else ("OK" if mask_copied == expected else "PARTIAL")
-            print(f"  [{m_mark}] {cam_id}: mask/ 写入 {mask_copied}/{expected} 帧")
+            m_label = "mask(EXR) 对齐" if is_exr else "mask/写入"
+            print(f"  [{m_mark}] {cam_id}: {m_label} {mask_copied}/{expected} 帧")
 
     if not per_camera:
         print("WARNING: 没有任何可恢复的 camera render/ 目录")
@@ -1438,8 +1462,11 @@ class _AsyncRenderPipeline:
                 print("  [MRQ] watchdog：文件数稳定兜底，开始收尾")
                 self._copy_and_finalize()
                 return False
-            if elapsed > 1800.0:
-                print("  WARNING: MRQ 渲染等待超时（30 分钟），按当前文件收尾")
+            # 硬超时：仅当渲染已停止推进（文件数长时间无变化）才收尾。
+            # 长序列 soak（900 帧×2 job×4 相机 ≈ 7200 帧）渲染可能超过 30 分钟，
+            # 只要文件仍在增长就不应强制收尾，避免把进行中的渲染误判为 partial。
+            if elapsed > 1800.0 and st["stable_ticks"] >= 600:
+                print("  WARNING: MRQ 渲染超时且文件数长时间无变化，按当前文件收尾")
                 self._copy_and_finalize()
                 return False
             return True
@@ -1472,19 +1499,22 @@ class _AsyncRenderPipeline:
         return True
 
     def _total_render_files(self) -> int:
-        """所有 camera render/ 目录的 PNG 总数。"""
+        """所有 camera render/ 目录的 PNG + EXR 总数。"""
         return sum(
-            len(list(info["render_dir"].rglob("*.png"))) for info in self.jobs
+            len(list(info["render_dir"].rglob("*.png")))
+            + len(list(info["render_dir"].rglob("*.exr")))
+            for info in self.jobs
         )
 
     # ── 收尾：复制 RGB + 轻量校验 + 写完成标记 ─────────────────────
 
     def _copy_and_finalize(self):
-        """finished 成功后：逐 camera 复制 RGB（img1/）与 Instance-ID Mask（mask/）。"""
+        """finished 成功后：逐 camera 复制 RGB（img1/）与统计 Instance-ID Mask 对齐。"""
         if self.finished:
             return
         per_camera = {}
         total_copied = 0
+        total_mask_copied = 0
         expected = len(self.keep_indices)
         for info in self.jobs:
             cam_id = info["cam_id"]
@@ -1494,7 +1524,10 @@ class _AsyncRenderPipeline:
                 copied = copy_mask_frames(render_dir, out_dir, self.keep_indices)
             else:
                 copied = copy_rendered_frames(render_dir, out_dir, self.keep_indices)
-            total_copied += copied
+            if is_mask:
+                total_mask_copied += copied
+            else:
+                total_copied += copied
             entry = per_camera.setdefault(cam_id, {
                 "sequence": info["name"],
                 "expected_frames": expected,
@@ -1502,17 +1535,21 @@ class _AsyncRenderPipeline:
             })
             if is_mask:
                 entry["mask_frames"] = copied
-                label = "mask/"
+                # Object ID EXR 源：记录来源；mask/*.png 由 P1 `cryptomatte-to-mask` 生成
+                mask_srcs = [p.suffix.lower() for p in find_mask_files(render_dir).values()]
+                is_exr = bool(mask_srcs) and all(s == ".exr" for s in mask_srcs)
+                entry["mask_source"] = "object_id_exr" if is_exr else "png"
+                label = "mask(EXR) 对齐" if is_exr else "mask/写入"
             else:
                 entry["img1_frames"] = copied
-                label = "img1/"
+                label = "img1/写入"
                 ann_count = self._check_annotation_frame_count(info["cam_out"])
                 if ann_count is not None:
                     entry["annotations_jsonl_frames"] = ann_count
                     entry["annotation_img1_match"] = ann_count == copied
             entry["ok"] = entry["ok"] and (copied == expected)
             mark = "MISSING" if copied == 0 else ("OK" if copied == expected else "PARTIAL")
-            print(f"  [{mark}] {cam_id}: {label}写入 {copied}/{expected} 帧")
+            print(f"  [{mark}] {cam_id}: {label} {copied}/{expected} 帧")
 
         if total_copied == 0:
             status, reason = "failed", "渲染未产生任何可用的 RGB / mask 帧"
@@ -1521,7 +1558,8 @@ class _AsyncRenderPipeline:
         else:
             status, reason = "partial", "部分 camera 的渲染帧数与预期不符（可能缺帧）"
         self._finalize(failed=(status == "failed"), status=status,
-                       per_camera=per_camera, total_copied=total_copied, reason=reason)
+                       per_camera=per_camera, total_copied=total_copied,
+                       total_mask_frames=total_mask_copied, reason=reason)
 
     def _check_annotation_frame_count(self, cam_out: Path) -> Optional[int]:
         """轻量校验：annotations.jsonl 行数 vs img1/ PNG 数。
@@ -1541,7 +1579,7 @@ class _AsyncRenderPipeline:
         return ann_count if ann_count != img_count else None
 
     def _finalize(self, failed, status=None, per_camera=None,
-                  total_copied=0, reason=None):
+                  total_copied=0, total_mask_frames=0, reason=None):
         """写完成标记 render_summary.json，并释放模块级引用（只执行一次）。"""
         global _ACTIVE_RENDER
         if self.finished:
@@ -1564,6 +1602,7 @@ class _AsyncRenderPipeline:
             "status": status,
             "reason": reason,
             "total_img1_frames": total_copied,
+            "total_mask_frames": total_mask_frames,
             "cameras": per_camera or {},
             "mrq_errors": self.error_messages or None,
             "finished_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),

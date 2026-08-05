@@ -1,0 +1,79 @@
+{
+  "comment_episode": "90 帧数据集：30 GRF 步 → 90 帧（target_fps=30 插值），4 相机全视角完整数据集",
+  "episode": "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/outputs/episode_90fps",
+
+  "mapping": "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/ue/actor_mapping.example.json",
+
+  "sequence_package_path": "/Game/FutsalMOT/Sequences",
+
+  "sequences": [
+    { "name": "LS_Cam_01", "camera_actor": "CineCam_01" },
+    { "name": "LS_Cam_02", "camera_actor": "CineCam_02" },
+    { "name": "LS_Cam_03", "camera_actor": "CineCam_03" },
+    { "name": "LS_Cam_04", "camera_actor": "CineCam_04" }
+  ],
+
+  "comment_mode": "full = 一键全流程：建 4 个 Sequence + 导几何标注 + MRQ 渲 RGB 与 Instance-ID Mask",
+  "mode": "full",
+  "replace_existing": true,
+
+  "ball_rolling": {
+    "enabled": true,
+    "radius_m": 0.11,
+    "minimum_move_distance_m": 0.0001,
+    "roll_sign": 1.0
+  },
+
+  "annotation_export": {
+    "enabled": true,
+    "output_dir": "G:/FutsalMOT_Dataset",
+    "image_width": 1920,
+    "image_height": 1080,
+    "cameras": ["CineCam_01", "CineCam_02", "CineCam_03", "CineCam_04"],
+    "frame_start": 0,
+    "frame_end": null,
+    "export_internal_jsonl": true,
+    "export_mot": true,
+    "include_ball": false,
+    "mot_visibility_mode": "unoccluded",
+    "ball_scale": null,
+    "ball_radius_m": 0.11,
+    "player_bbox": {
+      "source": "capsule",
+      "width_scale": 0.7,
+      "height_scale": 1.0
+    },
+    "render_rgb": {
+      "enabled": true,
+      "preset": "cv_gt",
+      "cv_gt": {
+        "motion_blur": false,
+        "depth_of_field": false,
+        "chromatic_aberration": false,
+        "lens_distortion": false,
+        "anti_aliasing": "taa",
+        "temporal_sampling": false
+      },
+      "output_resolution_x": 1920,
+      "output_resolution_y": 1080,
+      "frame_rate": 30,
+      "file_name_format": "{frame_number}",
+      "zero_pad_frame_numbers": 6
+    },
+    "comment_output_dir": "输出为 <output_dir>/<episode_id>/<camera_id>/{camera.json, annotations.jsonl, img1/, gt/gt.txt, seqinfo.ini}；必须放在 UE Content 之外",
+    "comment_frame_end": "null = 全部 90 帧（30fps 导出帧，1:1）",
+    "comment_render_rgb": "MRQ 30fps 渲 90 帧，取帧 1:1（frame_index=step+1 ↔ img1/000001..000090）",
+    "instance_mask": {
+      "enabled": true,
+      "mask_source": "object_id_pass",
+      "mask_channel": "r",
+      "id_scale": 1.0,
+      "id_offset": 0.0,
+      "background_value": 0,
+      "polygon_tolerance_px": 1.0,
+      "max_polygon_points": 64,
+      "post_process_material": null
+    },
+    "comment_mask_annotation": "mask 渲染完成后在 P1 运行：uv run grf-ue annotate-masks G:/FutsalMOT_Dataset/episode_90fps --include-ball"
+  }
+}

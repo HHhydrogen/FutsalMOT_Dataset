@@ -1,0 +1,13 @@
+{
+  "scenario": "5_vs_5",
+  "seed": 42,
+  "num_steps": 30,
+  "target_fps": 30,
+  "playback_fps": 30,
+  "field_length_m": 40.0,
+  "field_width_m": 20.0,
+  "render": false,
+  "write_video": false,
+  "dump_full_raw_observation": false,
+  "comment": "90 帧数据集：30 个 GRF 步(10fps) × 3 线性插值 = 90 帧标注(30fps)。MRQ 渲 90 标 90，1:1。seed 可改以获取不同比赛轨迹"
+}

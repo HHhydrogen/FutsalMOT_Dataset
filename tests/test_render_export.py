@@ -117,6 +117,16 @@ class TestFindMaskFiles:
         found = find_mask_files(d)
         assert sorted(found.keys()) == [0, 3, 6]  # A 组帧数更多
 
+    def test_exr_object_id_pass(self, tmp_path):
+        # Object ID Pass → Cryptomatte multilayer EXR（UE 5.8 生产路径）
+        d = tmp_path / "render_mask"
+        d.mkdir()
+        for n in (0, 3, 6):
+            (d / f"{n:06d}.exr").write_bytes(b"x")
+        found = find_mask_files(d)
+        assert sorted(found.keys()) == [0, 3, 6]
+        assert all(p.suffix == ".exr" for p in found.values())
+
 
 class TestCopyMaskFrames:
     def test_copy_names(self, tmp_path):
@@ -130,6 +140,27 @@ class TestCopyMaskFrames:
         assert (mask_dir / "000001.png").exists()
         assert (mask_dir / "000003.png").exists()
         assert not (mask_dir / "000004.png").exists()
+
+    def test_exr_counts_aligned_without_copying(self, tmp_path):
+        # Object ID EXR 源：统计对齐帧数，但不复制成 mask/*.png（解码由 P1 完成）
+        render_mask = tmp_path / "render_mask"
+        mask_dir = tmp_path / "mask"
+        render_mask.mkdir()
+        for n in (0, 3, 6):
+            (render_mask / f"{n:06d}.exr").write_bytes(b"x")
+        copied = copy_mask_frames(render_mask, mask_dir, [0, 3, 6])
+        assert copied == 3
+        assert not mask_dir.exists()  # 不落任何 mask/*.png
+
+    def test_exr_partial_aligned(self, tmp_path):
+        render_mask = tmp_path / "render_mask"
+        mask_dir = tmp_path / "mask"
+        render_mask.mkdir()
+        for n in (0, 6):  # 缺 3
+            (render_mask / f"{n:06d}.exr").write_bytes(b"x")
+        copied = copy_mask_frames(render_mask, mask_dir, [0, 3, 6])
+        assert copied == 2
+        assert not mask_dir.exists()
 
 
 class TestRecoverRenderToImg1:
@@ -216,4 +247,44 @@ class TestRecoverRenderToImg1:
         assert status == "partial"
         assert per_cam["Cam_01"]["img1_frames"] == 3
         assert per_cam["Cam_01"]["mask_frames"] == 1
+        assert per_cam["Cam_01"]["ok"] is False
+
+    def test_recover_exr_mask_success(self, tmp_path):
+        # render_mask/ 为 Object ID EXR：恢复后 mask_frames 统计对齐帧数，不落 mask/*.png
+        episode, out = _make_episode(tmp_path, num_steps=3)
+        cam_out = out / "episode_demo" / "Cam_01"
+        (cam_out / "render").mkdir(parents=True)
+        (cam_out / "render_mask").mkdir(parents=True)
+        for n in (0, 3, 6):
+            (cam_out / "render" / f"{n:06d}.png").write_bytes(b"x")
+            (cam_out / "render_mask" / f"{n:06d}.exr").write_bytes(b"x")
+
+        seqs = [{"name": "LS_Cam", "camera_actor": "Cam_01"}]
+        ann = {"render_rgb": {"frame_rate": 30}}
+        status, per_cam = recover_render_to_img1(seqs, ann, episode, out)
+        assert status == "success"
+        assert per_cam["Cam_01"]["img1_frames"] == 3
+        assert per_cam["Cam_01"]["mask_frames"] == 3
+        assert per_cam["Cam_01"]["mask_source"] == "object_id_exr"
+        assert per_cam["Cam_01"]["ok"] is True
+        assert (cam_out / "mask").exists() is False  # EXR 源不直接生成 mask/*.png
+        summary = json.loads((out / "episode_demo" / "render_summary.json").read_text(encoding="utf-8"))
+        assert summary["status"] == "success"
+
+    def test_recover_exr_mask_missing_partial(self, tmp_path):
+        # render_mask/ 缺 1 帧 EXR → 整体 partial，不被当作 success
+        episode, out = _make_episode(tmp_path, num_steps=3)
+        cam_out = out / "episode_demo" / "Cam_01"
+        (cam_out / "render").mkdir(parents=True)
+        (cam_out / "render_mask").mkdir(parents=True)
+        for n in (0, 3, 6):
+            (cam_out / "render" / f"{n:06d}.png").write_bytes(b"x")
+        for n in (0, 3):  # mask 缺 000006.exr
+            (cam_out / "render_mask" / f"{n:06d}.exr").write_bytes(b"x")
+
+        seqs = [{"name": "LS_Cam", "camera_actor": "Cam_01"}]
+        ann = {"render_rgb": {"frame_rate": 30}}
+        status, per_cam = recover_render_to_img1(seqs, ann, episode, out)
+        assert status == "partial"
+        assert per_cam["Cam_01"]["mask_frames"] == 2
         assert per_cam["Cam_01"]["ok"] is False

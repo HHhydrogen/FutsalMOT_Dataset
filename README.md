@@ -684,6 +684,25 @@ uv run grf-ue annotate-masks G:/FutsalMOT_Dataset --include-ball
 uv run grf-ue annotate-overlay G:/FutsalMOT_Dataset/episode_0001/Camera_01 --include-ball
 ```
 
+## 第二阶段浸泡测试（300 步 × 4 相机）
+
+完整记录见 [`docs/SOAK_TEST_300STEP_4CAM.md`](docs/SOAK_TEST_300STEP_4CAM.md)：真实 UE 渲染（900 帧/相机 RGB + Object ID EXR）+ 1200 camera-frame 后处理 + full validation + 审计 + w1/2/4/8 基准 + 故障恢复。
+
+新增辅助脚本（`scripts/`）：
+
+```powershell
+# soak 完整性审计：缺帧/重复/零字节/跨相机同步/track·mask 映射/标定/render_summary/validator
+uv run python scripts/audit_soak_episode.py --input G:/FutsalMOT_Dataset/episode_0001 --expected-cameras 4 --expected-frames-per-camera 300 --episode outputs/episode_0001 --validation-level quick
+
+# UE 渲染期间资源/目录增长采样（每 30s 追加 CSV）
+uv run python scripts/monitor_soak_resources.py --input G:/FutsalMOT_Dataset/episode_0001 --interval 30
+
+# 运行任意命令并报告墙钟时间 + 进程树峰值 RSS
+uv run python scripts/measure_run.py uv run grf-ue cryptomatte-to-mask <dir> --workers 4 ...
+```
+
+> `render_summary.json` 对 Object ID EXR 的 mask 状态已修正：EXR 源统计对齐帧数并记 `mask_source="object_id_exr"`（mask/*.png 由 P1 生成），不再恒报 partial；`total_img1_frames`/`total_mask_frames` 分列统计。
+
 ## 当前阶段
 
 GRF → JSONL → Unreal Engine 回放 → RGB + Instance-ID Mask → mask-primary bbox / 实例分割 / MOT / YOLO 标注已跑通。以下功能**暂不包含**：

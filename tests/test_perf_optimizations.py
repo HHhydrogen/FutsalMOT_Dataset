@@ -407,5 +407,8 @@ class TestPngCompressLevel:
 class TestBenchmarkToolSmoke:
     def test_benchmark_script_syntactically_valid(self):
         import ast
-        src = Path(__file__).resolve().parent.parent / "scripts" / "benchmark_postprocess.py"
+        src = (
+            Path(__file__).resolve().parent.parent
+            / "src" / "grf_ue_bridge" / "tools" / "benchmark_postprocess.py"
+        )
         ast.parse(src.read_text(encoding="utf-8"))

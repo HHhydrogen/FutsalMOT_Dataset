@@ -1,7 +1,7 @@
 """诊断：检查 Object ID Pass 渲染出的 multilayer EXR 是否含 Cryptomatte 数据。
 
 用法（P1，渲染完成后）：
-    uv run python ue/debug_object_id_exr.py <render_mask_dir>
+    uv run python ue/debug/debug_object_id_exr.py <render_mask_dir>
 
 打印：
   1. render_mask/ 下的 .exr 文件列表与大小。
@@ -21,7 +21,7 @@ import cv2
 
 def main():
     if len(sys.argv) < 2:
-        print("用法: uv run python ue/debug_object_id_exr.py <render_mask_dir>")
+        print("用法: uv run python ue/debug/debug_object_id_exr.py <render_mask_dir>")
         sys.exit(1)
     d = Path(sys.argv[1])
     exrs = sorted(d.glob("*.exr"))

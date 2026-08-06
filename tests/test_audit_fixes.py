@@ -27,7 +27,7 @@ from grf_ue_bridge.mask_annotator import (
     build_annotation_tasks,
 )
 
-# benchmark 正式实现在包内（scripts/ 仅剩弃用包装）
+# benchmark 正式实现在包内（scripts/ 薄包装已删除）
 from grf_ue_bridge.tools import benchmark_postprocess as bp  # noqa: E402
 
 

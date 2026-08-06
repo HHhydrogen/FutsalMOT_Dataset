@@ -1,4 +1,4 @@
-"""仓库卫生检查：根配置泄漏、绝对路径、scripts 无业务逻辑、命名规范。"""
+"""仓库卫生检查：根配置泄漏、绝对路径、scripts 已删除、命名规范。"""
 
 from __future__ import annotations
 
@@ -59,12 +59,10 @@ class TestConfigNoAbsolutePaths:
             loader.load_task_config(tf)  # 可解析即可
 
 
-class TestScriptsAreThin:
-    def test_scripts_have_no_business_logic(self, repo_root):
-        for p in repo_root.glob("scripts/*.py"):
-            src = p.read_text(encoding="utf-8")
-            assert "已废弃" in src or "Deprecation" in src, \
-                f"scripts/ 存在业务逻辑（应为弃用包装）: {p}"
+class TestNoDeprecatedScripts:
+    def test_scripts_dir_removed(self, repo_root):
+        # scripts/ 薄包装已删除（正式实现在包内），不应再出现
+        assert not list(repo_root.glob("scripts/*.py"))
 
     def test_formal_logic_in_package(self, repo_root):
         assert (repo_root / "src" / "grf_ue_bridge" / "workflows" / "task_audit.py").is_file()

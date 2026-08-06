@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""渲染期间的资源/目录增长监控（从 scripts/monitor_soak_resources.py 迁移）。
+"""渲染期间的资源/目录增长监控。
 
 每 interval 秒采样一次并追加 CSV：
   - 时间戳 / 运行秒数

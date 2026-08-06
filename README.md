@@ -23,7 +23,7 @@ GRF 轨迹（P1, .venv）──→ JSONL ──→ UE Level Sequence + 渲染（
 ### 1. 创建单一 config（本地任务，`tasks/` 已 gitignore）
 
 ```powershell
-Copy-Item configs/tasks/soak_300frames_4cam.example.json tasks/my_dataset.json
+Copy-Item configs/tasks/production_300frames_4cam.example.json tasks/my_dataset.json
 ```
 
 编辑 `tasks/my_dataset.json`，填上 `dataset_root`（及可选的 `seed`、`ue_project_root`）：
@@ -105,18 +105,15 @@ uv run grf-ue task deactivate
 ```text
 configs/
 ├── export/          # 导出 profile（ExportConfig 字段）
-│   ├── smoke_3steps_10fps.json
-│   ├── short_90frames_30fps.json      # 30 步 ×3 插值 = 90 帧（30fps 1:1）
-│   ├── standard_300steps_10fps.json
-│   └── standard_300steps_30fps.json
+│   ├── smoke_3steps_10fps.json        # 冒烟：3 GRF 步 = 3 帧标注
+│   ├── standard_300steps_10fps.json   # 标准：300 步 = 300 帧标注（10fps）
+│   └── standard_300steps_30fps.json   # 标准 30fps：300 步 ×3 插值 = 900 帧
 ├── ue/              # UE profile（episode 无关：相机/分辨率/渲染/Mask，无本机路径）
 │   ├── 1cam_1080p_cvgt.json
 │   └── 4cam_1080p_cvgt.json
 └── tasks/           # 任务示例（只引用 profile，不复制内容）
     ├── smoke_3frames_1cam.example.json
-    ├── smoke_90frames_1cam.example.json
-    ├── smoke_90frames_4cam.example.json
-    └── soak_300frames_4cam.example.json
+    └── production_300frames_4cam.example.json
 ```
 
 task 文件安全约束：**默认禁止盘符/UNC 绝对路径与 `..` 逃逸**；开发兼容可用
@@ -162,7 +159,7 @@ grf-ue
 
 ### 数据契约（与 P2 共享）
 
-`outputs/<episode>/` 含 `meta.json`（schema、时序、场地、实体、`randomness` 种子体系）与
+`<dataset_root>/<episode_name>/` 含 `meta.json`（schema、时序、场地、实体、`randomness` 种子体系）与
 `frames.jsonl`（每帧 `step/time_seconds/score/ball/players`），坐标为米 `[x,y,z]`。
 
 ## CV 标注链路（mask-primary）
@@ -183,22 +180,6 @@ grf-ue
   稳定 fingerprint、重复轨迹检测。
 
 详见 [`docs/REPRODUCIBILITY_AND_MANIFEST.md`](docs/REPRODUCIBILITY_AND_MANIFEST.md)。
-
-## 迁移与兼容
-
-- 根目录 `ue_import_config*.json` 已移除；机器路径在 `.futsalmot.local.json`。
-- 旧 CLI 保留但 deprecated（打印 warning，不再读根配置）；删除计划见
-  [`docs/migration/TASK_CONFIG_MIGRATION.md`](docs/migration/TASK_CONFIG_MIGRATION.md)。
-
-## Legacy commands（旧多路径命令，已弃用）
-
-```powershell
-uv run grf-ue export --config configs/export/standard_300steps_10fps.json --output outputs/episode_0001 --seed 42
-uv run grf-ue validate outputs/episode_0001
-uv run grf-ue cryptomatte-to-mask G:/FutsalMOT_Dataset/episode_0001 --episode outputs/episode_0001 --mapping ue/actor_mapping.example.json
-uv run grf-ue annotate-masks G:/FutsalMOT_Dataset/episode_0001 --include-ball
-uv run grf-ue validate-annotations G:/FutsalMOT_Dataset/episode_0001 --validation-level full
-```
 
 ## 开发
 

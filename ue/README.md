@@ -22,13 +22,13 @@
 1. 在 P1 生成 resolved task（机器路径由 `.futsalmot.local.json` / 环境变量提供）：
 
 ```powershell
-uv run grf-ue task resolve configs/tasks/soak_300frames_4cam.example.json
+uv run grf-ue task resolve configs/tasks/production_300frames_4cam.example.json
 ```
 
 2. 获取 UE 命令并复制到 **Unreal Editor Python Console**：
 
 ```powershell
-uv run grf-ue task ue-command configs/tasks/soak_300frames_4cam.example.json
+uv run grf-ue task ue-command configs/tasks/production_300frames_4cam.example.json
 ```
 
 输出形如：
@@ -43,7 +43,7 @@ py "D:/.../code/ue/run_task.py" --resolved-task "D:/.../.futsalmot/runtime/soak_
 ## Legacy 用法（已弃用）
 
 `import_grf_episode.py --config <legacy-config>` 仍可用但打印 deprecation warning。
-删除计划见 `docs/migration/TASK_CONFIG_MIGRATION.md`。
+推荐统一走 `task ue-command` → `ue/run_task.py`（见上）。
 
 ## 脚本模式
 

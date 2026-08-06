@@ -2,11 +2,11 @@
 
 用法（Windows PowerShell）：
 
-    uv run python scripts/benchmark_postprocess.py `
+    uv run grf-ue benchmark `
       --input G:/FutsalMOT_Dataset/episode_demo `
       --repeat 3
 
-    uv run python scripts/benchmark_postprocess.py `
+    uv run grf-ue benchmark `
       --input G:/FutsalMOT_Dataset/episode_0001 `
       --repeat 1 --workers 4 --validate-on-input
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""运行一条命令并测量墙钟时间 + 进程树峰值 RSS（从 scripts/measure_run.py 迁移）。
+"""运行一条命令并测量墙钟时间 + 进程树峰值 RSS。
 
 CLI：`grf-ue measure -- <cmd...>`（推荐）；或 `python -m grf_ue_bridge.tools.process_measure <cmd...>`。
 对目标命令的整棵进程树周期采样 RSS（root + recursive children），

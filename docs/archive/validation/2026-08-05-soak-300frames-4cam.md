@@ -5,6 +5,8 @@ result_commit: f647ce1
 supersedes: null
 ---
 
+> Historical document. Commands, paths, results, and assumptions may no longer match the current implementation.
+
 # 第二阶段浸泡测试（Soak Test）：300 步 × 4 相机
 
 > 本文记录 `episode_0001`（300 GRF 步 / 4 相机 / 30 FPS MRQ / 1920×1080 / RGB + Object ID Cryptomatte）的完整浸泡测试结果：真实 UE 渲染 + Windows 后处理 + full validation + 审计 + 基准 + 故障恢复。

@@ -1,3 +1,5 @@
+> Historical document. Commands, paths, results, and assumptions may no longer match the current implementation.
+
 # 审计修复后的基准结果
 
 机器：Windows 11 Pro，20 逻辑核。数据在 G: 盘。基准工具 `uv run grf-ue benchmark ...`

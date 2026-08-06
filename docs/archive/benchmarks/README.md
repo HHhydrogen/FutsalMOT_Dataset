@@ -1,3 +1,5 @@
+> Historical document. Commands, paths, results, and assumptions may no longer match the current implementation.
+
 # 后处理性能基准结果
 
 机器：Windows 11 Pro，20 逻辑核。数据集在 G: 盘（`G:/FutsalMOT_Dataset`）。

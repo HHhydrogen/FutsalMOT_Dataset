@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""soak episode 完整性审计（从 scripts/audit_soak_episode.py 迁移）。
+"""soak episode 完整性审计。
 
 对一次完整渲染+后处理的相机数据集目录做只读审计，输出 JSON + Markdown 双报告，
 并用退出码标识是否通过。检查维度：

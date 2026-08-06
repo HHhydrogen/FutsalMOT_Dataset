@@ -38,7 +38,7 @@ def _make_task_dir(tmp_path: Path) -> Path:
         "task_id": "res_t1", "episode_name": "episode_res_t1",
         "export_profile": "export.json", "ue_profile": "ue.json",
         "seed": None,
-        "paths": {"trajectory_output": "outputs/episode_res_t1",
+        "paths": {"trajectory_output": "episode_res_t1",
                   "dataset_output": "episode_res_t1"},
         "postprocess": {"workers": 4, "validation_level": "full"},
         "audit": {"expected_cameras": 1, "expected_frames_per_camera": 300},
@@ -116,6 +116,22 @@ class TestResolvePaths:
         problems = resolver.validate_task(tf, env=_env(tmp_path / "repo", tmp_path / "ds"))
         assert any("相机数" in p for p in problems)
 
+    def test_task_carries_machine_paths_single_config(self, tmp_path):
+        """单一 config 用法：task 内 dataset_root + seed 直接生效，产出全落 dataset_root。"""
+        tf = _make_task_dir(tmp_path)
+        task = json.loads(tf.read_text(encoding="utf-8"))
+        task["dataset_root"] = str(tmp_path / "custom_ds")
+        task["seed"] = 777
+        tf.write_text(json.dumps(task), encoding="utf-8")
+        rt = resolver.resolve_task(tf, env=_env(tmp_path / "repo", tmp_path / "ds"))
+        assert Path(rt.dataset_root) == (tmp_path / "custom_ds").resolve()
+        # 轨迹与数据集都在 dataset_root/<episode_name>/ 下自包含，不再落代码根 outputs/
+        assert Path(rt.trajectory_output) == (
+            tmp_path / "custom_ds" / "episode_res_t1").resolve()
+        assert Path(rt.dataset_episode_dir) == (
+            tmp_path / "custom_ds" / "episode_res_t1").resolve()
+        assert rt.export_profile["seed"] == 777
+
 
 class TestResolvedTaskFile:
     def test_save_load_roundtrip(self, tmp_path):
@@ -149,7 +165,7 @@ class TestSanitizedProvenance:
         assert "\\" not in blob  # 无反斜杠
         for c in "ABCDEFG":
             assert f"{c}:/" not in blob, f"provenance 含盘符 {c}:/"
-        assert PLACEHOLDER_REPO_ROOT in sane["trajectory_output"]
+        assert PLACEHOLDER_DATASET_ROOT in sane["trajectory_output"]
         assert PLACEHOLDER_DATASET_ROOT in sane["dataset_episode_dir"]
         assert PLACEHOLDER_UE_PROJECT_ROOT in sane["ue_project_root"]
 

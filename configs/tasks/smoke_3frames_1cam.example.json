@@ -7,7 +7,7 @@
   "ue_profile": "../ue/1cam_1080p_cvgt.json",
   "seed": null,
   "paths": {
-    "trajectory_output": "outputs/episode_smoke_3f_1cam",
+    "trajectory_output": "episode_smoke_3f_1cam",
     "dataset_output": "episode_smoke_3f_1cam"
   },
   "postprocess": {
@@ -15,9 +15,17 @@
     "workers": 2,
     "chunk_size": 1,
     "png_compress_level": 1,
-    "formats": ["json", "mot", "yolo-det", "yolo-seg"],
+    "formats": [
+      "json",
+      "mot",
+      "yolo-det",
+      "yolo-seg"
+    ],
     "clean_stale": true,
     "validation_level": "full"
   },
-  "audit": { "expected_cameras": 1, "expected_frames_per_camera": 3 }
+  "audit": {
+    "expected_cameras": 1,
+    "expected_frames_per_camera": 3
+  }
 }

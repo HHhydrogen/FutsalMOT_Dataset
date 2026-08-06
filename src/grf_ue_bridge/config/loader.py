@@ -88,6 +88,33 @@ def resolve_local_paths(
     return out
 
 
+def apply_task_path_overrides(
+    task: m.DatasetTaskConfig, local: Dict[str, Path]
+) -> Dict[str, Path]:
+    """在解析后的本地路径之上应用 task 内可选机器路径（单一 config 用法）。
+
+    task 内字段优先级最高：task.dataset_root > 环境变量 > .futsalmot.local.json。
+    """
+    out = dict(local)
+    if task.dataset_root:
+        out["dataset_root"] = Path(task.dataset_root).expanduser().resolve()
+    if task.ue_project_root:
+        out["ue_project_root"] = Path(task.ue_project_root).expanduser().resolve()
+    if task.repo_root:
+        out["repo_root"] = Path(task.repo_root).expanduser().resolve()
+    return out
+
+
+def resolve_paths_for_task(
+    task: m.DatasetTaskConfig,
+    env: Optional[dict] = None,
+    cwd: Optional[Path] = None,
+) -> Dict[str, Path]:
+    """按优先级解析机器路径：task 内字段 > env > local 文件 > 默认。"""
+    base = resolve_local_paths(env, cwd)
+    return apply_task_path_overrides(task, base)
+
+
 # ── task 与 profile 加载 ────────────────────────────────────────────────
 
 def _read_json(path: Path, label: str) -> dict:

@@ -15,77 +15,85 @@ GRF 轨迹（P1, .venv）──→ JSONL ──→ UE Level Sequence + 渲染（
 
 ## 快速开始（task 工作流）
 
-### 1. 本地初始化（机器路径，一次）
+> **单一 config 用法（推荐）**：一个 task 文件即可控制全部参数——机器路径
+> （`dataset_root`/`ue_project_root`）与任务参数（`seed`/相机/后处理）都写在一个文件里，
+> 所有产出（轨迹 + 相机数据）都落到 `<dataset_root>/<episode_name>/` 下**自包含**，
+> 代码根 `outputs/` 不再产生新数据。
+
+### 1. 创建单一 config（本地任务，`tasks/` 已 gitignore）
 
 ```powershell
-Copy-Item .futsalmot.local.example.json .futsalmot.local.json
+Copy-Item configs/tasks/soak_300frames_4cam.example.json tasks/my_dataset.json
 ```
 
-编辑 `.futsalmot.local.json` 填三个路径（或设 `FUTSALMOT_UE_PROJECT_ROOT` /
-`FUTSALMOT_DATASET_ROOT` 环境变量）：
+编辑 `tasks/my_dataset.json`，填上 `dataset_root`（及可选的 `seed`、`ue_project_root`）：
 
 ```json
-{ "schema": "futsalmot_local_config", "version": 1,
-  "repo_root": "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code",
+{
+  "schema": "futsalmot_dataset_task",
+  "version": 1,
+  "task_id": "my_dataset",
+  "episode_name": "episode_my",
+  "dataset_root": "G:/FutsalMOT_Dataset",
   "ue_project_root": "D:/projects/FustalMOT_UEDataset",
-  "dataset_root": "G:/FutsalMOT_Dataset" }
+  "seed": 1001,
+  "export_profile": "../../configs/export/standard_300steps_10fps.json",
+  "ue_profile": "../../configs/ue/4cam_1080p_cvgt.json",
+  "postprocess": { "include_ball": true, "workers": 4, "validation_level": "full" },
+  "audit": { "expected_cameras": 4, "expected_frames_per_camera": 300 }
+}
 ```
 
-路径优先级：**CLI 覆盖 > 环境变量 `FUTSALMOT_*` > `.futsalmot.local.json` > 可移植默认值**。
+> 想用「共享机器路径」而非单一 config：把 `dataset_root` 等放进 `.futsalmot.local.json`
+> （`Copy-Item .futsalmot.local.example.json .futsalmot.local.json`），task 里可省略。
+> 优先级：**task 内字段 > 环境变量 `FUTSALMOT_*` > `.futsalmot.local.json` > 默认**。
 
-### 2. 选择任务
+### 2. 验证并解析
 
 ```powershell
-Copy-Item configs/tasks/soak_300frames_4cam.example.json tasks/soak_local.json
+uv run grf-ue task validate tasks/my_dataset.json
+uv run grf-ue task resolve tasks/my_dataset.json
 ```
 
-（`tasks/` 已 gitignore，属于你的本地任务。）
-
-### 3. 验证并解析
+### 3. 导出轨迹（产出到 dataset_root）
 
 ```powershell
-uv run grf-ue task validate tasks/soak_local.json
-uv run grf-ue task resolve tasks/soak_local.json
+uv run grf-ue task export tasks/my_dataset.json
 ```
 
-`resolve` 生成运行时文件 `.futsalmot/runtime/<task_id>/resolved-task.json`（gitignore）。
+产出：`<dataset_root>/<episode_name>/{meta.json, frames.jsonl, provenance/}`。
 
-### 4. 导出轨迹
+### 4. UE 运行
 
 ```powershell
-uv run grf-ue task export tasks/soak_local.json
+uv run grf-ue task ue-command tasks/my_dataset.json
 ```
 
-### 5. UE 运行
+把输出命令复制到 **Unreal Editor Python Console**（`py ".../ue/run_task.py" --resolved-task ...`）。
+MRQ 渲染异步，完成后写 `render_summary.json`；相机数据写入同一 `<dataset_root>/<episode_name>/`。
+
+### 5. 后处理 + 审计
 
 ```powershell
-uv run grf-ue task ue-command tasks/soak_local.json
+uv run grf-ue task postprocess tasks/my_dataset.json
+uv run grf-ue task audit tasks/my_dataset.json
+uv run grf-ue task status tasks/my_dataset.json
 ```
 
-把输出的命令复制到 **Unreal Editor Python Console**（如
-`py ".../ue/run_task.py" --resolved-task ".../resolved-task.json"`）。
-MRQ 渲染为异步，完成后写 `render_summary.json`。
+### 输出布局（自包含，全在 dataset_root）
 
-### 6. 后处理
-
-```powershell
-uv run grf-ue task postprocess tasks/soak_local.json
-```
-
-按 task 顺序执行：Cryptomatte EXR → mask → mask-primary 标注 → full validate。
-局部重跑用 `--skip-cryptomatte / --skip-annotate / --skip-validate`。
-
-### 7. 审计
-
-```powershell
-uv run grf-ue task audit tasks/soak_local.json
-uv run grf-ue task status tasks/soak_local.json
+```text
+<dataset_root>/<episode_name>/
+├── meta.json / frames.jsonl / provenance/     # 轨迹（task export）
+├── render_summary.json
+├── CineCam_01/…{camera.json, img1/, mask/, render/, render_mask/, labels/, gt/}
+└── …（每相机）
 ```
 
 ### 可选：active task
 
 ```powershell
-uv run grf-ue task activate tasks/soak_local.json
+uv run grf-ue task activate tasks/my_dataset.json
 uv run grf-ue task status            # 之后可省 task 参数
 uv run grf-ue task deactivate
 ```

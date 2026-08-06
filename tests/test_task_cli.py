@@ -43,7 +43,7 @@ def _make_task_dir(tmp_path: Path, cam_count: int = 1, frames: int = 1) -> Path:
         "schema": "futsalmot_dataset_task", "version": 1,
         "task_id": "cli_t1", "episode_name": "episode_cli_t1",
         "export_profile": "export.json", "ue_profile": "ue.json", "seed": None,
-        "paths": {"trajectory_output": "outputs/episode_cli_t1",
+        "paths": {"trajectory_output": "episode_cli_t1",
                   "dataset_output": "episode_cli_t1"},
         "postprocess": {"workers": 2, "validation_level": "full"},
         "audit": {"expected_cameras": cam_count, "expected_frames_per_camera": frames},

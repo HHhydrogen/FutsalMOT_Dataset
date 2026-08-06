@@ -31,7 +31,7 @@ def _make_resolved(tmp_path: Path):
         "schema": "futsalmot_dataset_task", "version": 1,
         "task_id": "ue_t1", "episode_name": "episode_ue_t1",
         "export_profile": "export.json", "ue_profile": "ue.json", "seed": None,
-        "paths": {"trajectory_output": "outputs/episode_ue_t1",
+        "paths": {"trajectory_output": "episode_ue_t1",
                   "dataset_output": "episode_ue_t1"},
         "postprocess": {}, "audit": {},
     }

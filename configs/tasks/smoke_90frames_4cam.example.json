@@ -7,7 +7,7 @@
   "ue_profile": "../ue/4cam_1080p_cvgt.json",
   "seed": null,
   "paths": {
-    "trajectory_output": "outputs/episode_90f_4cam",
+    "trajectory_output": "episode_90f_4cam",
     "dataset_output": "episode_90f_4cam"
   },
   "postprocess": {
@@ -15,9 +15,17 @@
     "workers": 4,
     "chunk_size": 50,
     "png_compress_level": 1,
-    "formats": ["json", "mot", "yolo-det", "yolo-seg"],
+    "formats": [
+      "json",
+      "mot",
+      "yolo-det",
+      "yolo-seg"
+    ],
     "clean_stale": true,
     "validation_level": "full"
   },
-  "audit": { "expected_cameras": 4, "expected_frames_per_camera": 90 }
+  "audit": {
+    "expected_cameras": 4,
+    "expected_frames_per_camera": 90
+  }
 }

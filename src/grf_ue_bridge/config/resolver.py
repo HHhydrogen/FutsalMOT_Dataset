@@ -48,18 +48,19 @@ def validate_task(
     except ValueError as e:
         problems.append(str(e))
 
-    # 本地配置可解析（必须字段存在）
+    # 本地配置可解析（必须字段存在），task 内机器路径字段优先
     try:
-        paths = local if local is not None else loader.resolve_local_paths(env)
+        base = local if local is not None else loader.resolve_local_paths(env)
+        paths = loader.apply_task_path_overrides(task, base)
     except ValueError as e:
         problems.append(str(e))
         return problems  # 路径无法继续解析
 
-    repo_root, dataset_root = paths["repo_root"], paths["dataset_root"]
+    dataset_root = paths["dataset_root"]
 
-    # 路径可解析（含逃逸/绝对路径拒绝）
+    # 路径可解析（含逃逸/绝对路径拒绝）；轨迹与数据集都默认落于 dataset_root 下
     try:
-        traj = _resolve_output(task, repo_root, "trajectory", allow_absolute_paths)
+        traj = _resolve_output(task, dataset_root, "trajectory", allow_absolute_paths)
     except ValueError as e:
         problems.append(f"trajectory_output: {e}")
         traj = None
@@ -69,8 +70,6 @@ def validate_task(
         problems.append(f"dataset_output: {e}")
         ds = None
 
-    if traj and ds and traj == ds:
-        problems.append("trajectory_output 与 dataset_episode_dir 冲突（相同路径）")
     if ds and ds.name != task.episode_name:
         problems.append(
             f"dataset_output 目录名 {ds.name!r} != episode_name {task.episode_name!r}"
@@ -114,7 +113,8 @@ def _resolve_output(
         else task.paths.dataset_output
     )
     if not rel:
-        rel = f"outputs/{task.episode_name}" if kind == "trajectory" else task.episode_name
+        # 默认：轨迹与数据集都落于 <dataset_root>/<episode_name>/（自包含）
+        rel = task.episode_name
     return _paths.resolve_with_allow_absolute(rel, base, allow_absolute)
 
 
@@ -130,13 +130,14 @@ def resolve_task(
     task_file = task_file.resolve()
     task = loader.load_task_config(task_file)
     task_dir = task_file.parent
-    paths = local if local is not None else loader.resolve_local_paths(env)
+    base = local if local is not None else loader.resolve_local_paths(env)
+    paths = loader.apply_task_path_overrides(task, base)
 
     repo_root = paths["repo_root"]
     ue_project_root = paths["ue_project_root"]
     dataset_root = paths["dataset_root"]
 
-    traj = _resolve_output(task, repo_root, "trajectory", allow_absolute_paths)
+    traj = _resolve_output(task, dataset_root, "trajectory", allow_absolute_paths)
     ds = _resolve_output(task, dataset_root, "dataset", allow_absolute_paths)
 
     export_cfg = loader.load_export_profile(task, task_dir)

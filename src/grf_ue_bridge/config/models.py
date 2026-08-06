@@ -106,6 +106,18 @@ class DatasetTaskConfig(BaseModel):
 
     seed: Optional[int] = Field(None, description="root seed（覆盖 export profile）")
 
+    # 可选机器路径：填了就以 task 为准（单一 config 用法），否则回退
+    # 环境变量 > .futsalmot.local.json > 默认。
+    repo_root: Optional[str] = Field(None, description="仓库根目录（可选）")
+    ue_project_root: Optional[str] = Field(None, description="UE 项目根目录（可选）")
+    dataset_root: Optional[str] = Field(
+        None,
+        description=(
+            "数据集输出根目录（可选）。默认所有产出（轨迹 meta/frames/provenance + "
+            "相机数据）都落于 <dataset_root>/<episode_name>/ 下自包含"
+        ),
+    )
+
     paths: TaskPathOverrides = Field(default_factory=TaskPathOverrides)
     postprocess: PostprocessTaskConfig = Field(default_factory=PostprocessTaskConfig)
     audit: AuditTaskConfig = Field(default_factory=AuditTaskConfig)

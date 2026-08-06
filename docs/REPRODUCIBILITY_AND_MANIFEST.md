@@ -73,7 +73,8 @@ provenance/external_sources.lock.json  # 外部仓库锁定提交号
 ### 4. 如何复现
 
 ```powershell
-uv run grf-ue export --config configs/export/standard_300steps_10fps.json --output outputs/ep_s1001 --seed 1001
+# 单一 task 配置：seed 与 dataset_root 都在 task 文件里，产出落 <dataset_root>/<episode_name>/
+uv run grf-ue task export tasks/my_dataset.json
 ```
 
 CLI `--seed` 优先级：**CLI > 配置文件 > 默认值**。运行时打印 root / GRF engine / policy。
@@ -191,7 +192,8 @@ manifest 与 checksum 文件全部使用 **POSIX 相对路径**，无盘符/反�
 
 ```powershell
 # 1) 可复现导出（seed 覆盖）
-uv run grf-ue export --config configs/export/standard_300steps_10fps.json --output outputs/ep_s1001 --seed 1001
+# 单一 task 配置：seed 与 dataset_root 都在 task 文件里，产出落 <dataset_root>/<episode_name>/
+uv run grf-ue task export tasks/my_dataset.json
 
 # 2) 构建 manifest
 uv run grf-ue build-manifest G:/FutsalMOT_Dataset --episode ep_s1001 --episode ep_s1002 --dataset-id futsalmot_v001 --checksum-profile final

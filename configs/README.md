@@ -55,8 +55,24 @@ uv run grf-ue task resolve configs/<task_id>.json
 | `dump_full_raw_observation` | bool | `false` | 是否额外导出完整原始观测（调试用） |
 | `number_of_left_players_agent_controls` | int | `0` | 由 agent 控制的左队球员数（`0` = 全部内置 AI） |
 | `number_of_right_players_agent_controls` | int | `0` | 由 agent 控制的右队球员数（`0` = 全部内置 AI） |
+| `game_duration` | int/null | `null` | 单个回合的引擎帧数（场景默认 `3000`）。**设大**避免采集步数耗尽回合→`env.reset()` 瞬移；`null` = 用场景默认 |
+| `left_team_difficulty` | float/null | `null` | 左队 AI 难度（0~1，场景默认 `0.05`）。调高→球更少出界→减少 set-piece 重摆阵型瞬移；`null` = 用场景默认 |
+| `right_team_difficulty` | float/null | `null` | 右队 AI 难度（0~1，场景默认 `0.05`）；`null` = 用场景默认 |
 
 **导出帧数 = `num_steps × max(1, target_fps/10)`**，需与 `audit.expected_frames_per_camera` 一致。
+
+### 避免球员瞬移（回合长度 + AI 难度）
+
+数据中「球员瞬移」的两个来源，需要对应参数才能根治：
+
+1. **回合耗尽重置**：GRF 单个回合按 `game_duration` 帧计时（`steps_left` 每决策步 -1）。
+   当采集步数 `num_steps` 接近 `game_duration` 时，回合结束触发 `env.reset()`，球员回到开球位。
+   → 调大 `game_duration`（如 `10000`），让 `num_steps` 远小于回合长度。
+2. **出界/死球重摆阵型**：AI 难度过低时球频繁出界，引擎把球员重摆到 set-piece 阵型（game_mode
+   切换处可见跳位）。→ 调高 `left_team_difficulty` / `right_team_difficulty`（如 `0.3`~`0.6`），
+   提高 AI 控球能力，减少死球与阵型跳变。
+
+> 两参数都在 `export` 块，写入单 config 入库；`null` = 沿用场景默认。
 
 ## `ue` 块（UE 相机 / Sequence / 渲染）
 

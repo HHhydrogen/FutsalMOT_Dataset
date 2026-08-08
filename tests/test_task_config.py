@@ -99,6 +99,36 @@ class TestTaskSchema:
         with pytest.raises(Exception):
             loader.load_task_config(tf)
 
+    def test_export_scenario_overrides(self, tmp_path):
+        tf = _write_task(
+            tmp_path,
+            export={
+                "scenario": "5_vs_5", "seed": 42, "num_steps": 300, "playback_fps": 30,
+                "game_duration": 10000,
+                "left_team_difficulty": 0.6, "right_team_difficulty": 0.6,
+            },
+        )
+        t = loader.load_task_config(tf)
+        assert t.export.game_duration == 10000
+        assert t.export.left_team_difficulty == 0.6
+        assert t.export.right_team_difficulty == 0.6
+
+    def test_export_defaults_none(self, tmp_path):
+        # 缺省（null）= 用场景默认，不覆盖
+        tf = _write_task(tmp_path)
+        t = loader.load_task_config(tf)
+        assert t.export.game_duration is None
+        assert t.export.left_team_difficulty is None
+        assert t.export.right_team_difficulty is None
+
+    def test_bad_difficulty_rejected(self, tmp_path):
+        tf = _write_task(tmp_path, export={
+            "scenario": "5_vs_5", "num_steps": 300,
+            "left_team_difficulty": 1.5,  # 越界 >1
+        })
+        with pytest.raises(Exception):
+            loader.load_task_config(tf)
+
     def test_defaults(self):
         pp = PostprocessTaskConfig()
         assert pp.workers == 4

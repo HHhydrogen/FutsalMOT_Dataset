@@ -152,5 +152,28 @@ class ExportConfig(BaseModel):
     number_of_right_players_agent_controls: int = Field(
         0, description="由 agent 控制的右队球员数（0 = 全部内置 AI）"
     )
+    game_duration: Optional[int] = Field(
+        None,
+        ge=1,
+        description=(
+            "单个回合的引擎帧数（场景 game_duration，5_vs_5 默认 3000）。"
+            "设大避免采集步数耗尽回合→重置瞬移；None = 用场景默认"
+        ),
+    )
+    left_team_difficulty: Optional[float] = Field(
+        None,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "左队 AI 难度（0~1，5_vs_5 默认 0.05）。调高→球更少出界、"
+            "减少 set-piece 重摆阵型瞬移；None = 用场景默认"
+        ),
+    )
+    right_team_difficulty: Optional[float] = Field(
+        None,
+        ge=0.0,
+        le=1.0,
+        description="右队 AI 难度（0~1，5_vs_5 默认 0.05）；None = 用场景默认",
+    )
 
     model_config = {"populate_by_name": True}

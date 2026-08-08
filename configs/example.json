@@ -21,7 +21,10 @@
     "write_video": false,
     "dump_full_raw_observation": false,
     "number_of_left_players_agent_controls": 0,
-    "number_of_right_players_agent_controls": 0
+    "number_of_right_players_agent_controls": 0,
+    "game_duration": 3000,
+    "left_team_difficulty": 0.05,
+    "right_team_difficulty": 0.05
   },
 
   "ue": {

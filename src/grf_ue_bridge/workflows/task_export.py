@@ -60,6 +60,9 @@ def run_export(
         seed=export_cfg.seed,
         num_steps=export_cfg.num_steps,
         render=export_cfg.render,
+        game_duration=export_cfg.game_duration,
+        left_team_difficulty=export_cfg.left_team_difficulty,
+        right_team_difficulty=export_cfg.right_team_difficulty,
         number_of_left_players_agent_controls=export_cfg.number_of_left_players_agent_controls,
         number_of_right_players_agent_controls=export_cfg.number_of_right_players_agent_controls,
     )

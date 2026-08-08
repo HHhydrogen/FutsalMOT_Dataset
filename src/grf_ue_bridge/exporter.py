@@ -111,6 +111,9 @@ def export_episode(
             seed=config.seed,
             football_commit=_get_football_commit(),
             grf_marl_commit=_get_grf_marl_commit(),
+            game_duration=config.game_duration,
+            left_team_difficulty=config.left_team_difficulty,
+            right_team_difficulty=config.right_team_difficulty,
         ),
         timing=TimingInfo(
             source_step_seconds=source_step_seconds,

@@ -52,6 +52,15 @@ class SourceInfo(BaseModel):
     seed: int = 42
     football_commit: str = ""
     grf_marl_commit: str = ""
+    game_duration: Optional[int] = Field(
+        None, description="场景覆盖的回合引擎帧数（None = 场景默认）"
+    )
+    left_team_difficulty: Optional[float] = Field(
+        None, description="场景覆盖的左队 AI 难度（None = 场景默认）"
+    )
+    right_team_difficulty: Optional[float] = Field(
+        None, description="场景覆盖的右队 AI 难度（None = 场景默认）"
+    )
 
 
 class RandomnessInfo(BaseModel):

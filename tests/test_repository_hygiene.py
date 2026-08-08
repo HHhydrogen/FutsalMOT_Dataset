@@ -1,7 +1,8 @@
-"""仓库卫生检查：根配置泄漏、绝对路径、scripts 已删除、命名规范。"""
+"""仓库卫生检查：根配置泄漏、单 config 自包含、scripts 已删除、命名规范。"""
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -11,7 +12,7 @@ def _iter_files(root: Path) -> list:
     out = []
     skip_parts = {".git", ".venv", ".external", ".pytest_cache", "__pycache__",
                   ".futsalmot", ".claude", ".superpowers", "dist", "build",
-                  "outputs", "tasks"}  # tasks/ 为本地用户任务，不纳入卫生检查
+                  "outputs"}  # outputs/ 为生成数据，不纳入卫生检查
     for p in root.rglob("*"):
         if not p.is_file():
             continue
@@ -27,8 +28,9 @@ class TestRootHygiene:
         assert list(repo_root.glob("ue_import_config*.json")) == []
 
     def test_no_root_machine_config(self, repo_root):
-        # 根目录不再有本机路径配置（.futsalmot.local.json 可能被忽略，但不应入库）
+        # 机器路径已直接写进 configs/，根目录不再有独立本机路径配置
         assert not (repo_root / "ue_import_config.json").exists()
+        assert not (repo_root / ".futsalmot.local.json").exists()
 
     def test_no_mask_rendering_status(self, repo_root):
         assert not (repo_root / "MASK_RENDERING_STATUS.md").exists()
@@ -37,25 +39,39 @@ class TestRootHygiene:
         for p in _iter_files(repo_root):
             assert "90fps" not in p.name, f"错误命名 90fps: {p}"
 
-    def test_gitignore_has_local_and_runtime(self, repo_root):
+    def test_gitignore_has_runtime(self, repo_root):
         gi = (repo_root / ".gitignore").read_text(encoding="utf-8")
-        assert ".futsalmot.local.json" in gi
         assert ".futsalmot/" in gi
+        # 本地路径已入库，不再忽略本地配置
+        assert ".futsalmot.local.json" not in gi
+        assert "*.local.json" not in gi
 
 
-class TestConfigNoAbsolutePaths:
-    def test_configs_no_drive_paths(self, repo_root):
-        # 正式配置（export/ue/tasks，不含 example/local）不得含盘符绝对路径
-        pat = re.compile(r"[A-Za-z]:[/\\]")
-        for p in repo_root.glob("configs/**/*.json"):
-            if ".example." in p.name or "local" in p.name:
-                continue
-            text = p.read_text(encoding="utf-8")
-            assert not pat.search(text), f"配置含盘符绝对路径: {p}"
+class TestDatasetConfigs:
+    def test_dataset_configs_self_contained(self, repo_root):
+        """configs/*.json 必须自包含：无 profile 引用，含绝对机器路径。example.json 为占位符模板，跳过。"""
+        for p in repo_root.glob("configs/*.json"):
+            if p.name == "example.json":
+                continue  # 模板用 <...> 占位符路径
+            data = json.loads(p.read_text(encoding="utf-8"))
+            assert data.get("schema") == "futsalmot_dataset_task"
+            assert data.get("version") == 2
+            # 不再引用独立 profile / paths 覆盖
+            assert "export_profile" not in data
+            assert "ue_profile" not in data
+            assert "paths" not in data
+            # 机器路径必填且为绝对路径（盘符/UNC）
+            ds = data.get("dataset_root") or ""
+            ue = data.get("ue_project_root") or ""
+            assert re.match(r"^[A-Za-z]:[/\\\\]", ds), f"dataset_root 非绝对路径: {p}"
+            assert re.match(r"^[A-Za-z]:[/\\\\]", ue), f"ue_project_root 非绝对路径: {p}"
+            # 内联 export / ue 块
+            assert "export" in data and data["export"].get("scenario")
+            assert "ue" in data and data["ue"].get("annotation_export")
 
-    def test_example_task_no_absolute(self, repo_root):
+    def test_dataset_configs_parse(self, repo_root):
         from grf_ue_bridge.config import loader
-        for tf in repo_root.glob("configs/tasks/*.example.json"):
+        for tf in repo_root.glob("configs/*.json"):
             loader.load_task_config(tf)  # 可解析即可
 
 

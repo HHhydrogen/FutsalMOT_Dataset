@@ -15,20 +15,20 @@
 
 - Unreal Engine 5.x 项目，关卡中放置 11 个 Actor（10 名球员 + 1 个足球）
 - **无需** gfootball、.venv、GRF_MARL — 纯 UE Python + stdlib
-- Actor 标签与 ue profile 的 `actor_mapping` 指向的 JSON 一致
+- Actor 标签与 task `ue` 块的 `actor_mapping` 指向的 JSON 一致
 
 ## 推荐用法（resolved task）
 
-1. 在 P1 生成 resolved task（机器路径由 `.futsalmot.local.json` / 环境变量提供）：
+1. 在 P1 生成 resolved task（机器路径在单 config `configs/*.json` 内）：
 
 ```powershell
-uv run grf-ue task resolve configs/tasks/production_300frames_4cam.example.json
+uv run grf-ue task resolve configs/production_300frames_4cam.json
 ```
 
 2. 获取 UE 命令并复制到 **Unreal Editor Python Console**：
 
 ```powershell
-uv run grf-ue task ue-command configs/tasks/production_300frames_4cam.example.json
+uv run grf-ue task ue-command configs/production_300frames_4cam.json
 ```
 
 输出形如：
@@ -57,7 +57,7 @@ py "D:/.../code/ue/run_task.py" --resolved-task "D:/.../.futsalmot/runtime/soak_
 
 ## 球滚动旋转
 
-在 ue profile（`configs/ue/*.json`）的 `ball_rolling` 段配置：
+在 task 的 `ue` 块 `ball_rolling` 段配置：
 - `radius_m` — 球半径（默认 0.11）
 - `roll_sign` — 滚反了设为 `-1.0`
 - `enabled: false` 可完全禁用

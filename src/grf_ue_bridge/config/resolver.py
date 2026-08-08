@@ -1,4 +1,4 @@
-"""task 解析：把 task + profile + 本地配置合并为 resolved task。
+"""task 解析：把单 config（含绝对机器路径）归一化为 resolved task。
 
 resolved task 是唯一运行时契约：普通 Python CLI 与 UE Python（ue/run_task.py）
 都读取它，不再分别实现两套路径解析。
@@ -25,12 +25,7 @@ from grf_ue_bridge.config.paths import (
 
 # ── 校验（只读，不写文件）───────────────────────────────────────────────
 
-def validate_task(
-    task_file: Path,
-    env: Optional[dict] = None,
-    local: Optional[dict] = None,
-    allow_absolute_paths: bool = False,
-) -> List[str]:
+def validate_task(task_file: Path) -> List[str]:
     """只读校验一个 task，返回问题列表（空 = 通过）。不生成任何文件。"""
     problems: List[str] = []
     task_file = task_file.resolve()
@@ -40,116 +35,46 @@ def validate_task(
     except Exception as e:  # noqa: BLE001
         return [f"task 解析失败: {e}"]
 
-    task_dir = task_file.parent
-
-    # profile 存在
-    try:
-        loader.resolve_profile_refs(task, task_dir)
-    except ValueError as e:
-        problems.append(str(e))
-
-    # 本地配置可解析（必须字段存在），task 内机器路径字段优先
-    try:
-        base = local if local is not None else loader.resolve_local_paths(env)
-        paths = loader.apply_task_path_overrides(task, base)
-    except ValueError as e:
-        problems.append(str(e))
-        return problems  # 路径无法继续解析
-
-    dataset_root = paths["dataset_root"]
-
-    # 路径可解析（含逃逸/绝对路径拒绝）；轨迹与数据集都默认落于 dataset_root 下
-    try:
-        traj = _resolve_output(task, dataset_root, "trajectory", allow_absolute_paths)
-    except ValueError as e:
-        problems.append(f"trajectory_output: {e}")
-        traj = None
-    try:
-        ds = _resolve_output(task, dataset_root, "dataset", allow_absolute_paths)
-    except ValueError as e:
-        problems.append(f"dataset_output: {e}")
-        ds = None
-
-    if ds and ds.name != task.episode_name:
-        problems.append(
-            f"dataset_output 目录名 {ds.name!r} != episode_name {task.episode_name!r}"
-            "（UE 端按 episode_id 定位数据集目录，两者必须一致）"
-        )
+    # 机器路径（必填）
+    if not task.dataset_root:
+        problems.append("缺少 dataset_root")
+    if not task.ue_project_root:
+        problems.append("缺少 ue_project_root")
 
     # 相机数量
-    try:
-        ue = loader.load_ue_profile(task, task_dir)
-        cam_ids = (ue.get("annotation_export") or {}).get("cameras") or []
-        expected_cams = task.audit.expected_cameras
-        if cam_ids and len(cam_ids) != expected_cams:
-            problems.append(
-                f"UE profile 相机数 {len(cam_ids)} != audit.expected_cameras {expected_cams}"
-            )
-    except ValueError as e:
-        problems.append(str(e))
+    cam_ids = (task.ue.annotation_export or {}).get("cameras") or []
+    expected_cams = task.audit.expected_cameras
+    if cam_ids and len(cam_ids) != expected_cams:
+        problems.append(
+            f"相机数 {len(cam_ids)} != audit.expected_cameras {expected_cams}"
+        )
 
     # 期望帧数 vs 导出步数
-    try:
-        export_cfg = loader.load_export_profile(task, task_dir)
-        steps = export_cfg.num_steps
-        factor = max(1, (export_cfg.target_fps or 10) // 10)
-        expected_frames = steps * factor
-        if expected_frames != task.audit.expected_frames_per_camera:
-            problems.append(
-                f"导出帧数 {expected_frames}（num_steps={steps}×factor={factor}）"
-                f" != audit.expected_frames_per_camera {task.audit.expected_frames_per_camera}"
-            )
-    except ValueError as e:
-        problems.append(str(e))
+    steps = task.export.num_steps
+    factor = max(1, (task.export.target_fps or 10) // 10)
+    expected_frames = steps * factor
+    if expected_frames != task.audit.expected_frames_per_camera:
+        problems.append(
+            f"导出帧数 {expected_frames}（num_steps={steps}×factor={factor}）"
+            f" != audit.expected_frames_per_camera {task.audit.expected_frames_per_camera}"
+        )
 
     return problems
 
 
-def _resolve_output(
-    task: m.DatasetTaskConfig, base: Path, kind: str, allow_absolute: bool
-) -> Path:
-    rel = (
-        task.paths.trajectory_output if kind == "trajectory"
-        else task.paths.dataset_output
-    )
-    if not rel:
-        # 默认：轨迹与数据集都落于 <dataset_root>/<episode_name>/（自包含）
-        rel = task.episode_name
-    return _paths.resolve_with_allow_absolute(rel, base, allow_absolute)
-
-
 # ── 解析为 resolved task ────────────────────────────────────────────────
 
-def resolve_task(
-    task_file: Path,
-    env: Optional[dict] = None,
-    local: Optional[dict] = None,
-    allow_absolute_paths: bool = False,
-) -> m.ResolvedTask:
-    """把 task 解析为运行时 resolved task（含绝对路径）。"""
+def resolve_task(task_file: Path) -> m.ResolvedTask:
+    """把单 config 解析为运行时 resolved task（含绝对路径）。"""
     task_file = task_file.resolve()
     task = loader.load_task_config(task_file)
-    task_dir = task_file.parent
-    base = local if local is not None else loader.resolve_local_paths(env)
-    paths = loader.apply_task_path_overrides(task, base)
 
-    repo_root = paths["repo_root"]
-    ue_project_root = paths["ue_project_root"]
-    dataset_root = paths["dataset_root"]
+    repo_root = _paths.default_repo_root()
+    dataset_root = Path(task.dataset_root).expanduser().resolve()
+    ue_project_root = Path(task.ue_project_root).expanduser().resolve()
+    episode_dir = dataset_root / task.episode_name
 
-    traj = _resolve_output(task, dataset_root, "trajectory", allow_absolute_paths)
-    ds = _resolve_output(task, dataset_root, "dataset", allow_absolute_paths)
-
-    export_cfg = loader.load_export_profile(task, task_dir)
-    if task.seed is not None:
-        export_cfg = export_cfg.model_copy(update={"seed": task.seed})
-    export_dict = export_cfg.model_dump()
-
-    ue = loader.load_ue_profile(task, task_dir)
-    actor_rel = str(ue.get("actor_mapping") or "ue/actor_mapping.example.json")
-    actor_mapping = _paths.resolve_with_allow_absolute(
-        actor_rel, repo_root, allow_absolute_paths
-    )
+    actor_mapping = _paths.resolve_task_relative(task.ue.actor_mapping, repo_root)
 
     return m.ResolvedTask(
         task_id=task.task_id,
@@ -158,10 +83,10 @@ def resolve_task(
         repo_root=str(repo_root),
         ue_project_root=str(ue_project_root),
         dataset_root=str(dataset_root),
-        trajectory_output=str(traj),
-        dataset_episode_dir=str(ds),
-        export_profile=export_dict,
-        ue_profile=ue,
+        trajectory_output=str(episode_dir),
+        dataset_episode_dir=str(episode_dir),
+        export_profile=task.export.model_dump(),
+        ue_profile=task.ue.model_dump(),
         actor_mapping=str(actor_mapping),
         postprocess=task.postprocess.model_dump(),
         audit=task.audit.model_dump(),
@@ -182,9 +107,8 @@ def validate_resolved_task(resolved: m.ResolvedTask) -> List[str]:
         except ValueError:
             problems.append(f"{label} 逃逸其根目录: {value}")
 
-    _contained(resolved.trajectory_output, resolved.repo_root, "trajectory_output")
+    _contained(resolved.trajectory_output, resolved.dataset_root, "trajectory_output")
     _contained(resolved.dataset_episode_dir, resolved.dataset_root, "dataset_episode_dir")
-    _contained(resolved.actor_mapping, resolved.repo_root, "actor_mapping")
     return problems
 
 

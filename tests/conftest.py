@@ -19,3 +19,14 @@ if str(_UE_DIR) not in sys.path:
 def repo_root() -> Path:
     """仓库根目录。"""
     return _REPO_ROOT
+
+
+@pytest.fixture
+def pin_repo_root(monkeypatch, tmp_path):
+    """把 default_repo_root 固定到 tmp_path/repo，隔离运行时路径（resolved task/active task）。"""
+    from grf_ue_bridge.config import paths
+
+    repo = tmp_path / "repo"
+    repo.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(paths, "default_repo_root", lambda: repo)
+    return repo

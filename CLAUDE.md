@@ -23,15 +23,15 @@
 ## 常用命令
 
 所有 P1 命令都在 `code/` 下通过 `uv` 运行（`.venv`，Python 3.9 由 `.python-version` 固定）。
-**推荐以 dataset task 为入口**（先 `Copy-Item .futsalmot.local.example.json .futsalmot.local.json` 填机器路径）：
+**推荐以 dataset task 为入口**（单 config，`configs/*.json` 已含机器路径并入库）：
 
 ```powershell
 uv sync                                   # 安装依赖（含 dev 组的 pytest）
-uv run grf-ue task validate tasks/soak_local.json
-uv run grf-ue task resolve tasks/soak_local.json
-uv run grf-ue task export tasks/soak_local.json      # GRF 导出
-uv run grf-ue task postprocess tasks/soak_local.json # cryptomatte + annotate + validate
-uv run grf-ue task audit tasks/soak_local.json
+uv run grf-ue task validate configs/smoke_3frames_1cam.json
+uv run grf-ue task resolve configs/smoke_3frames_1cam.json
+uv run grf-ue task export configs/smoke_3frames_1cam.json      # GRF 导出
+uv run grf-ue task postprocess configs/smoke_3frames_1cam.json # cryptomatte + annotate + validate
+uv run grf-ue task audit configs/smoke_3frames_1cam.json
 uv run pytest                             # 运行全部测试
 uv run pytest -m grf_integration -q       # 真实 GRF seed 复现集成测试
 ```
@@ -39,7 +39,7 @@ uv run pytest -m grf_integration -q       # 真实 GRF seed 复现集成测试
 P2 脚本**在 Unreal Editor 内**（Python Console）运行，绝不在 .venv 中运行：
 
 ```powershell
-uv run grf-ue task ue-command tasks/soak_local.json
+uv run grf-ue task ue-command configs/smoke_3frames_1cam.json
 ```
 
 把输出命令复制到 UE Console，形如：
@@ -55,7 +55,7 @@ py "D:/.../code/ue/run_task.py" --resolved-task "D:/.../.futsalmot/runtime/<task
 ### P1：导出（`src/grf_ue_bridge/`）
 
 - `cli.py` — typer 应用；提供 `grf-ue task ...` 工作流 + 既有 `export`/`validate`/`annotate-*`/`cryptomatte-to-mask`/`build-manifest` 等命令。
-- `config/` — `models.py`（LocalConfig/DatasetTaskConfig/ResolvedTask/ExportConfig）、`loader.py`、`resolver.py`（路径解析、resolved task）、`paths.py`（安全/可移植）。旧 `config.py`（ExportConfig）已并入 `config/models.py`。
+- `config/` — `models.py`（DatasetTaskConfig 单 config：`export`/`ue`/`dataset_root`/`ue_project_root` 内联、ResolvedTask、ExportConfig）、`loader.py`、`resolver.py`（归一化 resolved task）、`paths.py`（仓库根探测/可移植）。旧 `config.py`（ExportConfig）已并入 `config/models.py`。
 - `grf_runner.py` — 运行 GRF 环境。强制 `number_of_left_players_agent_controls=1`，每一步都发送 `action_builtin_ai`（索引 19，`action_set='v2'`），使所有球员都表现为内置 AI，同时把完整观测记录进 `EpisodeResult`/`StepSnapshot`。
 - `coordinate_transform.py` — `CoordinateTransform`：GRF 归一化 x/y `[-1, 1]` → 米 `[-half_field, +half_field]`；球的 z 原样透传（引擎 `Z_FIELD_SCALE=1`，地面约 0.11 m）；球员固定 z=0。
 - `exporter.py` — 写入 `meta.json` + `frames.jsonl`（`dump_full_raw_observation` 时额外写 `raw_observations.jsonl`）。从 `external_sources.lock.json` 读取固定的提交号写入 `meta.source`。
@@ -72,7 +72,7 @@ py "D:/.../code/ue/run_task.py" --resolved-task "D:/.../.futsalmot/runtime/<task
   - `preview` — 直接在关卡中设置 actor 变换。
   - `sequence` — 创建/覆盖 Level Sequence 资产，为球员和球写入关键帧的 Location/Rotation 轨道；`both`（默认）两者都执行。
 - `actor_mapping.example.json` — 实体 ID → UE actor 标签映射（必须与关卡中的 actor 标签一致）。
-- 导入约定：米→厘米（×100），球员 Z 固定为 `PLAYER_Z_CM = 90`，球 Z `+ BALL_Z_OFFSET_CM = 2`，Yaw 由位置增量计算并带低速滞回（`SPEED_THRESHOLD_CM = 5.0`）。球的滚动旋转按帧通过四元数累加实现（在 ue profile 的 `ball_rolling` 段配置）。
+- 导入约定：米→厘米（×100），球员 Z 固定为 `PLAYER_Z_CM = 90`，球 Z `+ BALL_Z_OFFSET_CM = 2`，Yaw 由位置增量计算并带低速滞回（`SPEED_THRESHOLD_CM = 5.0`）。球的滚动旋转按帧通过四元数累加实现（在 task 的 `ue` 块 `ball_rolling` 段配置）。
 
 ### CV 标注导出（annotation exporter）
 

@@ -27,16 +27,8 @@ DerivedDataCache/
 Intermediate/
 Saved/
 
-# Local configuration
-configs/local*.json
-*.local.json
-
-# 机器本地路径配置（.example.json 入库，真实文件忽略）
-.futsalmot.local.json
-
-# 运行时产物（resolved task / active task / 本地任务）
+# 运行时产物（resolved task / active task）
 .futsalmot/
-tasks/local/
 runtime/
 reports/local/
 benchmarks/local/

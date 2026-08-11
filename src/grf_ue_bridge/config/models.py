@@ -6,6 +6,7 @@ resolved task 是 P1↔UE 共享的运行时契约。
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
@@ -13,6 +14,76 @@ from pydantic import BaseModel, Field
 from .paths import RESOLVED_TASK_SCHEMA, TASK_SCHEMA
 
 VALID_POSTPROCESS_FORMATS = ("json", "mot", "yolo-det", "yolo-seg")
+
+
+# ── YOLO Pose（人体关键点）后处理配置 ────────────────────────────────────
+
+class YoloPoseTaskConfig(BaseModel):
+    """YOLO Pose 标注导出参数（属于 task 的 postprocess.yolo_pose）。
+
+    单一开关同时控制 UE 侧关键点导出（resolved task 经 run_task.py 读到）与
+    P1 侧标签生成（postprocess 阶段）。默认关闭，不影响原有 pipeline。
+    """
+
+    enabled: bool = Field(
+        False,
+        description=(
+            "是否导出 YOLO Pose（COCO 17 点）。开启后 UE 导出 pose_keypoints.jsonl，"
+            "postprocess 生成 labels_pose/ + futsal_pose.yaml"
+        ),
+    )
+    visibility_neighborhood_radius: int = Field(
+        2,
+        ge=0,
+        le=8,
+        description="Instance-ID Mask 邻域判定半径（像素），用于 keypoint 遮挡判定",
+    )
+    write_dataset_yaml: bool = Field(
+        True,
+        description="是否在 episode 根生成 yolo_pose/ 可训练暂存目录与 futsal_pose.yaml",
+    )
+    occlusion_trace: bool = Field(
+        True,
+        description="UE 侧是否对每个关键点做遮挡 trace（自遮挡 / 非 mask 几何）",
+    )
+    trace_tolerance_cm: float = Field(
+        20.0,
+        gt=0.0,
+        le=200.0,
+        description="UE 遮挡 trace 容差（cm）：命中距离 < 关键点距离 - 容差 即判遮挡",
+    )
+    bone_overrides: Dict[str, str] = Field(
+        default_factory=dict,
+        description="UE bone 名覆盖：{COCO 关键点名: UE bone 名}（用于骨骼命名不同的资产）",
+    )
+    head_offsets_cm: Dict[str, List[float]] = Field(
+        default_factory=dict,
+        description="脸部五点相对 head 骨骼的局部偏移覆盖：{脸部 COCO 名: [x, y, z] cm}",
+    )
+
+    def validate_pose(self) -> None:
+        """跨字段一致性：bone_overrides / head_offsets_cm 键名合法。"""
+        # 延迟 import：config 层早期加载，避免依赖 ue/ 路径；运行时补 sys.path
+        import sys
+
+        _ue_dir = Path(__file__).resolve().parent.parent.parent.parent / "ue"
+        if str(_ue_dir) not in sys.path:
+            sys.path.insert(0, str(_ue_dir))
+        from pose_bones import COCO_KEYPOINT_NAMES, FACE_KEYPOINT_NAMES
+
+        valid = set(COCO_KEYPOINT_NAMES)
+        for k in self.bone_overrides:
+            if k not in valid:
+                raise ValueError(
+                    f"yolo_pose.bone_overrides 键 {k!r} 非法（只接受 COCO 关键点名）"
+                )
+        for k, off in self.head_offsets_cm.items():
+            if k not in FACE_KEYPOINT_NAMES:
+                raise ValueError(
+                    f"yolo_pose.head_offsets_cm 键 {k!r} 非法（只接受脸部五点）"
+                )
+            if not isinstance(off, list) or len(off) != 3:
+                raise ValueError(f"yolo_pose.head_offsets_cm[{k}] 须为 [x, y, z] cm")
 
 
 # ── 数据集 Task（单 config：导出 + UE + 机器路径内联）──────────────────
@@ -29,6 +100,10 @@ class PostprocessTaskConfig(BaseModel):
     )
     clean_stale: bool = True
     validation_level: Literal["full", "quick"] = "full"
+    yolo_pose: YoloPoseTaskConfig = Field(
+        default_factory=YoloPoseTaskConfig,
+        description="YOLO Pose 标注导出参数（默认关闭）",
+    )
 
     def validate_formats(self) -> None:
         for f in self.formats:
@@ -37,6 +112,7 @@ class PostprocessTaskConfig(BaseModel):
                     f"不支持的 postprocess 格式: {f!r}（可选 "
                     f"{'/'.join(VALID_POSTPROCESS_FORMATS)}）"
                 )
+        self.yolo_pose.validate_pose()
 
 
 class AuditTaskConfig(BaseModel):

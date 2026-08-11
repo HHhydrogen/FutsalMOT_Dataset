@@ -22,8 +22,7 @@ GRF 轨迹（P1, .venv）──→ JSONL ──→ UE Level Sequence + 渲染（
 ### 1. 使用或新建单 config
 
 仓库内已提交的自包含单 config（`configs/*.json`）可直接运行（机器路径已入库）：
-冒烟用 `configs/smoke_3frames_1cam.json`，生产用
-`configs/production_300frames_4cam.json`。
+冒烟/demo 用 `configs/pose_smoke_3frames_1cam.json`（yolo_pose 已启用）。
 
 新 episode：复制 `configs/example.json` 到新文件名，替换占位符并改参数。
 **每个参数的说明与填写指南见 [`configs/README.md`](configs/README.md)**（含 `example.json`
@@ -87,8 +86,7 @@ uv run grf-ue task deactivate
 configs/     # 每个数据集任务一个自包含 JSON（导出 + UE + 机器路径，入库）
 ├── example.json                  # 完整参数模板（占位符路径）
 ├── README.md                     # 参数详解与填写指南
-├── smoke_3frames_1cam.json       # 冒烟：3 步 × 1 相机 = 3 帧
-└── production_300frames_4cam.json # 生产：300 步 × 4 相机 = 300 帧标注
+└── pose_smoke_3frames_1cam.json  # 冒烟/demo：3 步 × 1 相机 = 3 帧，yolo_pose 已启用
 ```
 
 - 导出参数在 `export` 块（scenario / seed / num_steps / fps / 场地尺寸）。
@@ -110,6 +108,7 @@ grf-ue
 ├── benchmark       # 后处理性能基准（透传参数）
 ├── export --config --output [--seed]   # Legacy（deprecated）
 ├── validate / validate-annotations / annotate-masks
+├── annotate-pose / validate-pose / pose-overlay   # YOLO Pose（COCO 17 点）
 ├── cryptomatte-to-mask / annotate-overlay / make-video
 └── build-manifest / verify-manifest    # 数据集 manifest
 ```
@@ -125,6 +124,7 @@ grf-ue
 - `workflows/` — `task_export` / `task_postprocess` / `task_audit` / `task_status`。
 - `tools/` — `resource_monitor` / `process_measure` / `benchmark_postprocess`。
 - `mask_annotator.py` / `cryptomatte.py` / `annotation_validator.py` — 标注链路。
+- `pose_annotator.py` / `pose_validator.py` — YOLO Pose 标注与校验（见下）。
 - `dataset_manifest.py` — 数据集索引 / 校验和 / fingerprint / 去重。
 
 ### P2：Unreal（`ue/`）
@@ -133,6 +133,9 @@ grf-ue
   不再隐式读取根目录配置。
 - `import_grf_episode.py` — Sequence 创建 / 标注导出 / 渲染（`--config` 为 legacy 模式）。
 - `render_episode.py` — MRQ 异步渲染 RGB + Object ID EXR、watchdog、`render_summary`。
+  渲染前**首帧 spawn 状态烘焙**（把 actor 设到第 0 帧并保存关卡，修复 MRQ 首帧因
+  possessable 未被 Sequence 接管而渲成关卡默认位置的问题）。
+- `pose_bones.py` / `pose_export.py` — COCO 17 点 ↔ UE 骨骼映射与关键点导出（见下）。
 - `recover_render.py` — 从已有 `render/` 恢复 `img1/`（`--resolved-task`）。
 
 ### 数据契约（与 P2 共享）
@@ -149,6 +152,65 @@ grf-ue
    `geometry_bbox_*` 作 fallback。
 
 详见 [`docs/architecture/INSTANCE_MASK_PIPELINE.md`](docs/architecture/INSTANCE_MASK_PIPELINE.md)。
+
+## YOLO Pose（COCO 17 点人体关键点）
+
+在 mask-primary 流程之上，为每个球员生成 Ultralytics YOLO Pose 标签（17 点，每行
+`class xc yc w h x1 y1 v1 ... x17 y17 v17` 共 **56 字段**）。
+
+### 开启
+
+在 task 配置的 `postprocess.yolo_pose` 块开启（默认关闭，不影响原 pipeline）：
+
+```json
+"postprocess": {
+  ...
+  "yolo_pose": { "enabled": true }
+}
+```
+
+启用后流程自动变为：`task export` → `task ue-command`（UE 运行，额外导出
+`pose_keypoints.jsonl`）→ `task postprocess`（annotate-masks → **annotate-pose** →
+validate-annotations → **validate-pose**）。
+
+### COCO 17 点定义与顺序（严禁改动）
+
+```text
+0 nose  1 left_eye  2 right_eye  3 left_ear  4 right_ear
+5 left_shoulder  6 right_shoulder  7 left_elbow  8 right_elbow
+9 left_wrist  10 right_wrist  11 left_hip  12 right_hip
+13 left_knee  14 right_knee  15 left_ankle  16 right_ankle
+```
+
+可见性：`v=0` 无效 / `v=1` 被遮挡（其他球员 / 球 / 自遮挡，基于 Instance-ID Mask
+邻域 + UE 遮挡 trace）/ `v=2` 可见。bbox 复用 mask-primary bbox（与 YOLO det 完全一致）。
+
+### 输出
+
+```text
+<episode_root>/<camera>/labels_pose/000001.txt   # YOLO Pose 标签
+<episode_root>/yolo_pose/                        # 可训练暂存（images 硬链接 + labels）
+<episode_root>/futsal_pose.yaml                  # dataset YAML（kpt_shape [17,3]）
+```
+
+### 常用命令
+
+```powershell
+uv run grf-ue task postprocess configs/my_dataset.json      # 含 annotate-pose + validate-pose
+uv run grf-ue validate-pose <dataset_root>/<episode_name>   # 单独校验
+uv run grf-ue pose-overlay <dataset_root>/<episode_name>/<camera> --frames 1,2,3  # 可视化验证
+uv run grf-ue annotate-pose <dataset_root>/<episode_name>   # 单独重跑 pose 标签
+```
+
+### 用 Ultralytics 训练
+
+```bash
+yolo pose train model=yolo11n-pose.pt data=<dataset_root>/<episode_name>/futsal_pose.yaml
+```
+
+> `futsal_pose.yaml` 的 `train`/`val` 指向 episode 内 `yolo_pose/` 的 `images/` 目录，
+> 标签在 `labels/` 同级目录（Ultralytics 自动按 `images→labels` 发现），无需改格式。
+> 骨骼映射与脸部偏移说明见 [`docs/design/2026-08-11-yolo-pose-export.md`](docs/design/2026-08-11-yolo-pose-export.md)。
 
 ## 可复现性与 Manifest
 
@@ -175,3 +237,6 @@ uv build
 | UE 找不到 actor | 检查 `ue` 块的 `actor_mapping` 指向的 JSON 与关卡标签一致 |
 | 球陷进地面 / 倒着滚 | 调 `ue` 块 `ball_rolling` 的 `BALL_Z_OFFSET_CM` / `roll_sign` |
 | 渲染未写 `img1/` | 检查 `render_summary.json` 状态；用 `ue/recover_render.py --resolved-task ...` 恢复 |
+| **首帧渲成关卡默认位置**（后续帧正常） | MRQ/PIE 第 0 帧 possessable actor 尚未被 Sequence 接管——`render_episode.py` 已做**首帧 spawn 状态烘焙**（提交渲染前把 actor 设到第 0 帧并保存关卡）；确认 UE 控制台打印 `[MRQ] 首帧 spawn 状态已烘焙` |
+| pose 控制台报 `unreal.ETraceTypeQuery` / `无法读取球员骨骼名` | 是旧版代码：`run_task.py` 已带强制 reload，**重跑同一命令即可**（新代码 probe 解析骨骼、遮挡 trace 全防御，不崩溃） |
+| pose-overlay 里关键点错位 | 用 `--keypoint-names` 核对；脸部五点调 `postprocess.yolo_pose.head_offsets_cm`；若因动画姿势，把 mesh 动画置空或确认导出/渲染姿势一致 |

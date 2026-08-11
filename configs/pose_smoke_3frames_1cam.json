@@ -1,8 +1,8 @@
 {
   "schema": "futsalmot_dataset_task",
   "version": 2,
-  "task_id": "production_300frames_4cam",
-  "episode_name": "episode_production_300f_4cam",
+  "task_id": "pose_smoke_3frames_1cam",
+  "episode_name": "episode_pose_smoke",
 
   "dataset_root": "G:/FutsalMOT_Dataset",
   "ue_project_root": "D:/projects/FustalMOT_UEDataset",
@@ -10,23 +10,23 @@
   "export": {
     "scenario": "5_vs_5",
     "seed": 42,
-    "num_steps": 300,
+    "num_steps": 3,
     "playback_fps": 30,
     "field_length_m": 40.0,
     "field_width_m": 20.0,
     "render": false,
     "write_video": false,
-    "dump_full_raw_observation": false
+    "dump_full_raw_observation": false,
+    "game_duration": 10000,
+    "left_team_difficulty": 0.3,
+    "right_team_difficulty": 0.3
   },
 
   "ue": {
     "actor_mapping": "ue/actor_mapping.example.json",
     "sequence_package_path": "/Game/FutsalMOT/Sequences",
     "sequences": [
-      { "name": "LS_Cam_01", "camera_actor": "CineCam_01" },
-      { "name": "LS_Cam_02", "camera_actor": "CineCam_02" },
-      { "name": "LS_Cam_03", "camera_actor": "CineCam_03" },
-      { "name": "LS_Cam_04", "camera_actor": "CineCam_04" }
+      { "name": "LS_Cam_01", "camera_actor": "CineCam_01" }
     ],
     "replace_existing": true,
     "ball_rolling": {
@@ -39,7 +39,7 @@
       "enabled": true,
       "image_width": 1920,
       "image_height": 1080,
-      "cameras": ["CineCam_01", "CineCam_02", "CineCam_03", "CineCam_04"],
+      "cameras": ["CineCam_01"],
       "frame_start": 0,
       "frame_end": null,
       "export_internal_jsonl": true,
@@ -86,16 +86,25 @@
 
   "postprocess": {
     "include_ball": true,
-    "workers": 4,
-    "chunk_size": 50,
+    "workers": 2,
+    "chunk_size": 1,
     "png_compress_level": 1,
     "formats": ["json", "mot", "yolo-det", "yolo-seg"],
     "clean_stale": true,
-    "validation_level": "full"
+    "validation_level": "full",
+    "yolo_pose": {
+      "enabled": true,
+      "visibility_neighborhood_radius": 2,
+      "write_dataset_yaml": true,
+      "occlusion_trace": true,
+      "trace_tolerance_cm": 20.0,
+      "bone_overrides": {},
+      "head_offsets_cm": {}
+    }
   },
 
   "audit": {
-    "expected_cameras": 4,
-    "expected_frames_per_camera": 300
+    "expected_cameras": 1,
+    "expected_frames_per_camera": 3
   }
 }

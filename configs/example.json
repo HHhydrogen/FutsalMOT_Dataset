@@ -22,9 +22,9 @@
     "dump_full_raw_observation": false,
     "number_of_left_players_agent_controls": 0,
     "number_of_right_players_agent_controls": 0,
-    "game_duration": 3000,
-    "left_team_difficulty": 0.05,
-    "right_team_difficulty": 0.05
+    "game_duration": 10000,
+    "left_team_difficulty": 0.3,
+    "right_team_difficulty": 0.3
   },
 
   "ue": {
@@ -96,7 +96,16 @@
     "png_compress_level": 1,
     "formats": ["json", "mot", "yolo-det", "yolo-seg"],
     "clean_stale": true,
-    "validation_level": "full"
+    "validation_level": "full",
+    "yolo_pose": {
+      "enabled": true,
+      "visibility_neighborhood_radius": 2,
+      "write_dataset_yaml": true,
+      "occlusion_trace": true,
+      "trace_tolerance_cm": 20.0,
+      "bone_overrides": {},
+      "head_offsets_cm": {}
+    }
   },
 
   "audit": {

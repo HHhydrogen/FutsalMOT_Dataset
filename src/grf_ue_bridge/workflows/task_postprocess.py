@@ -43,6 +43,7 @@ def run_postprocess(
     skip_cryptomatte: bool = False,
     skip_annotate: bool = False,
     skip_validate: bool = False,
+    skip_pose: bool = False,
     print_fn: Callable[[str], None] = print,
 ) -> int:
     """按 resolved task 执行后处理，返回退出码（0=成功）。"""
@@ -51,8 +52,12 @@ def run_postprocess(
     traj = Path(resolved.trajectory_output)
     mapping = Path(resolved.actor_mapping)
 
+    yolo_pose = pp.get("yolo_pose") or {}
+    pose_enabled = bool(yolo_pose.get("enabled", False))
+
     print_fn(f"Postprocess task: {resolved.task_id}")
     print_fn(f"  dataset: {dataset}")
+    print_fn(f"  yolo_pose enabled: {pose_enabled}")
 
     # 1) Cryptomatte EXR → mask
     if not skip_cryptomatte:
@@ -105,6 +110,32 @@ def run_postprocess(
         level = pp.get("validation_level", "full")
         rc = validate_annotation_dir(dataset, workers=pp.get("workers", 4), validation_level=level)
         print_fn(f"validate-annotations({level}) 完成（exit={rc}）")
+        if rc != 0:
+            return rc
+
+    # 4) 可选 YOLO Pose（postprocess.yolo_pose.enabled）
+    if pose_enabled and not skip_pose:
+        from grf_ue_bridge.pose_annotator import annotate_pose_dir
+
+        print_fn("annotate-pose（YOLO Pose COCO 17 点）...")
+        rc = annotate_pose_dir(
+            dataset,
+            pose_cfg=yolo_pose,
+            workers=pp.get("workers", 4),
+            write_yaml=bool(yolo_pose.get("write_dataset_yaml", True)),
+        )
+        print_fn(f"annotate-pose 完成（exit={rc}）")
+        if rc != 0:
+            return rc
+        from grf_ue_bridge.pose_validator import validate_pose_dir
+
+        rc = validate_pose_dir(
+            dataset,
+            workers=pp.get("workers", 4),
+            validation_level=pp.get("validation_level", "full"),
+            visibility_neighborhood_radius=int(yolo_pose.get("visibility_neighborhood_radius", 2)),
+        )
+        print_fn(f"validate-pose 完成（exit={rc}）")
         if rc != 0:
             return rc
 

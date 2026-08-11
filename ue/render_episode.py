@@ -40,7 +40,7 @@ from render_preset import (  # noqa: E402
     post_process_console_vars,
     resolve_preset,
 )
-from scene_apply import find_all_actors, find_actor  # noqa: E402
+from scene_apply import apply_preview_frame, find_all_actors, find_actor  # noqa: E402
 
 # 模块级：当前活跃的异步渲染管线。脚本（main）返回后 MRQ delegate 仍持有它的
 # 方法引用，但显式保留模块级引用可防止任何环境下对象被垃圾回收。
@@ -1695,6 +1695,21 @@ def render_sequences(
     zero_pad = int(render_cfg.get("zero_pad_frame_numbers", 6))
 
     meta, frames = load_episode(episode_dir)
+    # 首帧 spawn 状态烘焙：MRQ/PIE 中 possessable actor 的第 0 帧可能尚未被 Level
+    # Sequence 接管，渲染成**关卡放置的默认位置**（与相机同一类问题，相机已用
+    # _add_camera_transform_track 静态烘焙解决，球员没有）。先把 actor 设到第 0 帧
+    # 并保存关卡，使 PIE spawn 状态 == Sequence 帧 0 值——无论接管是否滞后一帧，
+    # 帧 0 都不会闪回默认位置（第 3/6 帧由 Sequence 接管，本就正确）。
+    if frames and mapping_path is not None:
+        try:
+            mapping = load_mapping(Path(mapping_path))
+            actors = find_all_actors(mapping)
+            if actors:
+                apply_preview_frame(actors, frames[0], {}, {})
+                _save_current_level()
+                print("  [MRQ] 首帧 spawn 状态已烘焙（actor 设到帧 0 并保存关卡）")
+        except Exception as e:  # noqa: BLE001
+            print(f"  WARNING: 首帧 spawn 状态烘焙失败（帧 0 可能渲染成关卡默认位置）: {e}")
     episode_id = meta.get("episode_id") or episode_dir.name
     source_step = float(meta["timing"].get("source_step_seconds", 0.1))
     keep_indices = select_rendered_frame_indices(len(frames), source_step, frame_rate)

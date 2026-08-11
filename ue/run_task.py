@@ -11,6 +11,7 @@ ue_import_config.json。
 """
 
 import argparse
+import importlib
 import json
 import sys
 from pathlib import Path
@@ -18,6 +19,18 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 RESOLVED_TASK_SCHEMA = "futsalmot_resolved_task"
+
+# UE Python 会话内，已 import 过的 ue/ 模块会缓存在 sys.modules 中；多次执行本脚本
+# 时先强制重载，否则会运行到磁盘上已修改但会话里仍是旧版本的代码
+# （与 import_grf_episode.py 的 _UE_MODULE_NAMES 一致）。
+_UE_MODULE_NAMES = (
+    "camera_projection", "annotation_utils", "dataset_export",
+    "scene_apply", "annotation_exporter", "render_preset", "render_episode",
+    "pose_bones", "pose_export",
+)
+for _name in _UE_MODULE_NAMES:
+    if _name in sys.modules:
+        importlib.reload(sys.modules[_name])
 
 
 def _fail(msg: str, code: int = 2) -> int:
@@ -48,6 +61,9 @@ def main() -> int:
 
     ue_profile = rt.get("ue_profile") or {}
     ann_cfg = dict(ue_profile.get("annotation_export") or {})
+    # YOLO Pose 配置（与 P1 postprocess 同一块，见 configs/README「yolo_pose」）
+    pose_cfg = (rt.get("postprocess") or {}).get("yolo_pose") or {}
+    pose_enabled = bool(pose_cfg.get("enabled", False))
     episode_dir = Path(rt["trajectory_output"])
     dataset_root = Path(rt["dataset_root"])
     mapping_path = Path(rt["actor_mapping"])
@@ -67,11 +83,13 @@ def main() -> int:
     print(f"  dataset output root: {dataset_root}  (episode_id -> {dataset_root / rt.get('episode_name')})")
     print(f"  sequences: {[s.get('name') for s in seq_list]}")
     print(f"  cameras: {ann_cfg.get('cameras')}")
+    print(f"  yolo_pose enabled: {pose_enabled}")
 
-    # 复用 import_grf_episode / annotation_exporter / render_episode 的既有逻辑
+    # 复用 import_grf_episode / annotation_exporter / render_episode / pose_export 的既有逻辑
     from import_grf_episode import create_sequence, load_episode, load_mapping
     from annotation_exporter import export_annotations
     from render_episode import render_sequences
+    from pose_export import export_pose_keypoints
 
     if mode in ("full", "render"):
         meta, frames = load_episode(episode_dir)
@@ -82,6 +100,9 @@ def main() -> int:
                 meta, frames, mapping, replace_existing, seq_pkg, seq_list, ball_rolling
             )
             export_annotations(episode_dir, mapping_path, dataset_root, ann_cfg)
+            if pose_enabled:
+                print("\n--- 导出 Pose 关键点（世界 3D）---")
+                export_pose_keypoints(episode_dir, mapping_path, dataset_root, ann_cfg, pose_cfg)
         render_sequences(
             seq_list, ann_cfg, seq_pkg, episode_dir, dataset_root, mapping_path
         )
@@ -91,6 +112,9 @@ def main() -> int:
 
     if mode == "annotations":
         export_annotations(episode_dir, mapping_path, dataset_root, ann_cfg)
+        if pose_enabled:
+            print("\n--- 导出 Pose 关键点（世界 3D）---")
+            export_pose_keypoints(episode_dir, mapping_path, dataset_root, ann_cfg, pose_cfg)
         print("\nDone（annotations）。")
         return 0
 

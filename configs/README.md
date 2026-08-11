@@ -5,7 +5,7 @@ UE 相机/渲染参数、机器路径全部内联在一个文件里，直接入�
 据此生成 resolved task（`.futsalmot/runtime/`，git 忽略）供 P1 与 UE 共用。
 
 - 完整模板：`configs/example.json`
-- 现有配置：`configs/smoke_3frames_1cam.json`（冒烟）、`configs/production_300frames_4cam.json`（生产）
+- 现有配置：`configs/pose_smoke_3frames_1cam.json`（冒烟/demo：3 步 × 1 相机，yolo_pose 已启用，含 anti-teleport 参数）
 
 ## 快速上手（新建一个数据集任务）
 
@@ -156,6 +156,22 @@ uv run grf-ue task resolve configs/<task_id>.json
 | `formats` | array | 全选 | 输出格式：`json` / `mot` / `yolo-det` / `yolo-seg` |
 | `clean_stale` | bool | `true` | 重跑前清理陈旧产物 |
 | `validation_level` | string | `"full"` | 标注校验级别：`full` / `quick` |
+| `yolo_pose` | object | 默认关闭 | YOLO Pose 人体关键点导出（见下） |
+
+### `yolo_pose`（YOLO Pose COCO 17 点标注）
+
+| 字段 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| `enabled` | bool | `false` | 是否导出 YOLO Pose。开启后 **UE 侧**（`ue/run_task.py` 读同一 resolved task）导出每相机 `pose_keypoints.jsonl`（世界 3D 关键点 + occluded），**P1** `task postprocess` 自动生成 `labels_pose/` + `futsal_pose.yaml` 并校验 |
+| `visibility_neighborhood_radius` | int | `2` | Instance-ID Mask 邻域判定半径（像素），用于关键点遮挡判定（避免轮廓边缘误判） |
+| `write_dataset_yaml` | bool | `true` | 是否在 episode 根生成 `yolo_pose/` 可训练暂存目录（images 硬链接 + labels 副本）与 `futsal_pose.yaml` |
+| `occlusion_trace` | bool | `true` | UE 侧是否对每个关键点做遮挡 trace（自遮挡 / 球 / 围挡等非 mask 几何） |
+| `trace_tolerance_cm` | float | `20.0` | 遮挡 trace 容差（cm）：命中距离 < 关键点距离 − 容差即判遮挡 |
+| `bone_overrides` | object | `{}` | UE bone 名覆盖：`{COCO 关键点名: UE bone 名}`。默认映射见 `ue/pose_bones.py`（SKM_Quinn_Simple 已实测确认） |
+| `head_offsets_cm` | object | `{}` | 脸部五点相对 head 骨骼的局部偏移覆盖：`{脸部 COCO 名: [x, y, z] cm}`（骨骼中无眼/鼻/耳时使用） |
+
+> 启用后执行链路：`task export` → `task ue-command`（UE 运行，含 pose 关键点导出）→
+> `task postprocess`（annotate-masks → annotate-pose → validate-annotations → validate-pose）。
 
 ## `audit` 块（完整性审计预期）
 

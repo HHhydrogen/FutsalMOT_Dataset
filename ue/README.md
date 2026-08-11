@@ -10,6 +10,8 @@
 | `render_episode.py` | MRQ 异步渲染 RGB + Instance-ID Mask（含 CV GT preset 应用） |
 | `render_preset.py` | CV GT deterministic render preset（纯配置，pytest 可测） |
 | `recover_render.py` | 从已有 `render/` 恢复 `img1/`（`--resolved-task`） |
+| `pose_bones.py` | COCO 17 点 ↔ UE 骨骼映射层（纯 Python；SKM_Quinn_Simple 骨骼已实测确认） |
+| `pose_export.py` | 逐帧导出球员世界 3D 关键点 + 遮挡 trace → `pose_keypoints.jsonl`（`postprocess.yolo_pose.enabled` 时自动运行） |
 
 ## 要求
 
@@ -22,13 +24,13 @@
 1. 在 P1 生成 resolved task（机器路径在单 config `configs/*.json` 内）：
 
 ```powershell
-uv run grf-ue task resolve configs/production_300frames_4cam.json
+uv run grf-ue task resolve configs/pose_smoke_3frames_1cam.json
 ```
 
 2. 获取 UE 命令并复制到 **Unreal Editor Python Console**：
 
 ```powershell
-uv run grf-ue task ue-command configs/production_300frames_4cam.json
+uv run grf-ue task ue-command configs/pose_smoke_3frames_1cam.json
 ```
 
 输出形如：
@@ -68,3 +70,19 @@ py "D:/.../code/ue/run_task.py" --resolved-task "D:/.../.futsalmot/runtime/soak_
 - 球 Z = GRF 数据 × 100 + 2cm 偏移
 - Yaw 通过位置增量计算，低速保持先前朝向
 - 需要人工在 UE 视口中验证效果
+
+## YOLO Pose 关键点导出
+
+`postprocess.yolo_pose.enabled=true` 时（读同一 resolved task），`--mode full/annotations`
+会额外为每个 Camera 导出 `pose_keypoints.jsonl`（球员世界 3D 关键点 + occluded）。
+
+- 骨骼映射集中管理在 `pose_bones.py`（基于 `SKM_Quinn_Simple` 实测骨骼）。
+- 复核实际骨骼名：
+
+```python
+import pose_export
+pose_export.dump_actor_bones("Player_L0")
+```
+
+- 脸部五点用 head 骨骼局部偏移推导（骨骼无眼/鼻/耳）；如需微调，改 task 配置
+  `postprocess.yolo_pose.head_offsets_cm`，再用 `grf-ue pose-overlay` 验证。

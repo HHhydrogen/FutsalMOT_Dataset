@@ -452,6 +452,126 @@ def annotate_masks(
     typer.echo("ANNOTATE MASKS DONE")
 
 
+@app.command("annotate-pose")
+def annotate_pose(
+    annotation_dir: Path = typer.Argument(
+        ...,
+        help="标注输出目录（含多个 camera 子目录，每个含 pose_keypoints.jsonl、annotations.jsonl、mask/）",
+    ),
+    workers: int = typer.Option(
+        0, "--workers",
+        help="并行 worker 数：0=自动（min(相机数, cpu//2)），1=串行，>1=多进程",
+    ),
+    visibility_neighborhood_radius: int = typer.Option(
+        2, "--visibility-neighborhood-radius",
+        help="Instance-ID Mask 邻域判定半径（像素），用于 keypoint 遮挡判定",
+    ),
+    no_yaml: bool = typer.Option(
+        False, "--no-yaml",
+        help="不生成 episode 根的 yolo_pose/ 可训练暂存目录与 futsal_pose.yaml",
+    ),
+):
+    """从 pose_keypoints.jsonl + annotations.jsonl + mask 生成 YOLO Pose 标签（labels_pose/）。
+
+    bbox 复用 annotations.jsonl 的 mask-primary bbox（与 YOLO det 一致）；
+    visibility 由 Instance-ID Mask 邻域 + UE 遮挡 trace（occluded 标志）判定。
+    推荐经 `grf-ue task postprocess` 自动集成；本命令用于局部重跑/调试。
+    """
+    from grf_ue_bridge.pose_annotator import annotate_pose_dir
+
+    exit_code = annotate_pose_dir(
+        annotation_dir.resolve(),
+        pose_cfg={"visibility_neighborhood_radius": visibility_neighborhood_radius},
+        workers=workers,
+        write_yaml=not no_yaml,
+    )
+    if exit_code != 0:
+        typer.echo("ANNOTATE POSE FAILED", err=True)
+        raise typer.Exit(exit_code)
+    typer.echo("ANNOTATE POSE DONE")
+
+
+@app.command("validate-pose")
+def validate_pose(
+    annotation_dir: Path = typer.Argument(
+        ...,
+        help="标注输出目录（含多个 camera 子目录，每个含 labels_pose/）",
+    ),
+    workers: int = typer.Option(
+        0, "--workers",
+        help="并行 worker 数：0=自动（min(相机数, cpu//2)），1=串行，>1=多进程",
+    ),
+    validation_level: str = typer.Option(
+        "full", "--validation-level",
+        help="验证级别：full（结构 + 逐帧 mask 重算比对，默认）/ quick（结构 + 行数比对，快）",
+    ),
+    visibility_neighborhood_radius: int = typer.Option(
+        2, "--visibility-neighborhood-radius",
+        help="重算用邻域半径（须与 annotate-pose 一致）",
+    ),
+):
+    """验证 YOLO Pose 标签：56 字段 / 数值范围 / 帧对应 / 左右轴一致性。"""
+    from grf_ue_bridge.pose_validator import validate_pose_dir
+
+    exit_code = validate_pose_dir(
+        annotation_dir.resolve(),
+        workers=workers,
+        validation_level=validation_level,
+        visibility_neighborhood_radius=visibility_neighborhood_radius,
+    )
+    if exit_code != 0:
+        typer.echo("POSE VALIDATION FAILED", err=True)
+        raise typer.Exit(exit_code)
+    typer.echo("POSE VALIDATION PASSED")
+
+
+@app.command("pose-overlay")
+def pose_overlay(
+    camera_dataset_dir: Path = typer.Argument(
+        ...,
+        help="单个 camera 的 dataset 目录（含 img1/、pose_keypoints.jsonl、annotations.jsonl、mask/）",
+    ),
+    frames: Optional[str] = typer.Option(
+        None, "--frames",
+        help="只处理指定帧号（1 基，逗号分隔，如 '1,2,3'；缺省全部）",
+    ),
+    out: Optional[Path] = typer.Option(
+        None, "--out", help="输出目录（默认 <camera_dir>/debug/pose/）"
+    ),
+    dot_radius: int = typer.Option(
+        5, "--dot-radius", min=1, max=30,
+        help="关键点半径（像素），放大预览时调大",
+    ),
+    edge_width: int = typer.Option(
+        3, "--edge-width", min=1, max=20, help="骨架连线宽度（像素）",
+    ),
+    keypoint_names: bool = typer.Option(
+        False, "--keypoint-names", help="在每个关键点旁标注 COCO 名（调试用）",
+    ),
+):
+    """把 Pose 关键点/骨架/bbox 画到 img1/ 的 RGB 帧上，输出 debug/pose/。需要 pillow。
+
+    颜色区分 visibility：绿=可见(v=2)、橙=遮挡(v=1)、红=无效(v=0)。
+    """
+    from grf_ue_bridge.pose_annotator import pose_overlay_dir
+
+    want_frames = None
+    if frames:
+        want_frames = [int(x) for x in frames.split(",") if x.strip().isdigit()]
+    drawn = pose_overlay_dir(
+        camera_dataset_dir.resolve(),
+        frames=want_frames,
+        out_dir=out.resolve() if out else None,
+        dot_radius=dot_radius,
+        edge_width=edge_width,
+        keypoint_names=keypoint_names,
+    )
+    if drawn == 0:
+        typer.echo("Pose overlay: 无输出（检查 img1/、pose_keypoints.jsonl、annotations.jsonl）", err=True)
+        raise typer.Exit(1)
+    typer.echo(f"Pose overlay 完成: {drawn} 帧")
+
+
 # ── make-video：把 img1/ 帧（可选 bbox 叠加）编码成 mp4 标注视频 ────────
 
 def _read_seqinfo_fps(cam_dir: Path) -> Optional[int]:
@@ -761,8 +881,9 @@ def task_postprocess(
     skip_cryptomatte: bool = typer.Option(False, "--skip-cryptomatte"),
     skip_annotate: bool = typer.Option(False, "--skip-annotate"),
     skip_validate: bool = typer.Option(False, "--skip-validate"),
+    skip_pose: bool = typer.Option(False, "--skip-pose"),
 ):
-    """按 task 顺序执行 cryptomatte → annotate → 可选 validate。"""
+    """按 task 顺序执行 cryptomatte → annotate → validate →（可选）yolo pose。"""
     from grf_ue_bridge.workflows.task_postprocess import run_postprocess
 
     _task_file, resolved = _resolve_runtime(task)
@@ -771,6 +892,7 @@ def task_postprocess(
         skip_cryptomatte=skip_cryptomatte,
         skip_annotate=skip_annotate,
         skip_validate=skip_validate,
+        skip_pose=skip_pose,
         print_fn=typer.echo,
     )
     if rc != 0:

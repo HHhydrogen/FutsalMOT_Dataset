@@ -69,6 +69,7 @@ class ArtifactCounts(BaseModel):
     annotation_frames: int = 0  # annotations.jsonl 行数
     yolo_detect_files: int = 0  # labels/det/*.txt
     yolo_segment_files: int = 0  # labels/seg/*.txt
+    yolo_pose_files: int = 0     # labels_pose/*.txt（YOLO Pose，可选）
     mot_sequences: int = 0      # gt/gt.txt 数
     raw_rgb: int = 0            # render/*.png
     raw_object_id_exr: int = 0  # render_mask/*.exr
@@ -245,6 +246,7 @@ def profile_file_paths(
                 ("mask", ".png"),
                 ("labels/det", ".txt"),
                 ("labels/seg", ".txt"),
+                ("labels_pose", ".txt"),
             ):
                 d = cam / sub
                 if d.is_dir():
@@ -347,6 +349,7 @@ def _collect_artifact_stats(cam_dir: Path) -> Tuple[ArtifactCounts, ArtifactByte
     mask = cam_dir / "mask"
     det = cam_dir / "labels" / "det"
     seg = cam_dir / "labels" / "seg"
+    pose = cam_dir / "labels_pose"
     render = cam_dir / "render"
     rmask = cam_dir / "render_mask"
     ann = cam_dir / "annotations.jsonl"
@@ -364,7 +367,8 @@ def _collect_artifact_stats(cam_dir: Path) -> Tuple[ArtifactCounts, ArtifactByte
     n, s = _add_dir(mask, ".png"); counts.instance_mask = n; bytes_.instance_mask = s
     n, s = _add_dir(det, ".txt"); counts.yolo_detect_files = n
     n, s2 = _add_dir(seg, ".txt"); counts.yolo_segment_files = n
-    bytes_.labels = s + s2
+    n, s3 = _add_dir(pose, ".txt"); counts.yolo_pose_files = n
+    bytes_.labels = s + s2 + s3
     n, s = _add_dir(render, ".png"); counts.raw_rgb = n; bytes_.raw_rgb = s
     n, s = _add_dir(rmask, ".exr"); counts.raw_object_id_exr = n; bytes_.raw_object_id_exr = s
     if ann.is_file():
@@ -457,6 +461,7 @@ def collect_episode(
             annotation_frames=counts.annotation_frames + c.annotation_frames,
             yolo_detect_files=counts.yolo_detect_files + c.yolo_detect_files,
             yolo_segment_files=counts.yolo_segment_files + c.yolo_segment_files,
+            yolo_pose_files=counts.yolo_pose_files + c.yolo_pose_files,
             mot_sequences=counts.mot_sequences + c.mot_sequences,
             raw_rgb=counts.raw_rgb + c.raw_rgb,
             raw_object_id_exr=counts.raw_object_id_exr + c.raw_object_id_exr,
@@ -686,6 +691,7 @@ def build_manifest(
             annotation_frames=totals.annotation_frames + e.artifact_counts.annotation_frames,
             yolo_detect_files=totals.yolo_detect_files + e.artifact_counts.yolo_detect_files,
             yolo_segment_files=totals.yolo_segment_files + e.artifact_counts.yolo_segment_files,
+            yolo_pose_files=totals.yolo_pose_files + e.artifact_counts.yolo_pose_files,
             mot_sequences=totals.mot_sequences + e.artifact_counts.mot_sequences,
             raw_rgb=totals.raw_rgb + e.artifact_counts.raw_rgb,
             raw_object_id_exr=totals.raw_object_id_exr + e.artifact_counts.raw_object_id_exr,
@@ -825,6 +831,10 @@ def _ignore_for_extra(rel: str) -> bool:
         return True
     if "/render_mask/" in rel or rel.startswith("render_mask/"):
         return True
+    if "/yolo_pose/" in rel or rel.startswith("yolo_pose/"):
+        return True  # YOLO Pose 可训练暂存目录（images 为 img1 硬链接 + labels 副本，可重新生成）
+    if rel == "futsal_pose.yaml" or rel.endswith("/futsal_pose.yaml"):
+        return True  # 含绝对 path，机器相关（可再生；labels_pose/ 本身已纳入校验）
     if rel.endswith(".tmp") or rel.endswith(".log"):
         return True
     if rel.rsplit("/", 1)[-1].startswith("video_"):

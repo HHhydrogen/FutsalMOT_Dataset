@@ -17,96 +17,6 @@ from .validator import validate_episode
 app = typer.Typer()
 
 
-def _draw_frame_overlay(img, objects: list, include_ball: bool):
-    """把一帧 objects 的 bbox + 标签画到 PIL Image 上，返回新 Image（annotate-overlay / make-video 共用）。"""
-    from PIL import Image, ImageDraw
-
-    img = img.convert("RGB")
-    draw = ImageDraw.Draw(img)
-    for obj in objects:
-        if not obj.get("in_frame"):
-            continue
-        if obj.get("class") == "ball" and not include_ball:
-            continue
-        xmin, ymin, xmax, ymax = obj["bbox_xyxy"]
-        color = (0, 255, 0) if obj.get("class") == "player" else (255, 128, 0)
-        draw.rectangle([xmin, ymin, xmax, ymax], outline=color, width=2)
-        label = f"{obj['entity_id']} #{obj['track_id']}"
-        draw.text((xmin, max(0, ymin - 14)), label, fill=color)
-    return img
-
-
-def _draw_overlay(camera_dataset_dir: Path, include_ball: bool, mask_color: bool = False) -> int:
-    """把标注 bbox 绘制到 img1/ 中对应的 RGB 帧上，输出到 debug/。
-
-    mask_color=True 时额外把 mask/*.png 转成彩色可视化到 debug/{frame}_mask_color.png
-    （仅查看，不改写 mask 数据契约）。
-
-    需要 pillow（可选依赖，`uv sync --extra overlay` 安装）。无 RGB 帧时跳过。
-    """
-    try:
-        from PIL import Image
-    except ImportError:
-        typer.echo(
-            "需要 pillow：请运行 `uv sync --extra overlay` 或 `uv pip install pillow`",
-            err=True,
-        )
-        return 1
-
-    ann_path = camera_dataset_dir / "annotations.jsonl"
-    img_dir = camera_dataset_dir / "img1"
-    if not ann_path.exists() or not img_dir.exists():
-        typer.echo(f"ERROR: 缺少 annotations.jsonl 或 img1/: {camera_dataset_dir}", err=True)
-        return 1
-
-    out_dir = camera_dataset_dir / "debug"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    drawn = 0
-    with open(ann_path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            frame = json.loads(line)
-            frame_index = frame["frame_index"]
-            img_path = img_dir / f"{frame_index:06d}.png"
-            if not img_path.exists():
-                continue
-            img = _draw_frame_overlay(Image.open(img_path), frame.get("objects", []), include_ball)
-            out_path = out_dir / f"{frame_index:06d}_bbox.png"
-            img.save(out_path)
-            drawn += 1
-
-    # 彩色 mask 可视化（仅查看）：mask_id 1..11 → 固定鲜艳调色板，与背景区分
-    if mask_color:
-        try:
-            import sys
-            from pathlib import Path
-
-            _ue_dir = Path(__file__).resolve().parent.parent.parent / "ue"
-            if str(_ue_dir) not in sys.path:
-                sys.path.insert(0, str(_ue_dir))
-            from instance_mask import load_mask_array, mask_to_color_image
-        except ImportError:
-            typer.echo("WARNING: 无法 import instance_mask（缺 numpy），跳过 mask 彩色输出", err=True)
-            mask_color = False
-    mask_drawn = 0
-    if mask_color:
-        mask_dir = camera_dataset_dir / "mask"
-        if mask_dir.exists():
-            for p in sorted(mask_dir.glob("*.png")):
-                arr = load_mask_array(p, "r")
-                col = Image.fromarray(mask_to_color_image(arr))
-                col.save(out_dir / f"{p.stem}_mask_color.png")
-                mask_drawn += 1
-        else:
-            typer.echo(f"  (无 mask/ 目录，跳过彩色 mask 输出: {camera_dataset_dir})")
-
-    typer.echo(f"Overlay 完成: {drawn} 帧 bbox -> {out_dir}"
-               + (f"；{mask_drawn} 帧彩色 mask -> {out_dir}" if mask_drawn else ""))
-    return 0
-
-
 @app.command()
 def export(
     config: Path = typer.Option(
@@ -366,7 +276,52 @@ def annotate_overlay(
     ),
 ):
     """把标注 bbox 绘制到 img1/ 中对应的 RGB 帧上，输出到 debug/。需要 pillow。"""
-    raise typer.Exit(_draw_overlay(camera_dataset_dir.resolve(), include_ball, mask_color))
+    from grf_ue_bridge.debug import render_overlay_dir
+
+    bbox_n, mask_n = render_overlay_dir(camera_dataset_dir.resolve(), include_ball, mask_color, print_fn=typer.echo)
+    if bbox_n == 0 and mask_n == 0:
+        typer.echo("Overlay: 无输出（检查 img1/ 与 annotations.jsonl）", err=True)
+        raise typer.Exit(1)
+    typer.echo(f"Overlay 完成: {bbox_n} 帧 bbox + {mask_n} 帧彩色 mask -> debug/")
+
+
+@app.command("debug")
+def debug_cmd(
+    annotation_dir: Path = typer.Argument(
+        ...,
+        help="标注输出目录（含多个 camera 子目录，每个含 img1/、annotations.jsonl、mask/，可选 pose_keypoints.jsonl）",
+    ),
+    include_ball: bool = typer.Option(
+        False, "--include-ball", help="bbox overlay 是否绘制球"
+    ),
+    no_videos: bool = typer.Option(
+        False, "--no-videos", help="只渲染图集，不拼接视频"
+    ),
+    pose_dot_radius: int = typer.Option(
+        3, "--pose-dot-radius", min=1, max=30, help="pose 关键点半径（像素）"
+    ),
+    pose_edge_width: int = typer.Option(
+        3, "--pose-edge-width", min=1, max=20, help="pose 骨架连线宽度（像素）"
+    ),
+):
+    """全量 debug 可视化：对每个 camera 渲染 bbox / 彩色 mask / pose 关节点 三套图集，
+    并把三套图集各拼接为 mp4（video_bbox.mp4 / video_mask.mp4 / video_pose.mp4）。
+
+    pose 关节点只画点 + 骨架连线（YOLO 风格，无文字标注）。需要 pillow + opencv-python。
+    推荐经 `task postprocess` 的 postprocess.debug.enabled 自动集成。
+    """
+    from grf_ue_bridge.debug import debug_annotations_dir
+
+    cfg = {
+        "include_ball": include_ball,
+        "make_videos": not no_videos,
+        "pose_dot_radius": pose_dot_radius,
+        "pose_edge_width": pose_edge_width,
+    }
+    rc = debug_annotations_dir(annotation_dir.resolve(), cfg, print_fn=typer.echo)
+    if rc != 0:
+        raise typer.Exit(rc)
+    typer.echo("DEBUG DONE")
 
 
 @app.command()
@@ -539,7 +494,7 @@ def pose_overlay(
         None, "--out", help="输出目录（默认 <camera_dir>/debug/pose/）"
     ),
     dot_radius: int = typer.Option(
-        5, "--dot-radius", min=1, max=30,
+        3, "--dot-radius", min=1, max=30,
         help="关键点半径（像素），放大预览时调大",
     ),
     edge_width: int = typer.Option(
@@ -574,98 +529,6 @@ def pose_overlay(
 
 # ── make-video：把 img1/ 帧（可选 bbox 叠加）编码成 mp4 标注视频 ────────
 
-def _read_seqinfo_fps(cam_dir: Path) -> Optional[int]:
-    """从 seqinfo.ini 读取 frameRate（缺省 None）。"""
-    p = cam_dir / "seqinfo.ini"
-    if not p.exists():
-        return None
-    try:
-        for line in p.read_text(encoding="utf-8").splitlines():
-            if line.strip().lower().startswith("framerat"):
-                return int(line.split("=", 1)[1].strip())
-    except Exception:
-        return None
-    return None
-
-
-def _png_frame_numbers(img_dir: Path) -> List[int]:
-    """从目录里的 PNG 文件名解析帧号集合（有序）。"""
-    nums = []
-    for p in img_dir.glob("*.png"):
-        digits = "".join(ch for ch in p.stem if ch.isdigit())
-        if digits:
-            nums.append(int(digits))
-    return sorted(nums)
-
-
-def _make_video(camera_dataset_dir: Path, fps: Optional[int], out: Optional[Path],
-                plain: bool, include_ball: bool, max_frames: Optional[int]) -> int:
-    """把 img1/ 帧编码成 mp4 标注视频（默认叠加 bbox；多视角 = 每相机跑一次）。
-
-    帧顺序取 annotations.jsonl 的 frame_index（默认），否则按 img1/ 文件名排序。
-    需要 opencv-python（可选依赖，`uv sync --extra video`）。
-    """
-    import numpy as np
-
-    try:
-        import cv2
-    except ImportError:
-        typer.echo(
-            "需要 opencv-python：请运行 `uv sync --extra video` 或 `uv pip install opencv-python`",
-            err=True,
-        )
-        return 1
-    from PIL import Image
-
-    img_dir = camera_dataset_dir / "img1"
-    ann_path = camera_dataset_dir / "annotations.jsonl"
-    if not img_dir.exists():
-        typer.echo(f"ERROR: 缺 img1/: {camera_dataset_dir}", err=True)
-        return 1
-
-    if fps is None:
-        fps = _read_seqinfo_fps(camera_dataset_dir) or 30
-    out_path = out or (camera_dataset_dir / f"video_{fps}fps.mp4")
-    out_path = Path(out_path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # 帧列表：annotations（默认，带 bbox 信息）或 img1 文件名
-    frames: List[dict] = []
-    if ann_path.exists() and not plain:
-        with open(ann_path, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    frames.append(json.loads(line))
-    else:
-        frames = [{"frame_index": n} for n in _png_frame_numbers(img_dir)]
-    if max_frames:
-        frames = frames[:max_frames]
-
-    first = next((f for f in frames if (img_dir / f"{f['frame_index']:06d}.png").exists()), None)
-    if first is None:
-        typer.echo(f"ERROR: 无可用的 img1 帧: {img_dir}", err=True)
-        return 1
-    with Image.open(img_dir / f"{first['frame_index']:06d}.png") as im:
-        W, H = im.size
-
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    writer = cv2.VideoWriter(str(out_path), fourcc, float(fps), (W, H))
-    written = 0
-    for fr in frames:
-        p = img_dir / f"{fr['frame_index']:06d}.png"
-        if not p.exists():
-            continue
-        img = Image.open(p)
-        if not plain:
-            img = _draw_frame_overlay(img, fr.get("objects", []), include_ball)
-        writer.write(cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR))
-        written += 1
-    writer.release()
-    typer.echo(f"视频已写: {out_path}（{written} 帧 @ {fps}fps，{'bbox 叠加' if not plain else '原图'}）")
-    return 0 if written else 1
-
-
 @app.command()
 def make_video(
     camera_dataset_dir: Path = typer.Argument(
@@ -689,7 +552,14 @@ def make_video(
     ),
 ):
     """把 img1/ 帧编码成 mp4 标注视频（默认叠加 bbox）。多视角 = 对每个 camera 目录各跑一次。"""
-    raise typer.Exit(_make_video(camera_dataset_dir.resolve(), fps, out, plain, include_ball, max_frames))
+    from grf_ue_bridge.debug import make_video as _debug_make_video
+
+    rc = _debug_make_video(
+        camera_dataset_dir.resolve(), fps=fps, out=out,
+        plain=plain, include_ball=include_ball, max_frames=max_frames,
+        print_fn=typer.echo,
+    )
+    raise typer.Exit(rc)
 
 
 @app.command()
@@ -882,8 +752,9 @@ def task_postprocess(
     skip_annotate: bool = typer.Option(False, "--skip-annotate"),
     skip_validate: bool = typer.Option(False, "--skip-validate"),
     skip_pose: bool = typer.Option(False, "--skip-pose"),
+    skip_debug: bool = typer.Option(False, "--skip-debug"),
 ):
-    """按 task 顺序执行 cryptomatte → annotate → validate →（可选）yolo pose。"""
+    """按 task 顺序执行 cryptomatte → annotate → validate →（可选）yolo pose →（可选）debug。"""
     from grf_ue_bridge.workflows.task_postprocess import run_postprocess
 
     _task_file, resolved = _resolve_runtime(task)
@@ -893,6 +764,7 @@ def task_postprocess(
         skip_annotate=skip_annotate,
         skip_validate=skip_validate,
         skip_pose=skip_pose,
+        skip_debug=skip_debug,
         print_fn=typer.echo,
     )
     if rc != 0:

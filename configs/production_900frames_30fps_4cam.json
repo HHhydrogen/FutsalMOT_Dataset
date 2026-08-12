@@ -1,27 +1,23 @@
 {
   "schema": "futsalmot_dataset_task",
   "version": 2,
-  "comment": "数据集任务模板：复制为 <task_id>.json 到 configs/ 并替换 <...> 占位符。每个参数的含义与取值见 configs/README.md。",
+  "task_id": "production_900frames_30fps_4cam",
+  "episode_name": "episode_prod_900f_30fps_4cam",
 
-  "task_id": "my_dataset",
-  "episode_name": "episode_my_dataset",
-
-  "dataset_root": "<DATASET_ROOT>",
-  "ue_project_root": "<UE_PROJECT_ROOT>",
+  "dataset_root": "G:/FutsalMOT_Dataset",
+  "ue_project_root": "D:/projects/FustalMOT_UEDataset",
 
   "export": {
     "scenario": "5_vs_5",
     "seed": 42,
     "num_steps": 300,
-    "target_fps": 0,
+    "target_fps": 30,
     "playback_fps": 30,
     "field_length_m": 40.0,
     "field_width_m": 20.0,
     "render": false,
     "write_video": false,
     "dump_full_raw_observation": false,
-    "number_of_left_players_agent_controls": 0,
-    "number_of_right_players_agent_controls": 0,
     "game_duration": 10000,
     "left_team_difficulty": 0.3,
     "right_team_difficulty": 0.3
@@ -31,7 +27,10 @@
     "actor_mapping": "ue/actor_mapping.example.json",
     "sequence_package_path": "/Game/FutsalMOT/Sequences",
     "sequences": [
-      { "name": "LS_Cam_01", "camera_actor": "CineCam_01" }
+      { "name": "LS_Cam_01", "camera_actor": "CineCam_01" },
+      { "name": "LS_Cam_02", "camera_actor": "CineCam_02" },
+      { "name": "LS_Cam_03", "camera_actor": "CineCam_03" },
+      { "name": "LS_Cam_04", "camera_actor": "CineCam_04" }
     ],
     "replace_existing": true,
     "ball_rolling": {
@@ -44,7 +43,7 @@
       "enabled": true,
       "image_width": 1920,
       "image_height": 1080,
-      "cameras": ["CineCam_01"],
+      "cameras": ["CineCam_01", "CineCam_02", "CineCam_03", "CineCam_04"],
       "frame_start": 0,
       "frame_end": null,
       "export_internal_jsonl": true,
@@ -107,7 +106,7 @@
       "head_offsets_cm": {}
     },
     "debug": {
-      "enabled": false,
+      "enabled": true,
       "include_ball": false,
       "make_videos": true,
       "pose_dot_radius": 3,
@@ -116,7 +115,7 @@
   },
 
   "audit": {
-    "expected_cameras": 1,
-    "expected_frames_per_camera": 300
+    "expected_cameras": 4,
+    "expected_frames_per_camera": 900
   }
 }

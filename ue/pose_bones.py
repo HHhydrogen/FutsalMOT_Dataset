@@ -15,8 +15,8 @@
   局部偏移推导（见 HEAD_OFFSET_CM 与 apply_head_offsets）。
 
 关节近似规则（关键点 = 子骨骼原点，UE 骨骼原点即父关节处）：
-  肩 = clavicle_*（锁骨肩端），肘 = lowerarm_* 原点，腕 = hand_* 原点，
-  髋 = thigh_* 原点，膝 = calf_* 原点，踝 = foot_* 原点。
+  肩 = upperarm_* 原点（肩关节；**不用 clavicle_* 原点**——其在胸骨处，会使双肩过近），
+  肘 = lowerarm_* 原点，腕 = hand_* 原点，髋 = thigh_* 原点，膝 = calf_* 原点，踝 = foot_* 原点。
 """
 
 from __future__ import annotations
@@ -61,9 +61,12 @@ FACE_KEYPOINT_NAMES: List[str] = [
 ]
 
 # 由真实骨骼 transform 直接确定的关键点（每点：候选 UE bone 名，按优先级）
+# 关节近似规则：关键点 = 子骨骼原点（UE 骨骼原点即父关节处）。
+#   肩 = upperarm_* 原点（肩关节）。注意：**不能用 clavicle_* 原点**——锁骨起点在
+#   胸骨/颈根（双肩会挤在一起），只有 upperarm 原点才是肩关节（锁骨头远端）。
 LIMB_BONE_CANDIDATES: Dict[str, List[str]] = {
-    "left_shoulder":  ["clavicle_l", "shoulder_l"],
-    "right_shoulder": ["clavicle_r", "shoulder_r"],
+    "left_shoulder":  ["upperarm_l", "clavicle_l", "shoulder_l"],
+    "right_shoulder": ["upperarm_r", "clavicle_r", "shoulder_r"],
     "left_elbow":     ["lowerarm_l", "elbow_l"],
     "right_elbow":    ["lowerarm_r", "elbow_r"],
     "left_wrist":     ["hand_l", "wrist_l"],

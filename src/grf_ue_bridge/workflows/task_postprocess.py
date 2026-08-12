@@ -44,6 +44,7 @@ def run_postprocess(
     skip_annotate: bool = False,
     skip_validate: bool = False,
     skip_pose: bool = False,
+    skip_debug: bool = False,
     print_fn: Callable[[str], None] = print,
 ) -> int:
     """按 resolved task 执行后处理，返回退出码（0=成功）。"""
@@ -54,10 +55,13 @@ def run_postprocess(
 
     yolo_pose = pp.get("yolo_pose") or {}
     pose_enabled = bool(yolo_pose.get("enabled", False))
+    debug_cfg = pp.get("debug") or {}
+    debug_enabled = bool(debug_cfg.get("enabled", False))
 
     print_fn(f"Postprocess task: {resolved.task_id}")
     print_fn(f"  dataset: {dataset}")
     print_fn(f"  yolo_pose enabled: {pose_enabled}")
+    print_fn(f"  debug enabled: {debug_enabled}")
 
     # 1) Cryptomatte EXR → mask
     if not skip_cryptomatte:
@@ -136,6 +140,16 @@ def run_postprocess(
             visibility_neighborhood_radius=int(yolo_pose.get("visibility_neighborhood_radius", 2)),
         )
         print_fn(f"validate-pose 完成（exit={rc}）")
+        if rc != 0:
+            return rc
+
+    # 5) 可选 debug 全量可视化（postprocess.debug.enabled）：bbox / 彩色 mask / pose + 视频
+    if debug_enabled and not skip_debug:
+        from grf_ue_bridge.debug import debug_annotations_dir
+
+        print_fn("debug 可视化（bbox / 彩色 mask / pose 关节点 + 三套视频）...")
+        rc = debug_annotations_dir(dataset, cfg=debug_cfg, print_fn=print_fn)
+        print_fn(f"debug 可视化完成（exit={rc}）")
         if rc != 0:
             return rc
 

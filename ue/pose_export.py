@@ -287,7 +287,24 @@ def _camera_location_cm(camera_actor) -> Optional[Tuple[float, float, float]]:
         return None
 
 
-def _trace_occluded(actor, cam_loc_cm: Tuple[float, float, float],
+def _get_world(actor):
+    """获取 actor 所在的 world（每相机解析一次，避免对每个关键点重复查）。"""
+    import unreal
+
+    for getter in (
+        lambda: actor.get_world(),
+        lambda: unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_editor_world(),
+    ):
+        try:
+            w = getter()
+            if w is not None:
+                return w
+        except Exception:
+            continue
+    return None
+
+
+def _trace_occluded(world, cam_loc_cm: Tuple[float, float, float],
                     keypoint_m: List[Optional[float]],
                     tolerance_cm: float) -> Optional[bool]:
     """对单个关键点做遮挡 trace。
@@ -298,23 +315,9 @@ def _trace_occluded(actor, cam_loc_cm: Tuple[float, float, float],
     """
     import unreal
 
-    if keypoint_m[0] is None:
+    if keypoint_m[0] is None or world is None:
         return None
     try:
-        world = None
-        for getter in (
-            lambda: actor.get_world(),
-            lambda: unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_editor_world(),
-        ):
-            try:
-                world = getter()
-                if world is not None:
-                    break
-            except Exception:
-                continue
-        if world is None:
-            return None
-
         kp = [float(keypoint_m[0]) * 100.0, float(keypoint_m[1]) * 100.0, float(keypoint_m[2]) * 100.0]
         start = unreal.Vector(cam_loc_cm[0], cam_loc_cm[1], cam_loc_cm[2])
         end = unreal.Vector(kp[0], kp[1], kp[2])
@@ -398,10 +401,10 @@ def _line_trace(world, start, end):
             if params is not None:
                 result = fn(start=start, end=end, params=params,
                             actors_to_ignore=[], draw_debug_type=draw,
-                            ignore_self=True, trace_complex=True, **kwargs)
+                            ignore_self=True, trace_complex=False, **kwargs)
             else:
                 result = fn(start=start, end=end, actors_to_ignore=[], draw_debug_type=draw,
-                            ignore_self=True, trace_complex=True, **kwargs)
+                            ignore_self=True, trace_complex=False, **kwargs)
         except Exception:
             continue
         if result is None:
@@ -525,9 +528,14 @@ def export_pose_keypoints(
             print(f"  Pose: step {step}/{len(frames)}")
 
     # 逐相机写 pose_keypoints.jsonl（遮挡 trace 依赖相机位置，逐相机计算）
-    for name, cam, cam_loc in cameras:
+    # world 每相机解析一次（600k 次 trace 不该每次都查 world）
+    world = _get_world(next(iter(player_actors.values())))
+    if occlusion_trace and world is None:
+        print("  WARNING: 无法获取 world，遮挡 trace 跳过（仅 mask 判定）")
+    for cam_idx, (name, cam, cam_loc) in enumerate(cameras):
         cam_out = Path(output_dir) / episode_id / name
         ensure_dir(cam_out)
+        print(f"  Pose trace: 相机 {cam_idx + 1}/{len(cameras)}（{name}，{len(selected)} 帧）...")
         lines = [{
             "kind": "meta",
             "schema": POSE_KEYPOINTS_SCHEMA,
@@ -545,16 +553,16 @@ def export_pose_keypoints(
                 if occlusion_trace else "none（P1 仅用 mask 判定）"
             ),
         }]
-        for frame_data in selected:
+        for fi, frame_data in enumerate(selected):
             step = frame_data["step"]
             frame_index = step + 1
             objects = []
             for entity_id, kps in per_frame_kps[step].items():
                 occluded = None
-                if occlusion_trace and cam_loc is not None:
+                if occlusion_trace and cam_loc is not None and world is not None:
                     occluded = []
                     for kp in kps:
-                        occluded.append(_trace_occluded(actors[entity_id], cam_loc, kp, trace_tol))
+                        occluded.append(_trace_occluded(world, cam_loc, kp, trace_tol))
                 obj = {
                     "entity_id": entity_id,
                     "track_id": entity_id_to_track_id(entity_id),
@@ -572,6 +580,8 @@ def export_pose_keypoints(
                 "time_seconds": frame_data.get("time_seconds", step * source_step_seconds),
                 "objects": objects,
             })
+            if fi % 50 == 0:
+                print(f"  Pose trace: {name} 帧 {frame_index}/{len(selected)}")
         path = cam_out / "pose_keypoints.jsonl"
         write_jsonl_atomic(path, lines)
         print(f"  Wrote: {path} ({len(lines) - 1} 帧)")

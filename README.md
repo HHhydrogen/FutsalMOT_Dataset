@@ -109,7 +109,8 @@ grf-ue
 ├── export --config --output [--seed]   # Legacy（deprecated）
 ├── validate / validate-annotations / annotate-masks
 ├── annotate-pose / validate-pose / pose-overlay   # YOLO Pose（COCO 17 点）
-├── cryptomatte-to-mask / annotate-overlay / make-video
+├── debug / annotate-overlay / make-video          # debug 全量图集 + 视频
+├── cryptomatte-to-mask
 └── build-manifest / verify-manifest    # 数据集 manifest
 ```
 
@@ -182,8 +183,9 @@ validate-annotations → **validate-pose**）。
 13 left_knee  14 right_knee  15 left_ankle  16 right_ankle
 ```
 
-可见性：`v=0` 无效 / `v=1` 被遮挡（其他球员 / 球 / 自遮挡，基于 Instance-ID Mask
-邻域 + UE 遮挡 trace）/ `v=2` 可见。bbox 复用 mask-primary bbox（与 YOLO det 完全一致）。
+可见性：`v=0` 无效 / `v=1` 被遮挡（其他球员 / 球，基于 Instance-ID Mask 邻域判定；
+`occlusion_trace=true` 时额外包含自遮挡 / 非 mask 几何，默认关闭）/ `v=2` 可见。
+bbox 复用 mask-primary bbox（与 YOLO det 完全一致）。
 
 ### 输出
 
@@ -211,6 +213,31 @@ yolo pose train model=yolo11n-pose.pt data=<dataset_root>/<episode_name>/futsal_
 > `futsal_pose.yaml` 的 `train`/`val` 指向 episode 内 `yolo_pose/` 的 `images/` 目录，
 > 标签在 `labels/` 同级目录（Ultralytics 自动按 `images→labels` 发现），无需改格式。
 > 骨骼映射与脸部偏移说明见 [`docs/design/2026-08-11-yolo-pose-export.md`](docs/design/2026-08-11-yolo-pose-export.md)。
+
+## debug 可视化（bbox / 彩色 mask / pose 关节点 + 自动拼视频）
+
+在 `postprocess.debug` 块开启（默认关闭），`task postprocess` 末尾自动为每个 camera
+**全量渲染三套 debug 图集**并**各拼接一个 mp4**：
+
+```json
+"postprocess": {
+  ...
+  "debug": { "enabled": true }
+}
+```
+
+```text
+<camera>/debug/{frame:06d}_bbox.png        # bbox overlay（绿=球员 橙=球）
+<camera>/debug/{frame:06d}_mask_color.png  # 彩色 Instance-ID Mask（仅查看）
+<camera>/debug/pose/{frame:06d}.png        # pose 关节点：只画点+骨架连线（YOLO 风格，无文字）
+<camera>/video_bbox.mp4 / video_mask.mp4 / video_pose.mp4
+```
+
+- pose 关节点颜色：绿=可见(v=2)、橙=遮挡(v=1)、红=无效(v=0)；连线为 COCO 骨架（16 条边）。
+- 也可手动全量执行：`uv run grf-ue debug <dataset_root>/<episode_name>`；
+  单 camera 局部执行：`annotate-overlay`（bbox/彩色 mask）、`pose-overlay`（关节点）、
+  `make-video`（img1 原图/bbox 视频）。
+- 参数说明见 [`configs/README.md`](configs/README.md) 的 `debug` 块。
 
 ## 可复现性与 Manifest
 

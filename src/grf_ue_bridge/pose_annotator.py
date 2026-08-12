@@ -613,7 +613,7 @@ def _edge_indices(a: str, b: str) -> Tuple[int, int]:
 
 
 def draw_pose_overlay(img, instances: List[dict], skeleton_edges: Optional[List[Tuple[str, str]]] = None,
-                      draw_midpoint: bool = True, dot_radius: int = 4,
+                      draw_midpoint: bool = True, dot_radius: int = 3,
                       edge_width: int = 2, keypoint_names: bool = False):
     """在 RGB 帧上绘制 17 关键点、骨架连线、bbox、track_id。返回新 PIL Image。
 
@@ -692,7 +692,7 @@ def pose_overlay_dir(
     out_dir: Optional[Path] = None,
     visibility_neighborhood_radius: int = 2,
     write_jpeg: bool = False,
-    dot_radius: int = 4,
+    dot_radius: int = 3,
     edge_width: int = 2,
     keypoint_names: bool = False,
 ) -> int:

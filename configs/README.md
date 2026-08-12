@@ -157,6 +157,7 @@ uv run grf-ue task resolve configs/<task_id>.json
 | `clean_stale` | bool | `true` | 重跑前清理陈旧产物 |
 | `validation_level` | string | `"full"` | 标注校验级别：`full` / `quick` |
 | `yolo_pose` | object | 默认关闭 | YOLO Pose 人体关键点导出（见下） |
+| `debug` | object | 默认关闭 | 全量 debug 可视化 + 自动拼视频（见下） |
 
 ### `yolo_pose`（YOLO Pose COCO 17 点标注）
 
@@ -165,13 +166,36 @@ uv run grf-ue task resolve configs/<task_id>.json
 | `enabled` | bool | `false` | 是否导出 YOLO Pose。开启后 **UE 侧**（`ue/run_task.py` 读同一 resolved task）导出每相机 `pose_keypoints.jsonl`（世界 3D 关键点 + occluded），**P1** `task postprocess` 自动生成 `labels_pose/` + `futsal_pose.yaml` 并校验 |
 | `visibility_neighborhood_radius` | int | `2` | Instance-ID Mask 邻域判定半径（像素），用于关键点遮挡判定（避免轮廓边缘误判） |
 | `write_dataset_yaml` | bool | `true` | 是否在 episode 根生成 `yolo_pose/` 可训练暂存目录（images 硬链接 + labels 副本）与 `futsal_pose.yaml` |
-| `occlusion_trace` | bool | `true` | UE 侧是否对每个关键点做遮挡 trace（自遮挡 / 球 / 围挡等非 mask 几何） |
+| `occlusion_trace` | bool | `false` | **默认关闭**。UE 侧是否对每个关键点做遮挡 trace（自遮挡 / 围挡等非 mask 几何）。mask 判定已是主要且准确的遮挡信号；trace 是边缘增强，且 900 帧×4 相机 ≈ 61 万次射线会明显拖慢渲染前导出。当前静态姿势 + 高机位下收益低，建议保持关闭；给球员加动画或改低机位时再显式开启 |
 | `trace_tolerance_cm` | float | `20.0` | 遮挡 trace 容差（cm）：命中距离 < 关键点距离 − 容差即判遮挡 |
 | `bone_overrides` | object | `{}` | UE bone 名覆盖：`{COCO 关键点名: UE bone 名}`。默认映射见 `ue/pose_bones.py`（SKM_Quinn_Simple 已实测确认） |
 | `head_offsets_cm` | object | `{}` | 脸部五点相对 head 骨骼的局部偏移覆盖：`{脸部 COCO 名: [x, y, z] cm}`（骨骼中无眼/鼻/耳时使用） |
 
 > 启用后执行链路：`task export` → `task ue-command`（UE 运行，含 pose 关键点导出）→
 > `task postprocess`（annotate-masks → annotate-pose → validate-annotations → validate-pose）。
+
+### `debug`（全量 debug 可视化 + 自动拼视频）
+
+| 字段 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| `enabled` | bool | `false` | 全量渲染三套 debug 图集并拼接视频（bbox overlay / 彩色 mask / pose 关节点） |
+| `include_ball` | bool | `false` | bbox overlay 是否绘制球 |
+| `make_videos` | bool | `true` | 渲染图集后自动把三套图集各拼接为 mp4 |
+| `video_fps` | int/null | `null` | debug 视频帧率（`null` = 读 seqinfo.ini frameRate，缺省 30） |
+| `pose_dot_radius` | int | `5` | pose 关键点半径（像素） |
+| `pose_edge_width` | int | `3` | pose 骨架连线宽度（像素） |
+
+启用后 `task postprocess` 末尾自动为每个 camera 生成：
+
+```text
+<camera>/debug/{frame:06d}_bbox.png        # bbox overlay
+<camera>/debug/{frame:06d}_mask_color.png  # 彩色 mask（仅查看，不改写 mask 数据契约）
+<camera>/debug/pose/{frame:06d}.png        # pose 关节点（只画点 + 骨架连线，无文字标注）
+<camera>/video_bbox.mp4 / video_mask.mp4 / video_pose.mp4   # 三套图集各一个视频
+```
+
+也可手动：`grf-ue debug <annotation_dir>`（对全部 camera）；单 camera 用
+`grf-ue annotate-overlay` / `grf-ue pose-overlay` / `grf-ue make-video`。
 
 ## `audit` 块（完整性审计预期）
 

@@ -43,8 +43,12 @@ class YoloPoseTaskConfig(BaseModel):
         description="是否在 episode 根生成 yolo_pose/ 可训练暂存目录与 futsal_pose.yaml",
     )
     occlusion_trace: bool = Field(
-        True,
-        description="UE 侧是否对每个关键点做遮挡 trace（自遮挡 / 非 mask 几何）",
+        False,
+        description=(
+            "UE 侧是否对每个关键点做遮挡 trace（自遮挡 / 非 mask 几何）。"
+            "默认关闭：mask 判定已是主要且准确的遮挡信号，trace 是边缘增强，"
+            "且 61 万次射线会明显拖慢渲染前导出（大任务建议保持关闭）"
+        ),
     )
     trace_tolerance_cm: float = Field(
         20.0,
@@ -104,6 +108,10 @@ class PostprocessTaskConfig(BaseModel):
         default_factory=YoloPoseTaskConfig,
         description="YOLO Pose 标注导出参数（默认关闭）",
     )
+    debug: "DebugTaskConfig" = Field(
+        default_factory=lambda: DebugTaskConfig(),
+        description="debug 可视化：全量渲染 bbox/彩色 mask/pose 图集并拼接视频（默认关闭）",
+    )
 
     def validate_formats(self) -> None:
         for f in self.formats:
@@ -113,6 +121,29 @@ class PostprocessTaskConfig(BaseModel):
                     f"{'/'.join(VALID_POSTPROCESS_FORMATS)}）"
                 )
         self.yolo_pose.validate_pose()
+
+
+class DebugTaskConfig(BaseModel):
+    """debug 可视化参数（属于 task 的 postprocess.debug）。
+
+    enabled=true 时 `task postprocess` 全量渲染三套 debug 图集
+    （bbox overlay / 彩色 mask / pose 关节点）并自动拼接为三个 mp4。
+    """
+
+    enabled: bool = Field(
+        False,
+        description=(
+            "是否全量渲染 debug 可视化：bbox overlay / 彩色 mask / pose 关节点 三套图集，"
+            "并把三套图集各拼接为 mp4"
+        ),
+    )
+    include_ball: bool = Field(False, description="bbox overlay 是否绘制球")
+    make_videos: bool = Field(True, description="渲染图集后自动拼接视频（bbox/mask/pose 各一个）")
+    video_fps: Optional[int] = Field(
+        None, ge=1, description="debug 视频帧率（None = 读 seqinfo.ini frameRate，缺省 30）"
+    )
+    pose_dot_radius: int = Field(3, ge=1, le=30, description="pose 关键点半径（像素，远景默认小一点避免遮挡）")
+    pose_edge_width: int = Field(3, ge=1, le=20, description="pose 骨架连线宽度（像素）")
 
 
 class AuditTaskConfig(BaseModel):

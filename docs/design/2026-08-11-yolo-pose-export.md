@@ -37,8 +37,8 @@ SkeletalMesh 资产确认存在以下骨骼：
 | COCO 关键点 | 索引 | UE bone | 依据 |
 |-------------|------|---------|------|
 | nose / left_eye / right_eye / left_ear / right_ear | 0–4 | `head` + 局部偏移 | 骨架无脸部骨骼，见 §3.2 |
-| left_shoulder | 5 | `clavicle_l` | 锁骨肩端即肩关节 |
-| right_shoulder | 6 | `clavicle_r` | 同上（右） |
+| left_shoulder | 5 | `upperarm_l` | **上臂骨原点 = 肩关节**。不用 `clavicle_l` 原点（其在胸骨/颈根，双肩会挤在一起） |
+| right_shoulder | 6 | `upperarm_r` | 同上（右） |
 | left_elbow | 7 | `lowerarm_l` | 前臂骨原点 = 肘 |
 | right_elbow | 8 | `lowerarm_r` | 同上（右） |
 | left_wrist | 9 | `hand_l` | 手骨原点 = 腕 |
@@ -85,11 +85,14 @@ rotation 转世界坐标（`apply_head_offsets`）。假设 head 局部轴：**+
 2. **遮挡（v=1）**，满足其一：
    - **其他实例遮挡**：投影点邻域（默认 5×5，`visibility_neighborhood_radius=2`）内
      其他实例（球员 / 球）的 mask 像素数 ≥ 该球员自身像素数。该信号来自
-     **Instance-ID Mask（真实渲染结果）**，是 inter-object 遮挡的 ground truth。
-   - **几何遮挡（UE trace）**：UE 侧对每个关键点做射线检测（相机→关键点），任一
-     blocking 命中且命中距离 < 关键点距离 − `trace_tolerance_cm`（默认 20cm）即视为被
-     几何遮挡（自遮挡、球、围挡等非 mask 几何）。记录在 `pose_keypoints.jsonl` 的
-     `occluded` 字段。
+     **Instance-ID Mask（真实渲染结果）**，是 inter-object 遮挡的 ground truth，
+     **唯一默认生效**的 v=1 来源。
+   - **几何遮挡（UE trace，默认关闭）**：`postprocess.yolo_pose.occlusion_trace=true`
+     时，UE 侧对每个关键点做射线检测（相机→关键点），任一 blocking 命中且命中距离
+     < 关键点距离 − `trace_tolerance_cm`（20cm）即视为被几何遮挡（自遮挡、围挡等非
+     mask 几何），记录在 `pose_keypoints.jsonl` 的 `occluded` 字段。**默认关闭**：mask
+     已是主要且准确的遮挡信号；trace 是边缘增强，900 帧×4 相机 ≈ 61 万次射线会明显
+     拖慢渲染前导出。当前静态姿势 + 高机位下收益低，建议保持关闭。
 3. **v=2**：其余（投影点落在自身 mask 邻域或自由空间，且无遮挡）。
 
 邻域采样避免「关节点恰好落在人体轮廓边缘附近」产生大量错误 v=1（边缘容差：own ≥ other
@@ -144,7 +147,8 @@ rotation 转世界坐标（`apply_head_offsets`）。假设 head 局部轴：**+
   导致关键点与渲染图轻微错位。验证/规避：用 `pose-overlay` 对照确认；必要时把 mesh
   动画置空（参考姿势）保证导出与渲染一致。
 - **脸部偏移**：默认 head 局部偏移为解剖学估算，**必须**经 overlay 人工确认后微调。
-- **遮挡 trace 语义**：trace 仅作为 mask 之外的自遮挡/非 mask 几何补充信号；若 trace 命中
-  地面/围挡等场景几何距离关键点过近，可能把个别可见关键点误判 v=1——用 overlay 抽查，
-  必要时调大 `trace_tolerance_cm`。
+- **遮挡 trace（默认关闭）**：trace 是 mask 之外的自遮挡/非 mask 几何补充信号，**默认
+  `occlusion_trace=false`**——当前静态姿势 + 高机位下收益低，且 900 帧×4 相机 ≈ 61 万次
+  射线会明显拖慢渲染前导出。若显式开启，需用 overlay 抽查（trace 命中地面/围挡过近可能
+  误判个别关键点 v=1）。
 - 本机环境无法启动 Unreal Editor：UE 侧代码需在 UE 内按 README 步骤执行并核对 overlay。

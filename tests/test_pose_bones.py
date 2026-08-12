@@ -92,6 +92,9 @@ class TestBoneMapping:
         # 左右严格对应 anatomical left/right（_l ↔ left）
         assert m["left_shoulder"].endswith("_l")
         assert m["right_shoulder"].endswith("_r")
+        # 肩 = upperarm 原点（肩关节），不能用 clavicle 原点（其在胸骨，双肩过近）
+        assert m["left_shoulder"] == "upperarm_l"
+        assert m["right_shoulder"] == "upperarm_r"
         assert m["left_elbow"] == "lowerarm_l"
         assert m["right_elbow"] == "lowerarm_r"
         assert m["left_wrist"] == "hand_l"
@@ -104,7 +107,8 @@ class TestBoneMapping:
         assert m["right_ankle"] == "foot_r"
 
     def test_missing_bones_reported(self):
-        partial = [b for b in MANNEQUIN_BONES if b not in ("clavicle_l", "foot_r", "hand_l")]
+        # 左肩有两个候选（upperarm_l 主、clavicle_l 回退），两个都去掉才真正缺失
+        partial = [b for b in MANNEQUIN_BONES if b not in ("upperarm_l", "clavicle_l", "foot_r", "hand_l")]
         m = resolve_limb_bone_map(partial)
         assert "left_shoulder" not in m
         assert "right_ankle" not in m

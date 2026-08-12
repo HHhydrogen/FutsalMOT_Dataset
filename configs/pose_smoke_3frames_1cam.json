@@ -96,10 +96,17 @@
       "enabled": true,
       "visibility_neighborhood_radius": 2,
       "write_dataset_yaml": true,
-      "occlusion_trace": true,
+      "occlusion_trace": false,
       "trace_tolerance_cm": 20.0,
       "bone_overrides": {},
       "head_offsets_cm": {}
+    },
+    "debug": {
+      "enabled": true,
+      "include_ball": false,
+      "make_videos": true,
+      "pose_dot_radius": 3,
+      "pose_edge_width": 3
     }
   },
 

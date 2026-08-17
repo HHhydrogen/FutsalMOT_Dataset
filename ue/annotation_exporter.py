@@ -572,11 +572,10 @@ def export_annotations(
     # 逐帧收集
     per_camera_lines: Dict[str, List[dict]] = {name: [] for name, *_ in cameras}
     per_camera_objects: Dict[str, List[list]] = {name: [] for name, *_ in cameras}
-    prev_yaws: Dict[str, float] = {}
-    prev_positions: Dict[str, object] = {}
+    trackers: Dict[str, object] = {}
 
     for frame_data in selected:
-        apply_preview_frame(actors, frame_data, prev_yaws, prev_positions)
+        apply_preview_frame(actors, frame_data, trackers)
         step = frame_data["step"]
         time_seconds = frame_data.get("time_seconds", step * source_step_seconds)
         for name, cam, intrinsics, extrinsics, cam_meta in cameras:

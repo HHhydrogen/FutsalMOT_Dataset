@@ -146,6 +146,14 @@ class BallFrame(BaseModel):
         default_factory=lambda: [0.0, 0.0, 0.0],
         description="原始 GRF 观测位置 [grf_x, grf_y, grf_z]，供参考",
     )
+    velocity_mps: Optional[List[float]] = Field(
+        None,
+        description=(
+            "球的速度 [vx, vy, vz]，单位 m/s，由 GRF ball_direction（每步位移，"
+            "x/y 为归一化、z 为米）换算得到。旧 episode 可能缺失（None），"
+            "此时下游用位置差分估算。"
+        ),
+    )
 
 
 class PlayerFrame(BaseModel):
@@ -153,6 +161,29 @@ class PlayerFrame(BaseModel):
 
     id: str = Field(..., description="实体标识，与 EntityDefinition.id 对应")
     position_m: List[float] = Field(..., description="球员的米坐标 [x, y, z]")
+    velocity_mps: Optional[List[float]] = Field(
+        None,
+        description=(
+            "球员水平速度 [vx, vy]，单位 m/s，由 GRF *_team_direction（每步位移，"
+            "归一化坐标）除以步长换算。旧 episode 可能缺失（None），下游用位置差分估算。"
+        ),
+    )
+    speed_mps: Optional[float] = Field(
+        None,
+        description="速率（m/s）= |velocity_mps|。为简化 UE Motion Layer 直接读取而冗余存储。",
+    )
+    movement_heading_deg: Optional[float] = Field(
+        None,
+        description="运动朝向（度，-180~180）= atan2(vy, vx)；静止时可能为 None。",
+    )
+    active: Optional[bool] = Field(
+        None,
+        description="该球员是否 active（来自 GRF *_team_active）。",
+    )
+    has_ball: Optional[bool] = Field(
+        None,
+        description="该球员是否持球（由 ball_owned_team / ball_owned_player 推导）。",
+    )
 
 
 class Frame(BaseModel):
@@ -163,6 +194,24 @@ class Frame(BaseModel):
     score: List[int] = Field(default_factory=lambda: [0, 0])
     ball: BallFrame
     players: List[PlayerFrame] = Field(..., min_length=10, max_length=10)
+    ball_owned_team: Optional[int] = Field(
+        None,
+        description=(
+            "持球队：-1 无、0 左队、1 右队（来自 GRF ball_owned_team）。"
+            "旧 episode 可能缺失（None）。"
+        ),
+    )
+    ball_owned_player: Optional[int] = Field(
+        None,
+        description=(
+            "持球球员在队内下标（0~4），-1 无（来自 GRF ball_owned_player）。"
+            "旧 episode 可能缺失（None）。"
+        ),
+    )
+    game_mode: Optional[int] = Field(
+        None,
+        description="GRF game_mode（0=normal、1=kickoff、…），旧 episode 可能缺失（None）。",
+    )
 
 
 def create_ball_entity() -> EntityDefinition:

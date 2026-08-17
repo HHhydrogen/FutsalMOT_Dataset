@@ -3,25 +3,19 @@
 本模块与 import_grf_episode.py 的 preview 逻辑共用同一套变换规则，保证
 Level Sequence 渲染、preview 预览、annotation 导出三者的 actor 变换一致。
 unreal 一律延迟 import，避免模块顶层依赖 UE。
+
+朝向（facing/yaw）统一由 ue/player_motion 的 PlayerMotionTracker 计算：
+速度（优先用 frame 的 velocity_mps，缺失时位置差分）→ 朝向，低速保持上一帧、
+平滑 + 限速转向。位置 Ground Truth 仍完全由 frame.position_m（米 → 厘米）决定，
+本模块绝不改写位置。
 """
 
-import math
-from pathlib import Path
-from typing import Dict, Optional, Tuple
+from player_motion import DEFAULT_MOTION_CONFIG, PlayerMotionTracker
 
 
 M_TO_CM = 100.0
-SPEED_THRESHOLD_CM = 5.0  # cm/s，低于该速度保持上一次的 yaw
 BALL_Z_OFFSET_CM = 2.0  # 偏移，使 GRF 球 z（~0.11 * 100）+ 偏移 ≈ 13cm
 PLAYER_Z_CM = 90.0  # 球员 actor 的固定地面高度
-
-
-def build_yaw(dx: float, dy: float, prev_yaw: float) -> float:
-    """根据位移增量计算 yaw，并带低速滞回。"""
-    speed = math.sqrt(dx * dx + dy * dy)
-    if speed < SPEED_THRESHOLD_CM:
-        return prev_yaw
-    return math.degrees(math.atan2(dy, dx))
 
 
 def pos_m_to_cm(pos_m: list) -> tuple:
@@ -80,9 +74,22 @@ def apply_ball_frame(actors: dict, frame: dict):
     )
 
 
-def apply_player_frame(actors: dict, frame: dict, prev_yaws: dict, prev_positions: dict):
-    """根据帧数据设置球员 actor 的位置与旋转。"""
+def apply_player_frame(actors: dict, frame: dict, trackers: dict,
+                       config=DEFAULT_MOTION_CONFIG):
+    """根据帧数据设置球员 actor 的位置与朝向（yaw）。
+
+    朝向由 PlayerMotionTracker 统一计算（速度 → 朝向，平滑限速，低速保持）；
+    位置仍由 frame.position_m 直接决定（Ground Truth 不被动画层改写）。
+
+    Args:
+        actors: {entity_id: actor}。
+        frame: 帧 dict（含 players[{id, position_m, velocity_mps?, ...}]、
+            time_seconds）。
+        trackers: {player_id: PlayerMotionTracker}（跨帧维护，勿复用）。
+        config: MotionConfig（默认 DEFAULT_MOTION_CONFIG）。
+    """
     import unreal
+    time_s = float(frame.get("time_seconds", 0.0))
     for player_data in frame["players"]:
         pid = player_data["id"]
         if pid not in actors:
@@ -90,27 +97,25 @@ def apply_player_frame(actors: dict, frame: dict, prev_yaws: dict, prev_position
         px, py, _ = pos_m_to_cm(player_data["position_m"])
         pos_cm = unreal.Vector(px, py, PLAYER_Z_CM)
 
-        prev_pos = prev_positions.get(pid)
-        if prev_pos is not None:
-            dx = pos_cm.x - prev_pos.x
-            dy = pos_cm.y - prev_pos.y
-            prev_yaw = prev_yaws.get(pid, 0.0)
-            yaw = build_yaw(dx, dy, prev_yaw)
-        else:
-            yaw = 0.0
-
-        prev_yaws[pid] = yaw
-        prev_positions[pid] = pos_cm
+        tracker = trackers.setdefault(pid, PlayerMotionTracker(config=config))
+        params = tracker.update(
+            player_data["position_m"],
+            player_data.get("velocity_mps"),
+            time_s,
+            has_ball=bool(player_data.get("has_ball", False)),
+        )
+        yaw = params["facing_deg"]
 
         actors[pid].set_actor_location_and_rotation(
             pos_cm, unreal.Rotator(0.0, 0.0, yaw), False, False
         )
 
 
-def apply_preview_frame(actors: dict, frame: dict, prev_yaws: dict, prev_positions: dict):
-    """应用单个帧的 actor 变换（球 + 全部球员）。"""
+def apply_preview_frame(actors: dict, frame: dict, trackers: dict,
+                        config=DEFAULT_MOTION_CONFIG):
+    """应用单个帧的 actor 变换（球 + 全部球员）。trackers 为 {pid: tracker}。"""
     apply_ball_frame(actors, frame)
-    apply_player_frame(actors, frame, prev_yaws, prev_positions)
+    apply_player_frame(actors, frame, trackers, config)
 
 
 def apply_preview(meta: dict, frames: list, mapping: dict):
@@ -120,12 +125,11 @@ def apply_preview(meta: dict, frames: list, mapping: dict):
         return
 
     num_steps = meta["timing"]["num_steps"]
-    prev_yaws = {}
-    prev_positions = {}
+    trackers = {}
 
     for frame in frames:
         step = frame["step"]
-        apply_preview_frame(actors, frame, prev_yaws, prev_positions)
+        apply_preview_frame(actors, frame, trackers)
 
         if step > 0 and step % 50 == 0:
             print(f"  Preview: {step}/{num_steps}")

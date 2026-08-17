@@ -1,6 +1,7 @@
 """坐标变换的测试。"""
 
 import numpy as np
+import pytest
 
 from grf_ue_bridge.coordinate_transform import CoordinateTransform
 
@@ -73,3 +74,27 @@ class TestCoordinateTransform:
         grf_pos = np.array([0.0, 0.0, 0.0])
         pos_m, source = ct.transform_ball_position(grf_pos)
         assert pos_m == [0.0, 0.0, 0.0]
+
+    def test_direction_to_velocity(self):
+        # GRF direction = 每步归一化位移；0.1s 一步，half_length=20, half_width=10
+        ct = CoordinateTransform()
+        vx, vy = ct.grf_direction_to_velocity_mps(0.01, 0.02, 0.1)
+        assert vx == pytest.approx(0.01 * 20 / 0.1)  # 2.0 m/s
+        assert vy == pytest.approx(0.02 * 10 / 0.1)  # 2.0 m/s
+
+    def test_direction_zero(self):
+        ct = CoordinateTransform()
+        vx, vy = ct.grf_direction_to_velocity_mps(0.0, 0.0, 0.1)
+        assert vx == 0.0 and vy == 0.0
+
+    def test_direction_invalid_dt(self):
+        ct = CoordinateTransform()
+        with pytest.raises(ValueError):
+            ct.grf_direction_to_velocity_mps(0.01, 0.0, 0.0)
+
+    def test_ball_direction_to_velocity(self):
+        ct = CoordinateTransform()
+        vx, vy, vz = ct.grf_ball_direction_to_velocity_mps(0.01, 0.02, 0.005, 0.1)
+        assert vx == pytest.approx(2.0)
+        assert vy == pytest.approx(2.0)
+        assert vz == pytest.approx(0.005 / 0.1)  # z 已为米，仅除步长 = 0.05

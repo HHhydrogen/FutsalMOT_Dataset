@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import shutil
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from .config import ExportConfig
 from .coordinate_transform import CoordinateTransform
@@ -221,24 +222,88 @@ def _build_frame(
     right_team = ob["right_team"]  # [(x,y), ...] 5 名球员
     ball_grf = ob["ball"]  # [x, y, z]
 
+    # GRF 方向（每步位移，归一化坐标）与 active / 持球信息（旧观测可能缺失，用 get 兜底）
+    left_dir = ob.get("left_team_direction")
+    right_dir = ob.get("right_team_direction")
+    ball_dir = ob.get("ball_direction")
+    left_active = ob.get("left_team_active")
+    right_active = ob.get("right_team_active")
+    ball_owned_team = ob.get("ball_owned_team")
+    ball_owned_player = ob.get("ball_owned_player")
+    game_mode = ob.get("game_mode")
+
     score = [int(ob["score"][0]), int(ob["score"][1])]
 
     # 球
     ball_pos_m, source_grf = transform.transform_ball_position(ball_grf)
-    ball_frame = BallFrame(position_m=ball_pos_m, source_grf_position=source_grf)
+    ball_velocity_mps = None
+    if ball_dir is not None and len(ball_dir) >= 3:
+        ball_velocity_mps = [
+            round(v, 6)
+            for v in transform.grf_ball_direction_to_velocity_mps(
+                float(ball_dir[0]), float(ball_dir[1]), float(ball_dir[2]),
+                source_step_seconds,
+            )
+        ]
+    ball_frame = BallFrame(
+        position_m=ball_pos_m,
+        source_grf_position=source_grf,
+        velocity_mps=ball_velocity_mps,
+    )
 
     # 球员
     players: List[PlayerFrame] = []
-    # 左队（L0-L4）
-    for i in range(5):
-        grf_x, grf_y = left_team[i][0], left_team[i][1]
-        pos = transform.transform_player_position(grf_x, grf_y)
-        players.append(PlayerFrame(id=f"L{i}", position_m=pos))
-    # 右队（R0-R4）
-    for i in range(5):
-        grf_x, grf_y = right_team[i][0], right_team[i][1]
-        pos = transform.transform_player_position(grf_x, grf_y)
-        players.append(PlayerFrame(id=f"R{i}", position_m=pos))
+
+    def _build_player(team: list, direction: Optional[list], active_list: Optional[list],
+                      prefix: str, team_id: int) -> None:
+        """构建单队（5 名）球员的 PlayerFrame。"""
+        for i in range(5):
+            grf_x, grf_y = team[i][0], team[i][1]
+            pos = transform.transform_player_position(grf_x, grf_y)
+
+            velocity_mps = None
+            if direction is not None and len(direction) > i:
+                vx, vy = transform.grf_direction_to_velocity_mps(
+                    float(direction[i][0]), float(direction[i][1]),
+                    source_step_seconds,
+                )
+                velocity_mps = [round(vx, 6), round(vy, 6)]
+
+            speed_mps = None
+            heading_deg = None
+            if velocity_mps is not None:
+                vx, vy = velocity_mps
+                speed_mps = round(math.hypot(vx, vy), 6)
+                if speed_mps > 1e-9:
+                    heading_deg = round(math.degrees(math.atan2(vy, vx)), 6)
+
+            is_active = None
+            if active_list is not None and len(active_list) > i:
+                is_active = bool(active_list[i])
+
+            has_ball = None
+            if ball_owned_team is not None and ball_owned_player is not None:
+                has_ball = (
+                    int(ball_owned_team) == team_id
+                    and int(ball_owned_player) == i
+                )
+
+            players.append(PlayerFrame(
+                id=f"{prefix}{i}",
+                position_m=pos,
+                velocity_mps=velocity_mps,
+                speed_mps=speed_mps,
+                movement_heading_deg=heading_deg,
+                active=is_active,
+                has_ball=has_ball,
+            ))
+
+    _build_player(left_team, left_dir, left_active, "L", 0)
+    _build_player(right_team, right_dir, right_active, "R", 1)
+
+    frame_owned_team = int(ball_owned_team) if ball_owned_team is not None else None
+    frame_owned_player = int(ball_owned_player) if ball_owned_player is not None else None
+    frame_game_mode = int(game_mode) if game_mode is not None else None
 
     return Frame(
         step=step,
@@ -246,4 +311,7 @@ def _build_frame(
         score=score,
         ball=ball_frame,
         players=players,
+        ball_owned_team=frame_owned_team,
+        ball_owned_player=frame_owned_player,
+        game_mode=frame_game_mode,
     )

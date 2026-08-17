@@ -26,7 +26,7 @@ RESOLVED_TASK_SCHEMA = "futsalmot_resolved_task"
 _UE_MODULE_NAMES = (
     "camera_projection", "annotation_utils", "dataset_export",
     "scene_apply", "annotation_exporter", "render_preset", "render_episode",
-    "pose_bones", "pose_export",
+    "pose_bones", "pose_export", "player_motion",
 )
 for _name in _UE_MODULE_NAMES:
     if _name in sys.modules:

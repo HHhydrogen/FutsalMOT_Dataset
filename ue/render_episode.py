@@ -1705,7 +1705,7 @@ def render_sequences(
             mapping = load_mapping(Path(mapping_path))
             actors = find_all_actors(mapping)
             if actors:
-                apply_preview_frame(actors, frames[0], {}, {})
+                apply_preview_frame(actors, frames[0], {})
                 _save_current_level()
                 print("  [MRQ] 首帧 spawn 状态已烘焙（actor 设到帧 0 并保存关卡）")
         except Exception as e:  # noqa: BLE001

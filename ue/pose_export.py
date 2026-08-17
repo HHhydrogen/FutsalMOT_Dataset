@@ -514,11 +514,10 @@ def export_pose_keypoints(
         return
 
     # 逐帧收集世界关键点（相机无关，只算一次）
-    prev_yaws: Dict[str, float] = {}
-    prev_positions: Dict[str, object] = {}
+    trackers: Dict[str, object] = {}
     per_frame_kps: Dict[int, Dict[str, List[List[Optional[float]]]]] = {}
     for frame_data in selected:
-        apply_preview_frame(actors, frame_data, prev_yaws, prev_positions)
+        apply_preview_frame(actors, frame_data, trackers)
         step = frame_data["step"]
         kps = {}
         for entity_id, actor in player_actors.items():

@@ -42,7 +42,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 _UE_MODULE_NAMES = (
     "camera_projection", "annotation_utils", "dataset_export",
     "scene_apply", "annotation_exporter", "render_preset", "render_episode",
-    "pose_bones", "pose_export",
+    "pose_bones", "pose_export", "player_motion",
 )
 for _name in _UE_MODULE_NAMES:
     if _name in sys.modules:
@@ -52,13 +52,12 @@ from scene_apply import (  # noqa: E402
     BALL_Z_OFFSET_CM,
     M_TO_CM,
     PLAYER_Z_CM,
-    SPEED_THRESHOLD_CM,
     apply_preview,
-    build_yaw,
     find_actor,
     find_all_actors,
     pos_m_to_cm,
 )
+from player_motion import PlayerMotionTracker  # noqa: E402
 from dataset_export import load_episode, load_mapping  # noqa: E402
 from annotation_exporter import export_annotations  # noqa: E402
 from render_episode import render_sequences  # noqa: E402
@@ -572,8 +571,9 @@ def create_sequence(meta: dict, frames: list, mapping: dict, replace_existing: b
             binding, channels, section = actor_bindings[entity_id]
             cmap = _build_channel_map(channels)
 
-            prev_yaws = {}
-            previous_pos = None
+            # 朝向由 PlayerMotionTracker 统一计算（与 preview/annotation/pose 同一套），
+            # 速度优先取 frame 的 velocity_mps，缺失时按位置差分；位置仍由 frame 决定。
+            player_tracker = None
 
             for fi, frame in enumerate(frames):
                 frame_time = fi * source_step
@@ -599,15 +599,14 @@ def create_sequence(meta: dict, frames: list, mapping: dict, replace_existing: b
                         add_double_channel_key(cmap["Location.Y"], kf, py)
                         add_double_channel_key(cmap["Location.Z"], kf, PLAYER_Z_CM)
 
-                        if previous_pos is not None:
-                            dx = px - previous_pos[0]
-                            dy = py - previous_pos[1]
-                            prev_yaw = prev_yaws.get(entity_id, 0.0)
-                            yaw = build_yaw(dx, dy, prev_yaw)
-                        else:
-                            yaw = 0.0
-                        prev_yaws[entity_id] = yaw
-                        previous_pos = (px, py)
+                        if player_tracker is None:
+                            player_tracker = PlayerMotionTracker()
+                        params = player_tracker.update(
+                            player_data["position_m"],
+                            player_data.get("velocity_mps"),
+                            float(frame.get("time_seconds", frame_time)),
+                        )
+                        yaw = params["facing_deg"]
                         add_double_channel_key(cmap["Rotation.Z"], kf, yaw)
 
             # 校验关键帧数量

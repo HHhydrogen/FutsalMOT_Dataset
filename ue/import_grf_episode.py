@@ -574,6 +574,10 @@ def create_sequence(meta: dict, frames: list, mapping: dict, replace_existing: b
             # 朝向由 PlayerMotionTracker 统一计算（与 preview/annotation/pose 同一套），
             # 速度优先取 frame 的 velocity_mps，缺失时按位置差分；位置仍由 frame 决定。
             player_tracker = None
+            # 写入 Sequence 的连续 yaw：facing_deg 归一到 [-180,180]，若直接写入，
+            # 跨 ±180° 边界时 Sequencer 线性插值会沿长路径旋转约 350°；
+            # 这里用 _unwind_angle 展开为连续角度（首帧取 facing_deg 为起点）。
+            player_yaw_continuous = None
 
             for fi, frame in enumerate(frames):
                 frame_time = fi * source_step
@@ -607,7 +611,11 @@ def create_sequence(meta: dict, frames: list, mapping: dict, replace_existing: b
                             float(frame.get("time_seconds", frame_time)),
                         )
                         yaw = params["facing_deg"]
-                        add_double_channel_key(cmap["Rotation.Z"], kf, yaw)
+                        if player_yaw_continuous is None:
+                            player_yaw_continuous = yaw
+                        else:
+                            player_yaw_continuous = _unwind_angle(player_yaw_continuous, yaw)
+                        add_double_channel_key(cmap["Rotation.Z"], kf, player_yaw_continuous)
 
             # 校验关键帧数量
             actual_loc_x = cmap["Location.X"].get_num_keys()

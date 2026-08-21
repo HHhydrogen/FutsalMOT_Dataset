@@ -1,0 +1,59 @@
+{
+  "schema": "futsalmot_dataset_task",
+  "version": 2,
+  "task_id": "ue_facing_test_10s",
+  "episode_name": "episode_ue_facing_test",
+
+  "dataset_root": "G:/FutsalMOT_Dataset",
+  "ue_project_root": "D:/projects/FustalMOT_UEDataset",
+
+  "export": {
+    "scenario": "5_vs_5",
+    "seed": 42,
+    "num_steps": 100,
+    "target_fps": 0,
+    "playback_fps": 30,
+    "field_length_m": 40.0,
+    "field_width_m": 20.0,
+    "render": false,
+    "write_video": false,
+    "dump_full_raw_observation": false,
+    "game_duration": 10000,
+    "left_team_difficulty": 0.3,
+    "right_team_difficulty": 0.3
+  },
+
+  "ue": {
+    "actor_mapping": "ue/actor_mapping.example.json",
+    "sequence_package_path": "/Game/FutsalMOT/Sequences",
+    "sequences": [
+      { "name": "LS_Cam_01", "camera_actor": "CineCam_01" }
+    ],
+    "replace_existing": true,
+    "ball_rolling": {
+      "enabled": true,
+      "radius_m": 0.11,
+      "minimum_move_distance_m": 0.0001,
+      "roll_sign": 1.0
+    },
+    "annotation_export": {
+      "enabled": false,
+      "cameras": ["CineCam_01"]
+    }
+  },
+
+  "postprocess": {
+    "include_ball": true,
+    "workers": 2,
+    "chunk_size": 1,
+    "png_compress_level": 1,
+    "formats": ["json"],
+    "clean_stale": true,
+    "validation_level": "full"
+  },
+
+  "audit": {
+    "expected_cameras": 1,
+    "expected_frames_per_camera": 100
+  }
+}

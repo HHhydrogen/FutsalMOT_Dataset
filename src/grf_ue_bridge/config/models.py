@@ -245,6 +245,16 @@ class ExportConfig(BaseModel):
             "30 = 把 10fps 位置线性插值到 30fps 导出（渲 900 标 900，1:1）。须为 10 的倍数"
         ),
     )
+    trajectory_time_scale: float = Field(
+        1.0,
+        ge=0.1,
+        description=(
+            "轨迹时间缩放（速度放大系数）：把 GRF 每步位移换算出的 velocity/speed 以及 "
+            "Hermite 插值 tangent 统一乘以该系数，弥补 GRF builtin AI 在五人制场地下球员"
+            "整体速度偏低。只放大速度/速率字段，不修改 GRF 位置 Ground Truth；"
+            "1.0 = 不缩放。"
+        ),
+    )
     playback_fps: int = Field(30, description="Unreal Engine 目标回放帧率")
     field_length_m: float = Field(40.0, description="UE 场地长度（米）")
     field_width_m: float = Field(20.0, description="UE 场地宽度（米）")

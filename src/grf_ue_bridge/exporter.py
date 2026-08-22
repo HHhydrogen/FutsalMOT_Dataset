@@ -160,6 +160,7 @@ def export_episode(
             transform=transform,
             player_entity_ids=player_entity_ids,
             source_step_seconds=0.1,
+            time_scale=config.trajectory_time_scale,
         ))
 
     if factor > 1:
@@ -216,8 +217,13 @@ def _build_frame(
     transform: CoordinateTransform,
     player_entity_ids: List[str],
     source_step_seconds: float,
+    time_scale: float = 1.0,
 ) -> Frame:
-    """根据单个步的观测构建一个 Frame。"""
+    """根据单个步的观测构建一个 Frame。
+
+    time_scale: 轨迹时间缩放（速度放大系数），只缩放速度/速率字段，
+    不改动 GRF 位置 Ground Truth。
+    """
     left_team = ob["left_team"]  # [(x,y), ...] 5 名球员
     right_team = ob["right_team"]  # [(x,y), ...] 5 名球员
     ball_grf = ob["ball"]  # [x, y, z]
@@ -239,7 +245,7 @@ def _build_frame(
     ball_velocity_mps = None
     if ball_dir is not None and len(ball_dir) >= 3:
         ball_velocity_mps = [
-            round(v, 6)
+            round(v * time_scale, 6)
             for v in transform.grf_ball_direction_to_velocity_mps(
                 float(ball_dir[0]), float(ball_dir[1]), float(ball_dir[2]),
                 source_step_seconds,
@@ -267,7 +273,7 @@ def _build_frame(
                     float(direction[i][0]), float(direction[i][1]),
                     source_step_seconds,
                 )
-                velocity_mps = [round(vx, 6), round(vy, 6)]
+                velocity_mps = [round(vx * time_scale, 6), round(vy * time_scale, 6)]
 
             speed_mps = None
             heading_deg = None

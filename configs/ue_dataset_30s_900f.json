@@ -9,7 +9,7 @@
 
   "export": {
     "scenario": "5_vs_5",
-    "seed": 42,
+    "seed": 3,
     "num_steps": 300,
     "target_fps": 30,
     "playback_fps": 30,
@@ -19,8 +19,9 @@
     "write_video": false,
     "dump_full_raw_observation": false,
     "game_duration": 10000,
-    "left_team_difficulty": 0.3,
-    "right_team_difficulty": 0.3
+    "left_team_difficulty": 0.5,
+    "right_team_difficulty": 0.5,
+    "trajectory_time_scale": 1.0
   },
 
   "ue": {

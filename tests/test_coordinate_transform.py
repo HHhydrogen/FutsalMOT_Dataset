@@ -35,22 +35,32 @@ class TestCoordinateTransform:
         assert x == 20.0
         assert y == 0.0
 
-    def test_top_corner(self):
+    def test_y_usable_half_range_to_side_line(self):
+        # GRF 可用 Y 范围约为 ±1/2.25，映射到场地宽度 ±half_width
+        ct = CoordinateTransform()
+        half = 1.0 / 2.25
+        x, y = ct.grf_to_meter(0.0, half)
+        assert x == 0.0
+        assert y == pytest.approx(10.0)  # 10 / (1/2.25) * (1/2.25) = 10
+
+    def test_y_scale_factor(self):
+        # y_scale = half_width / (1/2.25) = 22.5（40x20m 默认场地）
+        ct = CoordinateTransform()
+        assert ct.y_scale == pytest.approx(22.5)
+
+    def test_y_beyond_usable_range_is_out_of_court(self):
+        # grf_y=1.0 超出可用范围 → 映射到 22.5m（超出场地，属越界，非有效位置）
         ct = CoordinateTransform()
         x, y = ct.grf_to_meter(1.0, 1.0)
         assert x == 20.0
-        assert y == 10.0
-
-    def test_bottom_corner(self):
-        ct = CoordinateTransform()
-        x, y = ct.grf_to_meter(-1.0, -1.0)
-        assert x == -20.0
-        assert y == -10.0
+        assert y == pytest.approx(22.5)
 
     def test_player_position(self):
         ct = CoordinateTransform()
         pos = ct.transform_player_position(0.5, -0.3)
-        assert pos == [10.0, -3.0, 0.0]
+        assert pos[0] == 10.0
+        assert pos[1] == pytest.approx(-0.3 * 22.5)  # -6.75
+        assert pos[2] == 0.0
 
     def test_ball_z_passthrough(self):
         ct = CoordinateTransform()
@@ -66,7 +76,9 @@ class TestCoordinateTransform:
         ct = CoordinateTransform()
         grf_pos = np.array([0.5, -0.3, 0.11])
         pos_m, source = ct.transform_ball_position(grf_pos)
-        assert pos_m == [10.0, -3.0, 0.11]
+        assert pos_m[0] == 10.0
+        assert pos_m[1] == pytest.approx(-6.75)
+        assert pos_m[2] == 0.11
         assert source == [0.5, -0.3, 0.11]
 
     def test_ball_at_center(self):
@@ -76,11 +88,11 @@ class TestCoordinateTransform:
         assert pos_m == [0.0, 0.0, 0.0]
 
     def test_direction_to_velocity(self):
-        # GRF direction = 每步归一化位移；0.1s 一步，half_length=20, half_width=10
+        # GRF direction = 每步归一化位移；0.1s 一步，half_length=20, y_scale=22.5
         ct = CoordinateTransform()
         vx, vy = ct.grf_direction_to_velocity_mps(0.01, 0.02, 0.1)
         assert vx == pytest.approx(0.01 * 20 / 0.1)  # 2.0 m/s
-        assert vy == pytest.approx(0.02 * 10 / 0.1)  # 2.0 m/s
+        assert vy == pytest.approx(0.02 * 22.5 / 0.1)  # 4.5 m/s
 
     def test_direction_zero(self):
         ct = CoordinateTransform()
@@ -96,5 +108,5 @@ class TestCoordinateTransform:
         ct = CoordinateTransform()
         vx, vy, vz = ct.grf_ball_direction_to_velocity_mps(0.01, 0.02, 0.005, 0.1)
         assert vx == pytest.approx(2.0)
-        assert vy == pytest.approx(2.0)
+        assert vy == pytest.approx(0.02 * 22.5 / 0.1)  # 4.5
         assert vz == pytest.approx(0.005 / 0.1)  # z 已为米，仅除步长 = 0.05

@@ -57,6 +57,24 @@ def _get_grf_marl_commit() -> str:
     return ""
 
 
+def compute_source_steps(config: ExportConfig) -> int:
+    """按数据集最后一帧时间反推运行 GRF 所需的采样步数。
+
+    time_scale <= 1 时保持原语义（num_steps 步）；
+    time_scale > 1 时 source_time = dataset_time × time_scale，
+    需要 GRF 覆盖到 dataset 最后一帧对应的 source 时刻，并为末段 Hermite
+    保留一个后继 sample（+2 消除 off-by-one）。
+    """
+    if config.trajectory_time_scale <= 1.0:
+        return config.num_steps
+    factor = max(1, (config.target_fps or 10) // 10)
+    output_frames = config.num_steps * factor
+    dt = 1.0 / float(config.target_fps or 10)
+    dataset_last = (output_frames - 1) * dt
+    source_last = dataset_last * float(config.trajectory_time_scale)
+    return int(math.floor(source_last / 0.1)) + 2
+
+
 def _build_entities() -> List[EntityDefinition]:
     """构建 5v5 的实体定义（10 名球员 + 1 个球）。"""
     entities: List[EntityDefinition] = []
@@ -160,20 +178,29 @@ def export_episode(
             transform=transform,
             player_entity_ids=player_entity_ids,
             source_step_seconds=0.1,
-            time_scale=config.trajectory_time_scale,
         ))
 
     if factor > 1:
-        from .interpolate import interpolate_frames
+        from .interpolate import interpolate_frames, resample_frames_time_scale
 
-        interpolated = interpolate_frames(
-            [f.model_dump() for f in frames], factor, source_step_seconds
-        )
-        frames = [Frame(**f) for f in interpolated]
-        print(
-            f"插值到 {config.target_fps}fps：{len(frames)} 帧"
-            f"（factor={factor}，source_step_seconds={source_step_seconds:.6f}）"
-        )
+        raw10 = [f.model_dump() for f in frames]
+        if config.trajectory_time_scale > 1.0:
+            output_frames = config.num_steps * factor
+            resampled = resample_frames_time_scale(
+                raw10, config.trajectory_time_scale, config.target_fps, output_frames
+            )
+            frames = [Frame(**f) for f in resampled]
+            print(
+                f"时间轴缩放 {config.trajectory_time_scale}x：{len(frames)} 帧"
+                f"（dataset {config.target_fps}fps，source = dataset × {config.trajectory_time_scale}）"
+            )
+        else:
+            interpolated = interpolate_frames(raw10, factor, source_step_seconds)
+            frames = [Frame(**f) for f in interpolated]
+            print(
+                f"插值到 {config.target_fps}fps：{len(frames)} 帧"
+                f"（factor={factor}，source_step_seconds={source_step_seconds:.6f}）"
+            )
 
     # ── 写入 frames.jsonl ─────────────────────────────────────
     frames_path = output_dir / "frames.jsonl"
@@ -217,13 +244,8 @@ def _build_frame(
     transform: CoordinateTransform,
     player_entity_ids: List[str],
     source_step_seconds: float,
-    time_scale: float = 1.0,
 ) -> Frame:
-    """根据单个步的观测构建一个 Frame。
-
-    time_scale: 轨迹时间缩放（速度放大系数），只缩放速度/速率字段，
-    不改动 GRF 位置 Ground Truth。
-    """
+    """根据单个步的观测构建一个 Frame（10fps 原始 GRF 帧，速度未缩放）。"""
     left_team = ob["left_team"]  # [(x,y), ...] 5 名球员
     right_team = ob["right_team"]  # [(x,y), ...] 5 名球员
     ball_grf = ob["ball"]  # [x, y, z]
@@ -245,7 +267,7 @@ def _build_frame(
     ball_velocity_mps = None
     if ball_dir is not None and len(ball_dir) >= 3:
         ball_velocity_mps = [
-            round(v * time_scale, 6)
+            round(v, 6)
             for v in transform.grf_ball_direction_to_velocity_mps(
                 float(ball_dir[0]), float(ball_dir[1]), float(ball_dir[2]),
                 source_step_seconds,
@@ -273,7 +295,7 @@ def _build_frame(
                     float(direction[i][0]), float(direction[i][1]),
                     source_step_seconds,
                 )
-                velocity_mps = [round(vx * time_scale, 6), round(vy * time_scale, 6)]
+                velocity_mps = [round(vx, 6), round(vy, 6)]
 
             speed_mps = None
             heading_deg = None

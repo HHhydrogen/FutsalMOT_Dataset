@@ -128,6 +128,28 @@ def _clamp_to_bounds(
     return out
 
 
+def _player_series_2d(
+    frames: Sequence[Dict], player_ids: Sequence[str], key: str
+) -> Dict[str, List]:
+    """提取每个球员的 2 维（x, y）序列，缺失为 None。"""
+    series: Dict[str, List] = {}
+    for pid in player_ids:
+        vals = []
+        for f in frames:
+            found = None
+            for p in f["players"]:
+                if p["id"] == pid:
+                    found = p
+                    break
+            v = found.get(key) if found is not None else None
+            if v is None:
+                vals.append(None)
+            else:
+                vals.append([float(v[0]), float(v[1])])
+        series[pid] = vals
+    return series
+
+
 def interpolate_frames(
     frames: Sequence[Dict],
     factor: int,
@@ -167,26 +189,8 @@ def interpolate_frames(
     ball_tangents = _compute_tangents(ball_positions, ball_velocities, h)
 
     # 球员的位置/速度序列（球员水平运动，仅插值 [x, y]；z 恒为 0，不插值）
-    def _player_series_2d(key: str) -> Dict[str, List]:
-        series: Dict[str, List] = {}
-        for pid in player_ids:
-            vals = []
-            for f in frames:
-                found = None
-                for p in f["players"]:
-                    if p["id"] == pid:
-                        found = p
-                        break
-                v = found.get(key) if found is not None else None
-                if v is None:
-                    vals.append(None)
-                else:
-                    vals.append([float(v[0]), float(v[1])])
-            series[pid] = vals
-        return series
-
-    player_positions = _player_series_2d("position_m")
-    player_velocities = _player_series_2d("velocity_mps")
+    player_positions = _player_series_2d(frames, player_ids, "position_m")
+    player_velocities = _player_series_2d(frames, player_ids, "velocity_mps")
     player_tangents = {
         pid: _compute_tangents(player_positions[pid], player_velocities[pid], h)
         for pid in player_ids
@@ -285,3 +289,141 @@ def _build_player_dict(pid: str, position_m: List[float], velocity_mps: List[flo
         if key in src_player:
             d[key] = src_player[key]
     return d
+
+
+# ── 时间轴缩放重采样（trajectory_time_scale > 1）───────────────────────
+
+_GRF_SOURCE_STEP_SECONDS = 0.1  # GRF 固定 10fps
+
+
+def resample_frames_time_scale(
+    frames: Sequence[Dict],
+    time_scale: float,
+    target_fps: int,
+    output_frames: int,
+) -> List[Dict]:
+    """按时间轴缩放重采样：source_time = dataset_time × time_scale。
+
+    语义：dataset 每一帧 k（dataset_time = k / target_fps）对应 GRF 轨迹的
+    source_time = k / target_fps × time_scale。位置用 velocity-aware cubic
+    Hermite 在真实 GRF sample 之间做**时间型**重采样（与 interpolate_frames
+    的定长 factor 插值不同，这里的源采样时刻不落在整数输出帧上）。
+
+    - 当 source_time 恰好落在某个 GRF sample（0.1s 网格）上 → 该输出帧
+      position 严格等于该 GRF 真值帧（轨迹连续通过原始 sample）。
+    - 其余输出帧为两 sample 之间的 Hermite 补帧（带分段 clamp）。
+    - dataset velocity = 位置对 dataset_time 的导数 = source 切线 × time_scale
+      （source 切线取帧自带 velocity_mps，缺失时有限差分）。
+    - score / ball_owned_team / ball_owned_player / game_mode 等离散状态用
+      source_time 对应 sample 的 hold/nearest，不做数值插值。
+
+    Args:
+        frames: 10fps GRF 帧 dict 列表（长度 = 所需 GRF sample 数）。
+        time_scale: 轨迹时间缩放（> 1 表示加快）。
+        target_fps: dataset 输出帧率（30 等）。
+        output_frames: dataset 输出帧数（900 等）。
+
+    Returns:
+        重采样后的帧 dict 列表，长度 = output_frames。
+    """
+    n = len(frames)
+    if n == 0:
+        return []
+    h = _GRF_SOURCE_STEP_SECONDS  # 源段时长（GRF 步长 0.1s）
+    dt = 1.0 / float(target_fps)
+
+    player_ids: List[str] = [p["id"] for p in frames[0]["players"]]
+
+    # 切线一律用源位置有限差分（而非 GRF direction 字段）：GRF direction 与真实
+    # 位移有时偏差可达 ~3×，会导致 Hermite 切线过大 → clamp 压平位置路径，而
+    # velocity 仍取解析导数，造成"速度 > 位置差分速度"。用位置差分保证
+    # velocity == 重采样位置路径对 dataset_time 的导数（= source 位置导数 × scale）。
+    ball_positions = [f["ball"]["position_m"] for f in frames]
+    ball_tangents = _compute_tangents(ball_positions, [None] * n, h)
+
+    player_positions = _player_series_2d(frames, player_ids, "position_m")
+    player_tangents = {
+        pid: _compute_tangents(player_positions[pid], [None] * n, h)
+        for pid in player_ids
+    }
+
+    def _round6(xs):
+        return [round(float(v), 6) for v in xs]
+
+    out: List[Dict] = []
+    for k in range(output_frames):
+        s = float(k) * dt * float(time_scale)  # source_time
+        i = int(math.floor(s / h))
+        frac = (s - i * h) / h
+        # 浮点容差：把几乎落在 sample 上的时间吸附为精确命中
+        r = round(frac)
+        if abs(frac - r) < 1e-9:
+            if r == 1:
+                i += 1
+                frac = 0.0
+            else:
+                frac = 0.0
+        i = max(0, min(i, n - 1))
+        src = frames[i]
+
+        new_frame = {
+            "step": k,
+            "time_seconds": round(k * dt, 6),
+            "score": list(src["score"]),
+            "ball": {
+                "position_m": list(src["ball"]["position_m"]),
+                "source_grf_position": list(
+                    src["ball"].get("source_grf_position", [0.0, 0.0, 0.0])
+                ),
+                "velocity_mps": _round6([v * time_scale for v in ball_tangents[i]]),
+            },
+            "players": [],
+        }
+        # 离散状态：随 source_time 对应 sample 的 hold/nearest
+        for key in ("ball_owned_team", "ball_owned_player", "game_mode"):
+            if key in src:
+                new_frame[key] = src[key]
+
+        if frac > 1e-9 and i + 1 < n:
+            # ── 两 sample 之间的 Hermite 补帧 ──────────────────────────
+            u = frac
+            bpos, bvel = _hermite_vector(
+                ball_positions[i], ball_positions[i + 1],
+                ball_tangents[i], ball_tangents[i + 1], h, u,
+            )
+            bpos = _clamp_to_bounds(bpos, ball_positions[i], ball_positions[i + 1])
+            new_frame["ball"]["position_m"] = _round6(bpos)
+            new_frame["ball"]["velocity_mps"] = _round6([v * time_scale for v in bvel])
+
+            for pid in player_ids:
+                ppos, pvel = _hermite_vector(
+                    player_positions[pid][i], player_positions[pid][i + 1],
+                    player_tangents[pid][i], player_tangents[pid][i + 1], h, u,
+                )
+                ppos = _clamp_to_bounds(
+                    ppos, player_positions[pid][i], player_positions[pid][i + 1]
+                )
+                src_player = next(p for p in src["players"] if p["id"] == pid)
+                new_frame["players"].append(_build_player_dict(
+                    pid,
+                    _round6([ppos[0], ppos[1], 0.0]),
+                    _round6([v * time_scale for v in pvel]),
+                    src_player,
+                ))
+        else:
+            # ── 精确命中 GRF sample（frac==0）或末尾越界 hold ─────────
+            if frac > 1e-9:
+                # 末尾越界（异常保护）：位置保持末帧真值，速度置 0
+                new_frame["ball"]["velocity_mps"] = [0.0, 0.0, 0.0]
+            for pid in player_ids:
+                src_player = next(p for p in src["players"] if p["id"] == pid)
+                if frac > 1e-9:
+                    vel = [0.0, 0.0]
+                else:
+                    vel = [v * time_scale for v in player_tangents[pid][i]]
+                new_frame["players"].append(_build_player_dict(
+                    pid, list(src_player["position_m"]), _round6(vel), src_player,
+                ))
+
+        out.append(new_frame)
+    return out

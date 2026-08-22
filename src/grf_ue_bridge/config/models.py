@@ -249,10 +249,10 @@ class ExportConfig(BaseModel):
         1.0,
         ge=0.1,
         description=(
-            "轨迹时间缩放（速度放大系数）：把 GRF 每步位移换算出的 velocity/speed 以及 "
-            "Hermite 插值 tangent 统一乘以该系数，弥补 GRF builtin AI 在五人制场地下球员"
-            "整体速度偏低。只放大速度/速率字段，不修改 GRF 位置 Ground Truth；"
-            "1.0 = 不缩放。"
+            "轨迹时间缩放（时间轴重采样）：source_time = dataset_time × time_scale。"
+            "> 1 时按真实 GRF 轨迹做时间型 Hermite 重采样，dataset 位置/速度一致地"
+            "加快（速度 = source 速度 × time_scale），score/ownership/game_mode 等"
+            "离散状态按 source_time hold/nearest。1.0 = 不缩放（普通 10fps→目标 fps 插值）。"
         ),
     )
     playback_fps: int = Field(30, description="Unreal Engine 目标回放帧率")

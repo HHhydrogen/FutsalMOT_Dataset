@@ -4,7 +4,7 @@ import math
 
 import pytest
 
-from grf_ue_bridge.interpolate import interpolate_frames
+from grf_ue_bridge.interpolate import interpolate_frames, resample_frames_time_scale
 from render_episode import select_rendered_frame_indices  # noqa: E402
 
 
@@ -218,3 +218,72 @@ class TestHermiteInterpolation:
             for p in f["players"]:
                 assert math.isfinite(p["speed_mps"])
             assert math.isfinite(f["ball"]["velocity_mps"][0])
+
+
+def _linear_source(n, vel=1.0, owned_step=0):
+    """线性运动源帧：position x = step*0.1（速度 vel m/s），y=0。"""
+    frames = []
+    for step in range(n):
+        x = step * 0.1
+        frames.append({
+            "step": step,
+            "time_seconds": round(step * 0.1, 6),
+            "score": [0, 0],
+            "ball_owned_team": step + owned_step,
+            "game_mode": 0,
+            "ball": {"position_m": [x, 0.0, 0.11],
+                     "source_grf_position": [x, 0.0, 0.11],
+                     "velocity_mps": [vel, 0.0, 0.0]},
+            "players": [{"id": f"L{p}",
+                         "position_m": [x, 0.0, 0.0],
+                         "velocity_mps": [vel, 0.0]}
+                        for p in range(10)],
+        })
+    return frames
+
+
+class TestResampleTimeScale:
+    def test_velocity_is_source_times_scale(self):
+        # ts=2, 10fps 输出：source_time = dataset×2，线性运动位置 0.2k/步、速度 2.0
+        src = _linear_source(10)
+        out = resample_frames_time_scale(src, 2.0, 10, 5)
+        assert len(out) == 5
+        for k, f in enumerate(out):
+            assert f["players"][0]["position_m"][0] == pytest.approx(0.2 * k)
+            assert f["players"][0]["velocity_mps"] == pytest.approx([2.0, 0.0])
+            assert f["players"][0]["speed_mps"] == pytest.approx(2.0)
+            assert f["ball"]["velocity_mps"][0] == pytest.approx(2.0)
+
+    def test_discrete_state_hold_nearest(self):
+        # 离散状态随 source_time 对应 sample（floor）hold，不做插值
+        src = _linear_source(10, owned_step=0)
+        out = resample_frames_time_scale(src, 2.0, 10, 5)
+        for k, f in enumerate(out):
+            # s = k*0.1*2 = 0.2k → sample i = 2k
+            assert f["ball_owned_team"] == 2 * k
+
+    def test_position_passes_through_grf_samples_unaligned(self):
+        # ts=2.4, 30fps：source 等效 24Hz，只有 k 为 5 的倍数时精确命中 GRF sample
+        src = _linear_source(9)  # 覆盖到 0.8s
+        out = resample_frames_time_scale(src, 2.4, 30, 10)
+        # 每 5 帧命中一次 sample：k=5 → s=0.4 → sample 4
+        for k in range(10):
+            x = out[k]["players"][0]["position_m"][0]
+            s = k * (1.0 / 30.0) * 2.4
+            expected_exact = round(s, 6)
+            assert x == pytest.approx(expected_exact, abs=1e-4)
+            assert math.isfinite(out[k]["players"][0]["speed_mps"])
+        # 命中帧严格等于 GRF 真值
+        assert out[5]["players"][0]["position_m"][0] == pytest.approx(0.4)
+        assert out[5]["players"][0]["velocity_mps"] == pytest.approx([2.4, 0.0])
+
+    def test_no_nan_and_bounded(self):
+        src = _linear_source(730)  # 覆盖 73s > 72s 需求
+        out = resample_frames_time_scale(src, 2.4, 30, 900)
+        assert len(out) == 900
+        src_max = (len(src) - 1) * 0.1
+        for f in out:
+            for p in f["players"]:
+                assert all(math.isfinite(v) for v in p["velocity_mps"])
+                assert math.isfinite(p["speed_mps"])
+                assert 0.0 <= p["position_m"][0] <= src_max + 1e-6  # clamp 到段内

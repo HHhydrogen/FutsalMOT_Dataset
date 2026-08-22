@@ -45,20 +45,25 @@ def run_export(
 ) -> int:
     """执行导出（复用现有 run_episode/export_episode，不复制 exporter 实现）。"""
     from grf_ue_bridge.config.models import ExportConfig
-    from grf_ue_bridge.exporter import export_episode
+    from grf_ue_bridge.exporter import compute_source_steps, export_episode
     from grf_ue_bridge.grf_runner import run_episode
 
     export_cfg = ExportConfig(**resolved.export_profile)
     traj = Path(resolved.trajectory_output)
 
+    grf_steps = compute_source_steps(export_cfg)
     print_fn(f"Export task: {resolved.task_id}  episode={resolved.episode_name}")
-    print_fn(f"  root seed: {export_cfg.seed}  scenario: {export_cfg.scenario}  steps: {export_cfg.num_steps}")
+    print_fn(
+        f"  root seed: {export_cfg.seed}  scenario: {export_cfg.scenario}  "
+        f"GRF steps: {grf_steps} (dataset steps: {export_cfg.num_steps} "
+        f"× time_scale {export_cfg.trajectory_time_scale})"
+    )
     print_fn(f"  trajectory output: {traj}")
 
     result = run_episode(
         scenario=export_cfg.scenario,
         seed=export_cfg.seed,
-        num_steps=export_cfg.num_steps,
+        num_steps=grf_steps,
         render=export_cfg.render,
         game_duration=export_cfg.game_duration,
         left_team_difficulty=export_cfg.left_team_difficulty,

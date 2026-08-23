@@ -271,6 +271,102 @@ class TestPlayerMotionTracker:
         assert set(s10) == set(s30)
 
 
+# ── 守门员 ball-aware facing ─────────────────────────────────────────────
+
+class TestGKFaceBall:
+    def _cfg(self):
+        # 关闭平滑、高 yaw rate，便于验证"朝向收敛到球/保持运动朝向"的判定本身
+        return MotionConfig(
+            idle_max_speed_mps=0.3, walk_max_speed_mps=1.0,
+            jog_max_speed_mps=2.0, run_max_speed_mps=3.5,
+            min_facing_speed_mps=0.3, max_yaw_rate_deg_s=360.0,
+            yaw_smoothing_time_s=0.0,
+            gk_face_ball_max_speed_mps=2.0,
+            gk_face_ball_max_angle_deg=90.0,
+        )
+
+    def test_normal_player_ignores_ball_facing(self):
+        # 普通球员（face_ball=False）：传入球位置也不改变 movement-facing
+        cfg = self._cfg()
+        t = PlayerMotionTracker(config=cfg)
+        p = t.update([0.0, 0.0, 0.0], [3.0, 0.0], 0.0,
+                     ball_position_m=[-5.0, 0.0, 0.0], face_ball=False)
+        # 应保持 movement heading（0°，朝 +x），而非面向球（180°）
+        assert p["facing_deg"] == pytest.approx(0.0, abs=1e-6)
+
+    def test_gk_low_speed_faces_ball_not_movement(self):
+        # 低速（<2.0 m/s）：面向球（≈0°，球员上移 0.02 后球向角 -0.115°），
+        # 而非 movement heading +y（90°）
+        cfg = self._cfg()
+        t = PlayerMotionTracker(config=cfg)
+        t.update([0.0, 0.0, 0.0], [0.0, 0.0], 0.0,
+                 ball_position_m=[10.0, 0.0, 0.0], face_ball=True)
+        p = t.update([0.0, 0.02, 0.0], [0.0, 1.0], 0.1,
+                     ball_position_m=[10.0, 0.0, 0.0], face_ball=True)
+        ball_heading = math.degrees(math.atan2(-0.02, 10.0))
+        assert abs(shortest_angle_delta_deg(p["facing_deg"], ball_heading)) <= 1e-6
+        # 远小于 movement heading（90°），证明是面向球而非朝运动方向
+        assert abs(shortest_angle_delta_deg(p["facing_deg"], 0.0)) < 0.2
+
+    def test_gk_fast_faces_ball_within_90deg(self):
+        # 高速（>=2.0 m/s）+ movement 与 ball 夹角 <=90°：面向球
+        cfg = self._cfg()
+        t = PlayerMotionTracker(config=cfg)
+        p = t.update([0.0, 0.0, 0.0], [3.0, 0.0], 0.0,
+                     ball_position_m=[5.0, 2.0, 0.0], face_ball=True)
+        ball_heading = math.degrees(math.atan2(2.0, 5.0))  # ≈21.8°
+        assert abs(shortest_angle_delta_deg(p["facing_deg"], ball_heading)) <= 1e-6
+
+    def test_gk_fast_keeps_movement_heading_when_ball_behind(self):
+        # 高速 + 球在正后方（夹角 180° > 90°）：保持 movement heading，不高速倒跑
+        cfg = self._cfg()
+        t = PlayerMotionTracker(config=cfg)
+        p = t.update([0.0, 0.0, 0.0], [3.0, 0.0], 0.0,
+                     ball_position_m=[-5.0, 0.0, 0.0], face_ball=True)
+        assert abs(shortest_angle_delta_deg(p["facing_deg"], 0.0)) <= 1e-6
+
+    def test_gk_not_stuck_facing_away(self):
+        # 静止 GK：球从 +x 移到 -x，应在限速内转身面向球（不会长期背对）
+        cfg = self._cfg()
+        t = PlayerMotionTracker(config=cfg)
+        t.update([0.0, 0.0, 0.0], [0.0, 0.0], 0.0,
+                 ball_position_m=[10.0, 0.0, 0.0], face_ball=True)
+        for i in range(1, 31):
+            t.update([0.0, 0.0, 0.0], [0.0, 0.0], i / 30.0,
+                     ball_position_m=[-10.0, 0.0, 0.0], face_ball=True)
+        p = t.update([0.0, 0.0, 0.0], [0.0, 0.0], 31 / 30.0,
+                     ball_position_m=[-10.0, 0.0, 0.0], face_ball=True)
+        # 30 帧（1s，yaw rate 360°/s 足够转 180°）后应面向球（180°）
+        assert abs(shortest_angle_delta_deg(p["facing_deg"], 180.0)) <= 1.0
+
+    def test_gk_yaw_continuous_across_180(self):
+        # 球跨越 ±180°（从 (0,-10) 前移到 (0,+10)），unwrap 后朝向应连续、无整圈
+        def _unwind(prev, cur):
+            while cur - prev > 180.0:
+                cur -= 360.0
+            while cur - prev < -180.0:
+                cur += 360.0
+            return cur
+
+        cfg = self._cfg()
+        t = PlayerMotionTracker(config=cfg)
+        # 球沿 y 轴从 -10 移到 +10，heading 从 -90 → +90（经过 0 与 ±180 附近）
+        ball_ys = [-10.0, -5.0, -1.0, -0.2, 0.2, 1.0, 5.0, 10.0]
+        unwrapped = None
+        prev = None
+        max_jump = 0.0
+        for i, by in enumerate(ball_ys):
+            p = t.update([0.0, 0.0, 0.0], [0.0, 0.0], i / 10.0,
+                         ball_position_m=[0.0, by, 0.0], face_ball=True)
+            f = p["facing_deg"]
+            unwrapped = f if unwrapped is None else _unwind(unwrapped, f)
+            if prev is not None:
+                max_jump = max(max_jump, abs(unwrapped - prev))
+            prev = unwrapped
+        # 每帧最多转 360/10=36°（yaw rate 限速），unwrap 后无 ~350° 整圈跳变
+        assert max_jump <= 36.0 + 1e-6
+
+
 # ── 批量工具 / 诊断 ───────────────────────────────────────────────────────
 
 def _one_player_frame(step, time_s, pos, vel):

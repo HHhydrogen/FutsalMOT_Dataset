@@ -87,6 +87,12 @@ class MotionConfig:
     # Facing：一阶滞后平滑时间常数（秒）；0 表示关闭平滑、仅限速。
     yaw_smoothing_time_s: float = 0.1
 
+    # GK ball-aware facing：低于该速率（m/s）始终面向球（即使静止也缓慢转身）。
+    gk_face_ball_max_speed_mps: float = 2.0
+    # GK ball-aware facing：高于 max_speed 时，movement heading 与 ball heading
+    # 夹角 <= 该值（度）才面向球；否则保持 movement heading（避免高速倒跑）。
+    gk_face_ball_max_angle_deg: float = 90.0
+
     # Motion state 阈值
     start_accel_mps2: float = 1.2       # 加速度 > 该值且低速 → Start
     decel_accel_mps2: float = -1.2      # 加速度 < 该值且高速 → Decelerate
@@ -106,6 +112,10 @@ class MotionConfig:
 
 
 DEFAULT_MOTION_CONFIG = MotionConfig()
+
+
+# GK 实体 ID（与 exporter._build_entities 的 role=0 门将约定一致）。
+GK_ENTITY_IDS = frozenset({"L0", "R0"})
 
 
 # ── 角度工具 ─────────────────────────────────────────────────────────────
@@ -163,11 +173,20 @@ def compute_facing_yaw(
     min_facing_speed_mps: float,
     max_yaw_rate_deg_s: float,
     yaw_smoothing_time_s: float,
+    *,
+    desired_yaw_deg: Optional[float] = None,
+    allow_turn_when_slow: bool = False,
 ) -> float:
     """由速度向量计算平滑后的朝向角（度）。
 
     流程：velocity → desired_yaw = atan2(vy, vx) → 低速保持 previous_yaw →
     一阶滞后平滑 + 角速度硬限速 → 归一化。
+
+    desired_yaw_deg / allow_turn_when_slow 用于 GK ball-aware facing：
+    - desired_yaw_deg 不为 None 时，直接用该值作为目标朝向（如面向球），
+      否则仍由 velocity 计算（普通球员 movement-facing，行为不变）。
+    - allow_turn_when_slow=True 时，即使速度低于 min_facing_speed 也按
+      desired_yaw_deg 缓慢转身（守门员静止时也面向球）。
 
     Args:
         velocity_xy: 速度向量 [vx, vy]，单位 m/s。
@@ -176,6 +195,8 @@ def compute_facing_yaw(
         min_facing_speed_mps: 低于该速率（m/s）保持上一帧朝向。
         max_yaw_rate_deg_s: 最大转向角速度（度/秒，硬上限）。
         yaw_smoothing_time_s: 一阶滞后平滑时间常数（秒）；0 表示关闭平滑仅限速。
+        desired_yaw_deg: 目标朝向（度）；None = 用 velocity 计算。
+        allow_turn_when_slow: 低速时是否仍按 desired_yaw_deg 转身。
 
     Returns:
         归一化到 (-180, 180] 的朝向角（度）。所有输入异常（非有限/负 dt）均安全返回
@@ -191,10 +212,16 @@ def compute_facing_yaw(
     if dt_s <= 0.0 or not math.isfinite(dt_s):
         return prev
     if speed < float(min_facing_speed_mps):
-        # 低速：保持上一帧朝向（静止人物不随机转头）
-        return prev
-
-    desired = normalize_angle_deg(math.degrees(math.atan2(vy, vx)))
+        if desired_yaw_deg is not None and allow_turn_when_slow:
+            desired = normalize_angle_deg(float(desired_yaw_deg))
+        else:
+            # 低速：保持上一帧朝向（静止人物不随机转头）
+            return prev
+    else:
+        if desired_yaw_deg is not None:
+            desired = normalize_angle_deg(float(desired_yaw_deg))
+        else:
+            desired = normalize_angle_deg(math.degrees(math.atan2(vy, vx)))
     delta = shortest_angle_delta_deg(prev, desired)
 
     # 一阶滞后平滑（指数形式，与 FPS 无关：经过 t 秒后剩余误差 = exp(-t/tau)）
@@ -350,6 +377,8 @@ class PlayerMotionTracker:
         velocity_mps: Optional[Sequence[float]],
         time_s: float,
         has_ball: bool = False,
+        ball_position_m: Optional[Sequence[float]] = None,
+        face_ball: bool = False,
     ) -> Dict[str, Any]:
         """处理一帧，返回该球员的运动参数 dict。
 
@@ -358,6 +387,14 @@ class PlayerMotionTracker:
             velocity_mps: 当前帧速度 [vx, vy]（m/s）；None 时用相邻位置差分估算。
             time_s: 当前帧时间（秒）。
             has_ball: 是否持球（供未来 action 推断，本轮仅透出）。
+            ball_position_m: 球的位置 [x, y, z]（米，最终 meter-space）。仅当
+                face_ball=True 且不为 None 时启用 GK ball-aware facing。
+            face_ball: 是否使用守门员 ball-aware facing 策略：
+                速率 < gk_face_ball_max_speed_mps → 面向球；
+                否则若 movement heading 与 ball heading 夹角
+                <= gk_face_ball_max_angle_deg → 面向球；
+                否则用 movement heading（避免高速倒跑）。
+                普通球员（False）保持现有 movement-facing 不变。
         """
         cfg = self.config
         px = float(position_m[0])
@@ -396,7 +433,24 @@ class PlayerMotionTracker:
         heading = heading_from_velocity_deg(vel)
         desired_facing = heading if heading is not None else self.previous_facing_yaw_deg
 
-        # 朝向：首帧无历史 → 直接用速度朝向初始化；否则平滑 + 限速转向
+        # ── GK ball-aware facing ──────────────────────────────────────
+        gk_mode = face_ball and ball_position_m is not None
+        if gk_mode:
+            bx = float(ball_position_m[0])
+            by = float(ball_position_m[1])
+            ball_heading = normalize_angle_deg(math.degrees(math.atan2(by - py, bx - px)))
+            if speed < float(cfg.gk_face_ball_max_speed_mps):
+                # 低速（含静止）：面向球（即使静止也缓慢转身）
+                desired_facing = ball_heading
+            elif heading is not None and (
+                abs(shortest_angle_delta_deg(heading, ball_heading))
+                <= float(cfg.gk_face_ball_max_angle_deg)
+            ):
+                # 高速且运动方向与球方向夹角不大：面向球
+                desired_facing = ball_heading
+            # else：高速且夹角 > 90°：保持 movement heading（避免高速倒跑）
+
+        # 朝向：首帧无历史 → 直接用目标朝向初始化；否则平滑 + 限速转向
         if self.previous_time_s is None:
             facing = desired_facing
             turn_rate = 0.0
@@ -409,6 +463,8 @@ class PlayerMotionTracker:
                 cfg.min_facing_speed_mps,
                 cfg.max_yaw_rate_deg_s,
                 cfg.yaw_smoothing_time_s,
+                desired_yaw_deg=desired_facing if gk_mode else None,
+                allow_turn_when_slow=gk_mode,
             )
             if facing_dt_s > 0.0:
                 turn_rate = shortest_angle_delta_deg(self.previous_facing_yaw_deg, facing) / facing_dt_s

@@ -57,7 +57,7 @@ from scene_apply import (  # noqa: E402
     find_all_actors,
     pos_m_to_cm,
 )
-from player_motion import PlayerMotionTracker  # noqa: E402
+from player_motion import GK_ENTITY_IDS, PlayerMotionTracker  # noqa: E402
 from dataset_export import load_episode, load_mapping  # noqa: E402
 from annotation_exporter import export_annotations  # noqa: E402
 from render_episode import render_sequences  # noqa: E402
@@ -609,6 +609,11 @@ def create_sequence(meta: dict, frames: list, mapping: dict, replace_existing: b
                             player_data["position_m"],
                             player_data.get("velocity_mps"),
                             float(frame.get("time_seconds", frame_time)),
+                            ball_position_m=(
+                                frame["ball"]["position_m"]
+                                if entity_id in GK_ENTITY_IDS else None
+                            ),
+                            face_ball=entity_id in GK_ENTITY_IDS,
                         )
                         yaw = params["facing_deg"]
                         if player_yaw_continuous is None:

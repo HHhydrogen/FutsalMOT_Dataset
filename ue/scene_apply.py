@@ -10,7 +10,11 @@ unreal 一律延迟 import，避免模块顶层依赖 UE。
 本模块绝不改写位置。
 """
 
-from player_motion import DEFAULT_MOTION_CONFIG, PlayerMotionTracker
+from player_motion import (
+    DEFAULT_MOTION_CONFIG,
+    GK_ENTITY_IDS,
+    PlayerMotionTracker,
+)
 
 
 M_TO_CM = 100.0
@@ -103,6 +107,10 @@ def apply_player_frame(actors: dict, frame: dict, trackers: dict,
             player_data.get("velocity_mps"),
             time_s,
             has_ball=bool(player_data.get("has_ball", False)),
+            ball_position_m=(
+                frame["ball"]["position_m"] if pid in GK_ENTITY_IDS else None
+            ),
+            face_ball=(pid in GK_ENTITY_IDS),
         )
         yaw = params["facing_deg"]
 

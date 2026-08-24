@@ -41,6 +41,7 @@ from render_preset import (  # noqa: E402
     resolve_preset,
 )
 from scene_apply import apply_preview_frame, find_all_actors, find_actor  # noqa: E402
+from player_motion import gk_entity_ids_from_meta  # noqa: E402
 
 # 模块级：当前活跃的异步渲染管线。脚本（main）返回后 MRQ delegate 仍持有它的
 # 方法引用，但显式保留模块级引用可防止任何环境下对象被垃圾回收。
@@ -1705,7 +1706,8 @@ def render_sequences(
             mapping = load_mapping(Path(mapping_path))
             actors = find_all_actors(mapping)
             if actors:
-                apply_preview_frame(actors, frames[0], {})
+                gk_ids = gk_entity_ids_from_meta(meta)
+                apply_preview_frame(actors, frames[0], {}, gk_entity_ids=gk_ids)
                 _save_current_level()
                 print("  [MRQ] 首帧 spawn 状态已烘焙（actor 设到帧 0 并保存关卡）")
         except Exception as e:  # noqa: BLE001

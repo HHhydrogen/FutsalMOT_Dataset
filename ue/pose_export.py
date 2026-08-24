@@ -55,6 +55,7 @@ from scene_apply import (  # noqa: E402
     find_all_actors,
     find_actor,
 )
+from player_motion import gk_entity_ids_from_meta  # noqa: E402
 
 POSE_KEYPOINTS_SCHEMA = "futsalmot_pose_keypoints_v1"
 CM_TO_M = 0.01
@@ -449,6 +450,7 @@ def export_pose_keypoints(
     import unreal  # noqa: F401  # 确保 UE 会话存在（脚本在 UE 内运行）
 
     meta, frames = load_episode(episode_dir)
+    gk_ids = gk_entity_ids_from_meta(meta)
     mapping = load_mapping(mapping_path)
     actors = find_all_actors(mapping)
     if not actors:
@@ -517,7 +519,7 @@ def export_pose_keypoints(
     trackers: Dict[str, object] = {}
     per_frame_kps: Dict[int, Dict[str, List[List[Optional[float]]]]] = {}
     for frame_data in selected:
-        apply_preview_frame(actors, frame_data, trackers)
+        apply_preview_frame(actors, frame_data, trackers, gk_entity_ids=gk_ids)
         step = frame_data["step"]
         kps = {}
         for entity_id, actor in player_actors.items():

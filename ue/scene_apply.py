@@ -14,6 +14,7 @@ from player_motion import (
     DEFAULT_MOTION_CONFIG,
     GK_ENTITY_IDS,
     PlayerMotionTracker,
+    gk_entity_ids_from_meta,
 )
 
 
@@ -79,7 +80,7 @@ def apply_ball_frame(actors: dict, frame: dict):
 
 
 def apply_player_frame(actors: dict, frame: dict, trackers: dict,
-                       config=DEFAULT_MOTION_CONFIG):
+                       config=DEFAULT_MOTION_CONFIG, gk_entity_ids=None):
     """根据帧数据设置球员 actor 的位置与朝向（yaw）。
 
     朝向由 PlayerMotionTracker 统一计算（速度 → 朝向，平滑限速，低速保持）；
@@ -91,8 +92,10 @@ def apply_player_frame(actors: dict, frame: dict, trackers: dict,
             time_seconds）。
         trackers: {player_id: PlayerMotionTracker}（跨帧维护，勿复用）。
         config: MotionConfig（默认 DEFAULT_MOTION_CONFIG）。
+        gk_entity_ids: 守门员实体 ID 集合（None = 用 GK_ENTITY_IDS 回退）。
     """
     import unreal
+    gk_ids = frozenset(gk_entity_ids) if gk_entity_ids is not None else GK_ENTITY_IDS
     time_s = float(frame.get("time_seconds", 0.0))
     for player_data in frame["players"]:
         pid = player_data["id"]
@@ -108,9 +111,10 @@ def apply_player_frame(actors: dict, frame: dict, trackers: dict,
             time_s,
             has_ball=bool(player_data.get("has_ball", False)),
             ball_position_m=(
-                frame["ball"]["position_m"] if pid in GK_ENTITY_IDS else None
+                frame["ball"]["position_m"] if pid in gk_ids else None
             ),
-            face_ball=(pid in GK_ENTITY_IDS),
+            face_ball=(pid in gk_ids),
+            is_goalkeeper=(pid in gk_ids),
         )
         yaw = params["facing_deg"]
 
@@ -120,10 +124,10 @@ def apply_player_frame(actors: dict, frame: dict, trackers: dict,
 
 
 def apply_preview_frame(actors: dict, frame: dict, trackers: dict,
-                        config=DEFAULT_MOTION_CONFIG):
+                        config=DEFAULT_MOTION_CONFIG, gk_entity_ids=None):
     """应用单个帧的 actor 变换（球 + 全部球员）。trackers 为 {pid: tracker}。"""
     apply_ball_frame(actors, frame)
-    apply_player_frame(actors, frame, trackers, config)
+    apply_player_frame(actors, frame, trackers, config, gk_entity_ids=gk_entity_ids)
 
 
 def apply_preview(meta: dict, frames: list, mapping: dict):
@@ -132,12 +136,13 @@ def apply_preview(meta: dict, frames: list, mapping: dict):
     if not actors:
         return
 
+    gk_ids = gk_entity_ids_from_meta(meta)
     num_steps = meta["timing"]["num_steps"]
     trackers = {}
 
     for frame in frames:
         step = frame["step"]
-        apply_preview_frame(actors, frame, trackers)
+        apply_preview_frame(actors, frame, trackers, gk_entity_ids=gk_ids)
 
         if step > 0 and step % 50 == 0:
             print(f"  Preview: {step}/{num_steps}")

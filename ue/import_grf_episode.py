@@ -57,7 +57,10 @@ from scene_apply import (  # noqa: E402
     find_all_actors,
     pos_m_to_cm,
 )
-from player_motion import GK_ENTITY_IDS, PlayerMotionTracker  # noqa: E402
+from player_motion import (  # noqa: E402
+    PlayerMotionTracker,
+    gk_entity_ids_from_meta,
+)
 from dataset_export import load_episode, load_mapping  # noqa: E402
 from annotation_exporter import export_annotations  # noqa: E402
 from render_episode import render_sequences  # noqa: E402
@@ -488,6 +491,9 @@ def create_sequence(meta: dict, frames: list, mapping: dict, replace_existing: b
     if not actors:
         return
 
+    # GK 身份来自 meta.entities[].is_goalkeeper（不假设 L0/R0）；缺失时回退
+    gk_ids = gk_entity_ids_from_meta(meta)
+
     pkg_path = package_path or DEFAULT_SEQUENCE_PACKAGE_PATH
     num_steps = meta["timing"]["num_steps"]
     source_step = meta["timing"]["source_step_seconds"]
@@ -611,9 +617,10 @@ def create_sequence(meta: dict, frames: list, mapping: dict, replace_existing: b
                             float(frame.get("time_seconds", frame_time)),
                             ball_position_m=(
                                 frame["ball"]["position_m"]
-                                if entity_id in GK_ENTITY_IDS else None
+                                if entity_id in gk_ids else None
                             ),
-                            face_ball=entity_id in GK_ENTITY_IDS,
+                            face_ball=entity_id in gk_ids,
+                            is_goalkeeper=entity_id in gk_ids,
                         )
                         yaw = params["facing_deg"]
                         if player_yaw_continuous is None:

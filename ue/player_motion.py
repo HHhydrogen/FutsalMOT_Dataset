@@ -68,6 +68,22 @@ class MotionAction:
     ALL = (NONE, KICK, PASS, SHOT, RECEIVE)
 
 
+# ── Animation Selector 输出类别（第一版）──────────────────────────────────
+
+class AnimationClass:
+    """Animation Selector 输出的动画类别（供未来动画系统消费）。"""
+
+    LOCOMOTION = "locomotion"      # 通用 locomotion（由 speed / BlendSpace 连续驱动）
+    PIVOT_L = "pivot_l"            # 90° 左转（turn_rate>0，= UE Pivot90L +90°）
+    PIVOT_R = "pivot_r"            # 90° 右转（turn_rate<0，= UE Pivot90R -90°）
+    GK_SHUFFLE_L = "gk_shuffle_l"  # GK 向左横移（relative<0，资产命名镜像）
+    GK_SHUFFLE_R = "gk_shuffle_r"  # GK 向右横移（relative>0，资产命名镜像）
+    GK_BACKPEDAL = "gk_backpedal"  # GK 后退（|relative|>=135°）
+
+    ALL = (LOCOMOTION, PIVOT_L, PIVOT_R,
+           GK_SHUFFLE_L, GK_SHUFFLE_R, GK_BACKPEDAL)
+
+
 # ── 运动参数配置（集中可调，禁止散落 magic number）───────────────────────
 
 @dataclass(frozen=True)
@@ -102,6 +118,47 @@ class MotionConfig:
     pivot_min_speed_mps: float = 2.0    # Pivot 判定的最小速度
     pivot_min_turn_rate_deg_s: float = 90.0  # Pivot 判定的最小角速度
 
+    # Temporal Stabilization（秒，不依赖固定帧率）：raw_motion_state → animation_motion_state。
+    # enter_confirm_s：候选状态需连续维持该时长才可进入 animation state（基础态即时确认）。
+    state_enter_confirm_s: Dict[str, float] = field(default_factory=lambda: {
+        MotionState.IDLE: 0.0,
+        MotionState.START: 0.05,
+        MotionState.LOCOMOTION: 0.0,
+        MotionState.DECELERATE: 0.10,
+        MotionState.STOP: 0.05,
+        MotionState.PIVOT: 0.12,
+    })
+    # min_visible_s：进入后至少保持该时长（基础态 0，可随时被瞬态打断）。
+    state_min_visible_s: Dict[str, float] = field(default_factory=lambda: {
+        MotionState.IDLE: 0.0,
+        MotionState.START: 0.20,
+        MotionState.LOCOMOTION: 0.0,
+        MotionState.DECELERATE: 0.15,
+        MotionState.STOP: 0.20,
+        MotionState.PIVOT: 0.18,
+    })
+
+    # Animation Selector 稳定化（秒，raw_animation_class → animation_class）。
+    # 仅 GK 方向类（shuffle_l/r、backpedal）需要 enter_confirm / min_visible；
+    # pivot_l/r 上游 animation_motion_state 已稳定，不加额外稳定；
+    # locomotion 是安全兜底，不需确认。
+    anim_class_enter_confirm_s: Dict[str, float] = field(default_factory=lambda: {
+        AnimationClass.LOCOMOTION: 0.0,
+        AnimationClass.PIVOT_L: 0.0,
+        AnimationClass.PIVOT_R: 0.0,
+        AnimationClass.GK_SHUFFLE_L: 0.10,
+        AnimationClass.GK_SHUFFLE_R: 0.10,
+        AnimationClass.GK_BACKPEDAL: 0.10,
+    })
+    anim_class_min_visible_s: Dict[str, float] = field(default_factory=lambda: {
+        AnimationClass.LOCOMOTION: 0.0,
+        AnimationClass.PIVOT_L: 0.0,
+        AnimationClass.PIVOT_R: 0.0,
+        AnimationClass.GK_SHUFFLE_L: 0.15,
+        AnimationClass.GK_SHUFFLE_R: 0.15,
+        AnimationClass.GK_BACKPEDAL: 0.15,
+    })
+
     # 迟滞（避免阈值边界抖动）
     gait_hysteresis_mps: float = 0.15
     speed_hysteresis_mps: float = 0.15
@@ -116,6 +173,22 @@ DEFAULT_MOTION_CONFIG = MotionConfig()
 
 # GK 实体 ID（与 exporter._build_entities 的 role=0 门将约定一致）。
 GK_ENTITY_IDS = frozenset({"L0", "R0"})
+
+
+def gk_entity_ids_from_meta(meta: Optional[dict]) -> frozenset:
+    """从 meta.entities 的 is_goalkeeper / role 元数据推导 GK 实体 ID 集合。
+
+    meta 形状：{ "entities": [{ "id": "L0", "is_goalkeeper": True, ... }, ...] }。
+    优先使用 is_goalkeeper=True 的实体；当 meta 缺少 entities 或没有任何
+    GK 标记时，回退到 GK_ENTITY_IDS（role=0 启发式，兼容旧数据）。
+
+    不假设 L0/R0 一定是 GK——真实 episode 中 GK 可在任意 index。
+    """
+    entities = (meta or {}).get("entities") or []
+    gk = frozenset(
+        e.get("id") for e in entities if bool(e.get("is_goalkeeper")) and e.get("id")
+    )
+    return gk if gk else GK_ENTITY_IDS
 
 
 # ── 角度工具 ─────────────────────────────────────────────────────────────
@@ -351,6 +424,42 @@ def compute_motion_state(
     return MotionState.LOCOMOTION
 
 
+# ── Animation Selector（第一版，输出 raw_animation_class）─────────────────
+
+def select_animation_class(
+    animation_motion_state: str,
+    turn_rate_deg_s: Optional[float],
+    relative_movement_heading_deg: Optional[float],
+    is_goalkeeper: bool,
+) -> str:
+    """第一版 Animation Selector 原始规则（raw_animation_class）。
+
+    优先级：
+      1. animation_motion_state == pivot：
+           turn_rate_deg_s > 0 → pivot_l（= UE Pivot90L +90°）
+           turn_rate_deg_s < 0 → pivot_r（= UE Pivot90R -90°）
+      2. GK 且 |relative_movement_heading_deg| >= 135 → gk_backpedal
+      3. GK 且 45 <= |relative| < 135：
+           relative > 0 → gk_shuffle_r
+           relative < 0 → gk_shuffle_l
+           （注意：资产命名镜像，此映射已用真实 velocity + UE 动画验证，勿反转）
+      4. 其它 → locomotion（由 speed / BlendSpace 连续驱动）
+
+    本函数只产出 raw_animation_class；时间稳定化由
+    PlayerMotionTracker._stabilize_animation_class 负责。
+    """
+    if animation_motion_state == MotionState.PIVOT:
+        return AnimationClass.PIVOT_L if (turn_rate_deg_s or 0.0) > 0 else AnimationClass.PIVOT_R
+    if is_goalkeeper and relative_movement_heading_deg is not None:
+        rel = float(relative_movement_heading_deg)
+        a = abs(rel)
+        if a >= 135.0:
+            return AnimationClass.GK_BACKPEDAL
+        if a >= 45.0:
+            return AnimationClass.GK_SHUFFLE_R if rel > 0 else AnimationClass.GK_SHUFFLE_L
+    return AnimationClass.LOCOMOTION
+
+
 # ── 逐球员运动追踪器（流式，供 UE 侧逐帧调用；也可批量重放）──────────────
 
 @dataclass
@@ -371,6 +480,111 @@ class PlayerMotionTracker:
     previous_state: str = MotionState.IDLE
     previous_time_s: Optional[float] = None
 
+    # Temporal Stabilization（raw_motion_state → animation_motion_state）
+    animation_motion_state: str = MotionState.IDLE
+    animation_state_enter_time_s: Optional[float] = None
+    candidate_state: Optional[str] = None
+    candidate_since_s: Optional[float] = None
+
+    # Animation Selector（raw_animation_class → animation_class）
+    raw_animation_class: str = AnimationClass.LOCOMOTION
+    animation_class: str = AnimationClass.LOCOMOTION
+    animation_class_enter_time_s: Optional[float] = None
+    anim_class_candidate_state: Optional[str] = None
+    anim_class_candidate_since_s: Optional[float] = None
+
+    def _stabilize(self, raw: str, time_s: float) -> str:
+        """raw_motion_state → animation_motion_state 时间稳定化。
+
+        规则（全部用 time_s 差分，不依赖固定帧率）：
+          1. raw 改变时记录 candidate_state 与 candidate_since_s；
+          2. candidate 连续达到对应 enter_confirm_s 才允许进入新 animation state
+             （IDLE/LOCOMOTION 基础态即时确认）；
+          3. 当前 animation state 未达到 min_visible_s 前，普通状态不得切走；
+          4. PIVOT 达到确认时间后可优先打断任意状态（含 min_visible 内）；
+          5. 无 cooldown。
+        """
+        cfg = self.config
+        if raw != self.candidate_state:
+            self.candidate_state = raw
+            self.candidate_since_s = time_s
+        cand = self.candidate_state
+        cand_since = self.candidate_since_s
+
+        def _is_basic(s: str) -> bool:
+            return s in (MotionState.IDLE, MotionState.LOCOMOTION)
+
+        cand_ready = _is_basic(cand) or (
+            cand_since is not None
+            and (time_s - cand_since)
+            >= float(cfg.state_enter_confirm_s.get(cand, 0.0))
+        )
+        anim_enter = self.animation_state_enter_time_s
+        anim_min_visible = float(
+            cfg.state_min_visible_s.get(self.animation_motion_state, 0.0)
+        )
+        anim_ready = anim_enter is None or (time_s - anim_enter) >= anim_min_visible
+
+        if cand_ready and cand != self.animation_motion_state:
+            if _is_basic(cand):
+                # 基础态候选：当前 anim 为基础态或已过 min_visible 才可接管
+                if _is_basic(self.animation_motion_state) or anim_ready:
+                    self.animation_motion_state = cand
+                    self.animation_state_enter_time_s = time_s
+            elif _is_basic(self.animation_motion_state) or anim_ready or cand == MotionState.PIVOT:
+                # 瞬态候选：可打断基础态 / 当前 anim 已过 min_visible / PIVOT 优先
+                self.animation_motion_state = cand
+                self.animation_state_enter_time_s = time_s
+        return self.animation_motion_state
+
+    def _stabilize_animation_class(self, raw_anim: str, time_s: float) -> str:
+        """raw_animation_class → animation_class 时间稳定化。
+
+        仅对 GK 方向类（gk_shuffle_l/r、gk_backpedal）做 enter_confirm / min_visible：
+          - enter_confirm：候选需连续维持该时长才进入；
+          - min_visible：进入后至少保持，普通类不得切走；
+          - pivot_l/r 最高优先级（无需确认，可打断 gk 类 min_visible 内）；
+          - locomotion 是安全兜底，无需确认。
+        全部用 time_s 差分，不依赖固定帧率。
+        """
+        cfg = self.config
+        if raw_anim != self.anim_class_candidate_state:
+            self.anim_class_candidate_state = raw_anim
+            self.anim_class_candidate_since_s = time_s
+        cand = self.anim_class_candidate_state
+        cand_since = self.anim_class_candidate_since_s
+
+        is_pivot = cand in (AnimationClass.PIVOT_L, AnimationClass.PIVOT_R)
+        is_fallback = cand in (AnimationClass.LOCOMOTION, AnimationClass.PIVOT_L, AnimationClass.PIVOT_R)
+
+        cand_ready = is_fallback or (
+            cand_since is not None
+            and (time_s - cand_since) >= float(cfg.anim_class_enter_confirm_s.get(cand, 0.0))
+        )
+        anim_enter = self.animation_class_enter_time_s
+        anim_min_visible = float(
+            cfg.anim_class_min_visible_s.get(self.animation_class, 0.0)
+        )
+        anim_ready = anim_enter is None or (time_s - anim_enter) >= anim_min_visible
+
+        if cand_ready and cand != self.animation_class:
+            if is_pivot:
+                # pivot 最高优先级：可打断任何状态（含 gk 类 min_visible 内）
+                self.animation_class = cand
+                self.animation_class_enter_time_s = time_s
+            elif cand == AnimationClass.LOCOMOTION:
+                # 兜底：当前是兜底类或已过 min_visible 才接管
+                if self.animation_class in (AnimationClass.LOCOMOTION,
+                                            AnimationClass.PIVOT_L,
+                                            AnimationClass.PIVOT_R) or anim_ready:
+                    self.animation_class = cand
+                    self.animation_class_enter_time_s = time_s
+            elif is_fallback or anim_ready:
+                # gk 类：可打断兜底类 / 当前已过 min_visible
+                self.animation_class = cand
+                self.animation_class_enter_time_s = time_s
+        return self.animation_class
+
     def update(
         self,
         position_m: Sequence[float],
@@ -379,6 +593,7 @@ class PlayerMotionTracker:
         has_ball: bool = False,
         ball_position_m: Optional[Sequence[float]] = None,
         face_ball: bool = False,
+        is_goalkeeper: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """处理一帧，返回该球员的运动参数 dict。
 
@@ -395,8 +610,13 @@ class PlayerMotionTracker:
                 <= gk_face_ball_max_angle_deg → 面向球；
                 否则用 movement heading（避免高速倒跑）。
                 普通球员（False）保持现有 movement-facing 不变。
+            is_goalkeeper: 是否守门员（供 Animation Selector 判别 shuffle/backpedal）。
+                None = 沿用 face_ball（UE 调用处 GK 必传 face_ball=True）。
         """
         cfg = self.config
+        if is_goalkeeper is None:
+            is_goalkeeper = bool(face_ball)
+        gk_flag = bool(is_goalkeeper)
         px = float(position_m[0])
         py = float(position_m[1])
         pos = [px, py]
@@ -475,6 +695,22 @@ class PlayerMotionTracker:
         motion_state = compute_motion_state(
             speed, accel, turn_rate, self.previous_speed_mps, self.previous_state, cfg
         )
+        animation_motion_state = self._stabilize(motion_state, float(time_s))
+
+        # 相对运动方向：运动方向相对身体朝向的角度（= normalize(movement_heading - facing)），
+        # 正值 = 逆时针（向左偏），负值 = 顺时针（向右偏），±180 = 后退。
+        relative_movement_heading = None
+        if heading is not None:
+            relative_movement_heading = shortest_angle_delta_deg(facing, heading)
+
+        # Animation Selector：raw_animation_class（纯规则）→ animation_class（时间稳定）
+        raw_animation_class = select_animation_class(
+            animation_motion_state,
+            turn_rate,
+            relative_movement_heading,
+            gk_flag,
+        )
+        animation_class = self._stabilize_animation_class(raw_animation_class, float(time_s))
 
         # 更新内部状态
         self.previous_position_m = pos
@@ -492,9 +728,16 @@ class PlayerMotionTracker:
             "movement_heading_deg": round(heading, 6) if heading is not None else None,
             "desired_facing_deg": round(desired_facing, 6),
             "facing_deg": round(facing, 6),
+            "relative_movement_heading_deg": (
+                round(relative_movement_heading, 6)
+                if relative_movement_heading is not None else None
+            ),
             "turn_rate_deg_s": round(turn_rate, 6),
             "gait": gait,
             "motion_state": motion_state,
+            "animation_motion_state": animation_motion_state,
+            "raw_animation_class": raw_animation_class,
+            "animation_class": animation_class,
             "has_ball": bool(has_ball),
             "action_state": MotionAction.NONE,
         }
@@ -505,13 +748,17 @@ class PlayerMotionTracker:
 def compute_player_motion_sequence(
     frames: Sequence[Dict[str, Any]],
     config: MotionConfig = DEFAULT_MOTION_CONFIG,
+    gk_entity_ids: Optional[Iterable[str]] = None,
 ) -> List[Dict[str, Any]]:
     """批量计算每个球员在每一帧的运动参数（供 debug / sidecar 输出）。
 
     返回长度与 frames 相同的列表，每项为 {frame_index, step, time_seconds,
     players: {player_id: motion_params}}。
     确定性：相同 frames + 相同 config ⇒ 相同结果。
+
+    gk_entity_ids: 守门员实体 ID 集合（None = 用 GK_ENTITY_IDS 回退）。
     """
+    gk_ids = frozenset(gk_entity_ids) if gk_entity_ids is not None else GK_ENTITY_IDS
     trackers: Dict[str, PlayerMotionTracker] = {}
     result: List[Dict[str, Any]] = []
     for frame in frames:
@@ -525,6 +772,7 @@ def compute_player_motion_sequence(
                 p.get("position_m", [0.0, 0.0, 0.0]),
                 p.get("velocity_mps"),
                 time_s,
+                is_goalkeeper=(pid in gk_ids),
             )
         result.append({
             "frame_index": (step + 1) if isinstance(step, int) else None,
@@ -616,12 +864,15 @@ def write_motion_debug_jsonl(
     path: Any,
     frames: Sequence[Dict[str, Any]],
     config: MotionConfig = DEFAULT_MOTION_CONFIG,
+    gk_entity_ids: Optional[Iterable[str]] = None,
 ) -> Tuple[str, List[Dict[str, Any]]]:
     """把逐球员运动参数写到 sidecar JSONL（调试用，不进正式 dataset）。
 
     写两个文件：
       <path>.motion.jsonl      逐帧逐球员运动参数（speed/velocity/facing/gait/state...）
       <path>.diagnostics.jsonl 轨迹诊断 warning（位置断点/速度尖峰/角速度尖峰/加速度尖峰）
+
+    gk_entity_ids: 守门员实体 ID 集合（None = 用 GK_ENTITY_IDS 回退）。
 
     Returns:
         (motion_path, warnings)。确定性：相同输入 ⇒ 相同输出。
@@ -633,7 +884,7 @@ def write_motion_debug_jsonl(
     motion_path = _Path(str(path) + ".motion.jsonl")
     diag_path = _Path(str(path) + ".diagnostics.jsonl")
 
-    seq = compute_player_motion_sequence(frames, config)
+    seq = compute_player_motion_sequence(frames, config, gk_entity_ids=gk_entity_ids)
     warnings = diagnose_trajectory(frames, config)
 
     motion_path.parent.mkdir(parents=True, exist_ok=True)

@@ -52,6 +52,7 @@ from scene_apply import (
     find_all_actors,
     find_actor,
 )
+from player_motion import gk_entity_ids_from_meta  # noqa: E402
 
 CM_TO_M = 0.01  # 厘米 -> 米
 
@@ -515,6 +516,7 @@ def export_annotations(
     import unreal
 
     meta, frames = load_episode(episode_dir)
+    gk_ids = gk_entity_ids_from_meta(meta)
     mapping = load_mapping(mapping_path)
     actors = find_all_actors(mapping)
     if not actors:
@@ -575,7 +577,7 @@ def export_annotations(
     trackers: Dict[str, object] = {}
 
     for frame_data in selected:
-        apply_preview_frame(actors, frame_data, trackers)
+        apply_preview_frame(actors, frame_data, trackers, gk_entity_ids=gk_ids)
         step = frame_data["step"]
         time_seconds = frame_data.get("time_seconds", step * source_step_seconds)
         for name, cam, intrinsics, extrinsics, cam_meta in cameras:

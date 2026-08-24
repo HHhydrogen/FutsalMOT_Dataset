@@ -5,6 +5,7 @@ import math
 import pytest
 
 from player_motion import (
+    AnimationClass,
     Gait,
     MotionConfig,
     MotionState,
@@ -14,9 +15,11 @@ from player_motion import (
     compute_motion_state,
     compute_player_motion_sequence,
     diagnose_trajectory,
+    gk_entity_ids_from_meta,
     heading_from_velocity_deg,
     move_towards_angle_deg,
     normalize_angle_deg,
+    select_animation_class,
     shortest_angle_delta_deg,
     write_motion_debug_jsonl,
 )
@@ -272,6 +275,438 @@ class TestPlayerMotionTracker:
 
 
 # ── 守门员 ball-aware facing ─────────────────────────────────────────────
+
+class TestRelativeMovementHeading:
+    def _cfg(self):
+        return MotionConfig(
+            idle_max_speed_mps=0.3, walk_max_speed_mps=1.0,
+            jog_max_speed_mps=2.0, run_max_speed_mps=3.5,
+            min_facing_speed_mps=0.3, max_yaw_rate_deg_s=360.0,
+            yaw_smoothing_time_s=0.0,
+            gk_face_ball_max_speed_mps=2.0,
+            gk_face_ball_max_angle_deg=90.0,
+        )
+
+    def _gk_frame(self, vel, ball_pos, speed=1.0):
+        """GK 低速帧：facing 强制 = ball heading，movement heading = vel 方向。"""
+        # 归一化 vel 到 speed=1（<2.0 → GK 面向球）
+        h = math.atan2(vel[1], vel[0])
+        v = [speed * math.cos(h), speed * math.sin(h)]
+        cfg = self._cfg()
+        t = PlayerMotionTracker(config=cfg)
+        return t.update([0.0, 0.0, 0.0], v, 0.0,
+                        ball_position_m=ball_pos, face_ball=True)
+
+    def test_forward_zero(self):
+        p = self._gk_frame([1.0, 0.0], [10.0, 0.0])
+        assert p["facing_deg"] == pytest.approx(0.0, abs=1e-6)
+        assert p["movement_heading_deg"] == pytest.approx(0.0, abs=1e-6)
+        assert p["relative_movement_heading_deg"] == pytest.approx(0.0, abs=1e-6)
+
+    def test_left_lateral_plus_90(self):
+        p = self._gk_frame([0.0, 1.0], [10.0, 0.0])
+        assert p["facing_deg"] == pytest.approx(0.0, abs=1e-6)
+        assert p["movement_heading_deg"] == pytest.approx(90.0, abs=1e-6)
+        assert p["relative_movement_heading_deg"] == pytest.approx(90.0, abs=1e-6)
+
+    def test_right_lateral_minus_90(self):
+        p = self._gk_frame([0.0, -1.0], [10.0, 0.0])
+        assert p["facing_deg"] == pytest.approx(0.0, abs=1e-6)
+        assert p["movement_heading_deg"] == pytest.approx(-90.0, abs=1e-6)
+        assert p["relative_movement_heading_deg"] == pytest.approx(-90.0, abs=1e-6)
+
+    def test_backward_180(self):
+        p = self._gk_frame([-1.0, 0.0], [10.0, 0.0])
+        assert p["facing_deg"] == pytest.approx(0.0, abs=1e-6)
+        assert abs(shortest_angle_delta_deg(p["movement_heading_deg"], 180.0)) <= 1e-6
+        # ±180（符号由 normalize 决定，此处为 +180）
+        assert abs(abs(p["relative_movement_heading_deg"]) - 180.0) <= 1e-6
+
+    def test_wrap_179_minus_179(self):
+        # facing≈179、movement≈-179 → 相对角 ≈ +2（最短角），绝非 ±358
+        ball_deg = math.radians(179.0)
+        ball = [10.0 * math.cos(ball_deg), 10.0 * math.sin(ball_deg)]
+        p = self._gk_frame([-1.0, -0.02], ball)  # movement ≈ -179°
+        assert abs(p["facing_deg"] - 179.0) < 0.01
+        assert abs(shortest_angle_delta_deg(p["movement_heading_deg"], -179.0)) < 0.5
+        rel = p["relative_movement_heading_deg"]
+        assert rel is not None and 1.0 < rel < 3.0  # 最短角 +2，无 ±358 环绕
+
+    def test_gk_facing_differs_from_movement(self):
+        # GK 面向球（+y），movement 为 +x → 相对角 -90（非零）
+        p = self._gk_frame([1.0, 0.0], [0.0, 10.0])
+        assert p["facing_deg"] == pytest.approx(90.0, abs=1e-6)
+        assert p["relative_movement_heading_deg"] == pytest.approx(-90.0, abs=1e-6)
+
+    def test_normal_player_relative_zero_when_following(self):
+        # 普通球员 facing 跟随 movement → 相对角 0
+        cfg = self._cfg()
+        t = PlayerMotionTracker(config=cfg)
+        p = t.update([0.0, 0.0, 0.0], [3.0, 0.0], 0.0)
+        assert p["relative_movement_heading_deg"] == pytest.approx(0.0, abs=1e-6)
+
+
+# ── Temporal Stabilization（raw_motion_state → animation_motion_state）─────
+
+class TestTemporalStabilization:
+    def _cfg(self):
+        return MotionConfig(
+            idle_max_speed_mps=0.3, walk_max_speed_mps=1.0,
+            jog_max_speed_mps=2.0, run_max_speed_mps=3.5,
+            min_facing_speed_mps=0.3, max_yaw_rate_deg_s=360.0,
+            yaw_smoothing_time_s=0.0,
+            stop_speed_mps=0.4, decel_min_speed_mps=1.0,
+            decel_accel_mps2=-1.2, start_max_speed_mps=1.5,
+            start_accel_mps2=1.2, pivot_min_speed_mps=2.0,
+            pivot_min_turn_rate_deg_s=90.0,
+        )
+
+    # 通过 update 构造原始状态序列（控制速度/加速度/角速度）
+    def _run_raw_states(self, states):
+        """直接喂 raw 状态序列（经 _stabilize），返回 [(raw, anim, time)]。
+        用独立 tracker + 手动调用，隔离 compute_motion_state 的影响。
+        """
+        t = PlayerMotionTracker(config=self._cfg())
+        out = []
+        for i, s in enumerate(states):
+            time_s = i / 30.0
+            anim = t._stabilize(s, time_s)
+            out.append((s, anim, time_s))
+        return out
+
+    def _run_velocity(self, vels, fps=30):
+        """按速度序列驱动 update()（位置 = 累计位移），返回 [(raw, anim, time)]。"""
+        cfg = self._cfg()
+        t = PlayerMotionTracker(config=cfg)
+        dt = 1.0 / fps
+        out = []
+        px = py = 0.0
+        for i, (vx, vy) in enumerate(vels):
+            time_s = i * dt
+            px += vx * dt
+            py += vy * dt
+            p = t.update([px, py, 0.0], [vx, vy], time_s)
+            out.append((p["motion_state"], p["animation_motion_state"], time_s))
+        return out
+
+    def test_single_frame_start_filtered(self):
+        # IDLE → START(1帧,0.033s<0.05确认) → LOCOMOTION：animation 不出现 START
+        out = self._run_raw_states(["idle", "start", "locomotion"])
+        anims = [a for _, a, _ in out]
+        assert anims[0] == "idle"
+        assert anims[1] == "idle"      # START 未确认，保持 idle
+        assert anims[2] == "locomotion"
+        assert "start" not in anims
+        # raw 不变
+        assert [r for r, _, _ in out] == ["idle", "start", "locomotion"]
+
+    def test_sustained_start_enters(self):
+        # START 持续 ≥0.05s → animation 进入 START
+        out = self._run_raw_states(["idle", "start", "start", "start",
+                                    "start", "start", "start", "locomotion"])
+        anims = [a for _, a, _ in out]
+        assert "start" in anims
+        # 进入时刻：从首个 start 起需 ≥0.05s（30fps 下第 2 帧后）
+        idx = anims.index("start")
+        assert out[idx][2] - out[1][2] >= 0.05 - 1e-9
+
+    def test_stop_short_event_triggers_and_holds(self):
+        # LOCOMOTION → STOP 持续 0.05s 确认后进入，min_visible 0.2s 内不切走
+        out = self._run_raw_states(
+            ["locomotion", "stop", "stop", "stop", "locomotion",
+             "locomotion", "locomotion", "locomotion", "locomotion",
+             "locomotion", "locomotion"])
+        anims = [a for _, a, _ in out]
+        # STOP 需连续 0.05s（2 帧）确认：3 帧 stop 足够 → 进入
+        assert "stop" in anims
+        stop_idx = anims.index("stop")
+        # min_visible 0.2s = 6 帧：进入后即使 raw 回 locomotion 也保持 stop
+        stop_run = 0
+        for a in anims[stop_idx:]:
+            if a == "stop":
+                stop_run += 1
+            else:
+                break
+        assert stop_run >= 6  # 0.2s @30fps = 6 帧
+
+    def test_single_frame_pivot_filtered(self):
+        out = self._run_raw_states(["locomotion", "pivot", "locomotion",
+                                    "locomotion", "locomotion"])
+        anims = [a for _, a, _ in out]
+        assert "pivot" not in anims
+
+    def test_sustained_pivot_enters(self):
+        # PIVOT 持续 ≥0.12s（5 帧@30fps）→ animation 进入 PIVOT
+        out = self._run_raw_states(
+            ["locomotion", "pivot", "pivot", "pivot", "pivot", "pivot",
+             "pivot", "locomotion"])
+        anims = [a for _, a, _ in out]
+        assert "pivot" in anims
+        idx = anims.index("pivot")
+        assert out[idx][2] - out[1][2] >= 0.12 - 1e-9
+
+    def test_no_oscillation_within_min_visible(self):
+        # START 进入后，min_visible 内 raw 反复切 locomotion/start 不导致 anim 反复跳
+        out = self._run_raw_states(
+            ["idle", "start", "start", "start", "locomotion", "start",
+             "locomotion", "start", "locomotion", "start", "locomotion",
+             "locomotion", "locomotion", "locomotion", "locomotion"])
+        anims = [a for _, a, _ in out]
+        # START 只进入一次，且在 min_visible 内不被来回切换
+        transitions = sum(1 for i in range(1, len(anims)) if anims[i] != anims[i - 1])
+        assert anims.count("start") >= 4  # 进入后保持至少 ~0.2s
+        assert transitions <= 3           # 不反复跳（idle→start→locomotion 最多 2-3 次）
+
+    def test_fps_equivalence(self):
+        # 同一 raw 状态时序（按秒定义）在 10fps 与 30fps 下 animation 状态序列等价
+        t10 = PlayerMotionTracker(config=self._cfg())
+        t30 = PlayerMotionTracker(config=self._cfg())
+        # raw 时序（秒）：idle 0.2s → start 0.3s → locomotion 0.4s → pivot 0.3s → locomotion 0.3s
+        events = [
+            ("idle", 0.0, 0.2), ("start", 0.2, 0.5), ("locomotion", 0.5, 0.9),
+            ("pivot", 0.9, 1.2), ("locomotion", 1.2, 1.5),
+        ]
+        anim_times = []
+        for fps in (10, 30):
+            t = t10 if fps == 10 else t30
+            seen = []
+            for state, t0, t1 in events:
+                n = max(1, int(round((t1 - t0) * fps)))
+                for j in range(n):
+                    time_s = t0 + j / fps
+                    anim = t._stabilize(state, time_s)
+                    seen.append((state, anim, round(time_s, 4)))
+            anim_times.append(seen)
+        # 两种 fps 下 animation 状态与切换时刻一致（进入确认/最小可见基于秒）
+        a10, a30 = anim_times
+        # 比较 animation 状态序列（状态名序列，允许帧采样差异——取切换时序）
+        def anim_series(rows):
+            out = []
+            for _, anim, t in rows:
+                if not out or out[-1][1] != anim:
+                    out.append((anim, t))
+            return out
+        s10, s30 = anim_series(a10), anim_series(a30)
+        # 至少：起始与结束状态一致，且 PIVOT 正确进入（未被过度过滤）
+        assert s10[0][0] == s30[0][0] == "idle"
+        assert s10[-1][0] == s30[-1][0]
+        assert "pivot" in [s for s, _ in s10] and "pivot" in [s for s, _ in s30]
+        # 切换时刻（秒）两种 fps 相差不超过一个粗采样间隔
+        assert abs(s10[-1][1] - s30[-1][1]) <= 0.1
+
+    def test_raw_motion_state_unchanged(self):
+        # animation 层存在不影响 raw motion_state（与 compute_motion_state 独立）
+        cfg = self._cfg()
+        t = PlayerMotionTracker(config=cfg)
+        t.update([0.0, 0.0, 0.0], [0.0, 0.0], 0.0)  # 建立历史（speed 0）
+        p = t.update([0.05, 0.0, 0.0], [0.5, 0.0], 0.1)  # accel=(0.5-0)/0.1=5 → START
+        assert p["motion_state"] == MotionState.START
+        assert p["animation_motion_state"] in (MotionState.IDLE, MotionState.START)
+        # 再跑 compute_motion_state 直接比对 raw（prev_speed=0，首帧前速度）
+        r = compute_motion_state(0.5, 5.0, 0.0, 0.0, MotionState.IDLE, cfg)
+        assert p["motion_state"] == r
+
+
+# ── Animation Selector（第一版）───────────────────────────────────────────
+
+class TestAnimationSelector:
+    def _cfg(self):
+        return MotionConfig(
+            idle_max_speed_mps=0.3, walk_max_speed_mps=1.0,
+            jog_max_speed_mps=2.0, run_max_speed_mps=3.5,
+            min_facing_speed_mps=0.3, max_yaw_rate_deg_s=360.0,
+            yaw_smoothing_time_s=0.0,
+        )
+
+    # 1. pivot 正负 turn_rate → L/R
+    def test_pivot_sign(self):
+        assert select_animation_class("pivot", 120.0, None, False) == AnimationClass.PIVOT_L
+        assert select_animation_class("pivot", -120.0, None, False) == AnimationClass.PIVOT_R
+        assert select_animation_class("pivot", 0.0, None, False) == AnimationClass.PIVOT_R
+
+    # 2. GK relative > 0 → gk_shuffle_r
+    def test_gk_shuffle_r_when_relative_positive(self):
+        assert select_animation_class("locomotion", 0.0, 90.0, True) == AnimationClass.GK_SHUFFLE_R
+        assert select_animation_class("locomotion", 0.0, 45.0, True) == AnimationClass.GK_SHUFFLE_R
+
+    # 3. GK relative < 0 → gk_shuffle_l
+    def test_gk_shuffle_l_when_relative_negative(self):
+        assert select_animation_class("locomotion", 0.0, -90.0, True) == AnimationClass.GK_SHUFFLE_L
+        assert select_animation_class("locomotion", 0.0, -134.9, True) == AnimationClass.GK_SHUFFLE_L
+
+    # 4. |relative| >= 135 → backpedal
+    def test_gk_backpedal(self):
+        assert select_animation_class("locomotion", 0.0, 135.0, True) == AnimationClass.GK_BACKPEDAL
+        assert select_animation_class("locomotion", 0.0, -135.0, True) == AnimationClass.GK_BACKPEDAL
+        assert select_animation_class("locomotion", 0.0, 180.0, True) == AnimationClass.GK_BACKPEDAL
+
+    # 5. 非 GK 不触发 shuffle/backpedal
+    def test_non_gk_no_directional(self):
+        assert select_animation_class("locomotion", 0.0, 90.0, False) == AnimationClass.LOCOMOTION
+        assert select_animation_class("locomotion", 0.0, -179.0, False) == AnimationClass.LOCOMOTION
+        assert select_animation_class("locomotion", 0.0, 135.0, False) == AnimationClass.LOCOMOTION
+
+    # 6. Pivot 优先于 GK Backpedal/Shuffle
+    def test_pivot_priority(self):
+        assert select_animation_class("pivot", 50.0, 170.0, True) == AnimationClass.PIVOT_L
+        assert select_animation_class("pivot", -50.0, 90.0, True) == AnimationClass.PIVOT_R
+
+    # 7-10. Selector temporal stabilization（仅 GK 方向类）
+    def _stab(self, raws, fps=30):
+        t = PlayerMotionTracker(config=self._cfg())
+        out = []
+        for i, rc in enumerate(raws):
+            out.append((rc, t._stabilize_animation_class(rc, i / fps)))
+        return out
+
+    def test_single_frame_gk_shuffle_filtered(self):
+        out = self._stab(["locomotion", "gk_shuffle_l", "locomotion"])
+        anims = [a for _, a in out]
+        assert anims == ["locomotion", "locomotion", "locomotion"]
+
+    def test_sustained_gk_shuffle_enters_after_confirm(self):
+        # 0.10s = 4 帧@30fps 后进入
+        out = self._stab(["locomotion"] + ["gk_shuffle_r"] * 7 + ["locomotion"])
+        anims = [a for _, a in out]
+        idx = anims.index("gk_shuffle_r")
+        assert idx >= 4  # enter_confirm 0.10s @30fps = 第4帧
+        assert (idx - 1) / 30.0 >= 0.10 - 1e-9
+
+    def test_min_visible_holds_gk_class(self):
+        # 进入后 min_visible 0.15s 内不因 raw 回 locomotion 而立即切走
+        out = self._stab(["locomotion"] + ["gk_shuffle_l"] * 5 + ["locomotion"] * 8)
+        anims = [a for _, a in out]
+        idx = anims.index("gk_shuffle_l")
+        run = 0
+        for a in anims[idx:]:
+            if a == "gk_shuffle_l":
+                run += 1
+            else:
+                break
+        assert run >= 4  # 0.15s = 4.5 帧，至少保持 4 帧
+
+    def test_selector_fps_equivalence(self):
+        t10 = PlayerMotionTracker(config=self._cfg())
+        t30 = PlayerMotionTracker(config=self._cfg())
+        seqs = []
+        for fps in (10, 30):
+            t = t10 if fps == 10 else t30
+            seen = []
+            for i in range(int(1.0 * fps)):
+                time_s = i / fps
+                raw = "gk_shuffle_r" if 0.3 <= time_s < 0.6 else "locomotion"
+                anim = t._stabilize_animation_class(raw, time_s)
+                seen.append((raw, anim, round(time_s, 4)))
+            seqs.append(seen)
+        def series(rows):
+            out = []
+            for _, anim, t in rows:
+                if not out or out[-1][1] != anim:
+                    out.append((anim, t))
+            return out
+        s10, s30 = series(seqs[0]), series(seqs[1])
+        assert s10[0][0] == s30[0][0] == "locomotion"
+        assert s10[-1][0] == s30[-1][0]
+        assert "gk_shuffle_r" in [s for s, _ in s10]
+        assert "gk_shuffle_r" in [s for s, _ in s30]
+        assert abs(s10[-1][1] - s30[-1][1]) <= 0.1
+
+    # 11. frames.jsonl 完全不变（animation 字段不进 Frame schema）
+    def test_animation_class_not_in_frame_schema(self):
+        from grf_ue_bridge.schema import BallFrame, Frame, PlayerFrame
+        players = [PlayerFrame(id=f"L{i}", position_m=[0.0, 0.0, 0.0]) for i in range(5)] \
+            + [PlayerFrame(id=f"R{i}", position_m=[0.0, 0.0, 0.0]) for i in range(5)]
+        f = Frame(
+            step=0, time_seconds=0.0, score=[0, 0],
+            ball=BallFrame(position_m=[0.0, 0.0, 0.11]),
+            players=players,
+        )
+        d = f.model_dump()
+        assert "animation_class" not in d
+        assert "raw_animation_class" not in d
+        assert "animation_motion_state" not in d
+
+
+# ── GK 身份来源迁移（meta.entities[].is_goalkeeper）────────────────────────
+
+class TestGKIdentityFromMeta:
+    def _cfg(self):
+        return MotionConfig(
+            idle_max_speed_mps=0.3, walk_max_speed_mps=1.0,
+            jog_max_speed_mps=2.0, run_max_speed_mps=3.5,
+            min_facing_speed_mps=0.3, max_yaw_rate_deg_s=360.0,
+            yaw_smoothing_time_s=0.0,
+            gk_face_ball_max_speed_mps=2.0,
+            gk_face_ball_max_angle_deg=90.0,
+        )
+
+    # 1. GK 在 index0：现有行为不变
+    def test_gk_index0_unchanged(self):
+        meta = {"entities": [
+            {"id": "L0", "is_goalkeeper": True}, {"id": "L1", "is_goalkeeper": False},
+            {"id": "R0", "is_goalkeeper": True}, {"id": "R1", "is_goalkeeper": False},
+        ]}
+        assert gk_entity_ids_from_meta(meta) == frozenset({"L0", "R0"})
+        # L0 用 GK ball-aware facing：球在 +x、moving +y → rel +90 → raw gk_shuffle_r
+        cfg = self._cfg()
+        t = PlayerMotionTracker(config=cfg)
+        p = t.update([0.0, 0.0, 0.0], [0.0, 1.0], 0.0,
+                     ball_position_m=[10.0, 0.0, 0.0], face_ball=True, is_goalkeeper=True)
+        assert p["facing_deg"] == pytest.approx(0.0, abs=1e-6)
+        assert p["raw_animation_class"] == AnimationClass.GK_SHUFFLE_R
+
+    # 2. GK 在 index1：GK 行为正确转移到 L1/R1
+    def test_gk_index1_transfers(self):
+        meta = {"entities": [
+            {"id": "L0", "is_goalkeeper": False}, {"id": "L1", "is_goalkeeper": True},
+            {"id": "R0", "is_goalkeeper": False}, {"id": "R1", "is_goalkeeper": True},
+        ]}
+        assert gk_entity_ids_from_meta(meta) == frozenset({"L1", "R1"})
+        # L1 是 GK → 触发 GK 朝向 + selector
+        cfg = self._cfg()
+        t = PlayerMotionTracker(config=cfg)
+        p = t.update([0.0, 0.0, 0.0], [0.0, 1.0], 0.0,
+                     ball_position_m=[10.0, 0.0, 0.0], face_ball=True, is_goalkeeper=True)
+        assert p["facing_deg"] == pytest.approx(0.0, abs=1e-6)
+        assert p["raw_animation_class"] == AnimationClass.GK_SHUFFLE_R
+
+    # 3. 非 GK L0 不再误触发 GK selector / facing
+    def test_non_gk_l0_no_gk_behavior(self):
+        cfg = self._cfg()
+        t = PlayerMotionTracker(config=cfg)
+        # L0 非 GK：即使传入球位置 + face_ball=False → 面向运动方向，rel≈0，无 shuffle
+        p = t.update([0.0, 0.0, 0.0], [0.0, 1.0], 0.0,
+                     ball_position_m=[10.0, 0.0, 0.0], face_ball=False, is_goalkeeper=False)
+        assert p["facing_deg"] == pytest.approx(90.0, abs=1e-6)  # movement-facing
+        assert p["raw_animation_class"] == AnimationClass.LOCOMOTION
+        assert p["animation_class"] == AnimationClass.LOCOMOTION
+
+    # 4. GK Facing 行为仍通过（is_goalkeeper=True 触发 ball-aware）
+    def test_gk_facing_still_works_via_is_goalkeeper(self):
+        cfg = self._cfg()
+        t = PlayerMotionTracker(config=cfg)
+        t.update([0.0, 0.0, 0.0], [0.0, 0.0], 0.0,
+                 ball_position_m=[10.0, 0.0, 0.0], face_ball=True, is_goalkeeper=True)
+        p = t.update([0.0, 0.02, 0.0], [0.0, 1.0], 0.1,
+                     ball_position_m=[10.0, 0.0, 0.0], face_ball=True, is_goalkeeper=True)
+        ball_heading = math.degrees(math.atan2(-0.02, 10.0))
+        assert abs(shortest_angle_delta_deg(p["facing_deg"], ball_heading)) <= 1e-6
+
+    # 5. Animation Selector GK 类仍通过（L1 GK 的 shuffle/backpedal）
+    def test_selector_gk_class_via_is_goalkeeper(self):
+        cfg = self._cfg()
+        t = PlayerMotionTracker(config=cfg)
+        p = t.update([0.0, 0.0, 0.0], [0.0, 1.0], 0.0,
+                     ball_position_m=[10.0, 0.0, 0.0], face_ball=True, is_goalkeeper=True)
+        assert p["raw_animation_class"] == AnimationClass.GK_SHUFFLE_R
+
+    # 6. 回退：meta 缺失/无 GK 标记 → 用 GK_ENTITY_IDS
+    def test_fallback_when_meta_missing(self):
+        assert gk_entity_ids_from_meta(None) == frozenset({"L0", "R0"})
+        assert gk_entity_ids_from_meta({}) == frozenset({"L0", "R0"})
+        assert gk_entity_ids_from_meta({"entities": []}) == frozenset({"L0", "R0"})
+        assert gk_entity_ids_from_meta({"entities": [
+            {"id": "L0", "is_goalkeeper": False}]}) == frozenset({"L0", "R0"})
 
 class TestGKFaceBall:
     def _cfg(self):

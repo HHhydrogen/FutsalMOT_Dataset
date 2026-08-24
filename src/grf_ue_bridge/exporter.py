@@ -75,15 +75,37 @@ def compute_source_steps(config: ExportConfig) -> int:
     return int(math.floor(source_last / 0.1)) + 2
 
 
-def _build_entities() -> List[EntityDefinition]:
-    """构建 5v5 的实体定义（10 名球员 + 1 个球）。"""
+# 5v5 默认阵容（fallback：roles 缺失/异常时使用）。GK, RM, CF, LB, CB。
+_DEFAULT_ROLES = [0, 7, 9, 2, 1]
+
+
+def _observed_roles(
+    observation: dict, key: str, n_players: int = 5
+) -> List[int]:
+    """从 GRF observation 读取某队真实角色；缺失/异常时回退默认阵容。
+
+    只接受长度 >= n_players 且前 n_players 个均为 [0, 11] 内 int 的列表，
+    否则视为无效并返回 _DEFAULT_ROLES。
+    """
+    roles = observation.get(key) if observation else None
+    if isinstance(roles, (list, tuple)) and len(roles) >= n_players:
+        head = roles[:n_players]
+        if all(isinstance(r, int) and 0 <= r <= 11 for r in head):
+            return [int(r) for r in head]
+    return list(_DEFAULT_ROLES)
+
+
+def _build_entities(first_observation: dict) -> List[EntityDefinition]:
+    """构建 5v5 的实体定义（10 名球员 + 1 个球）。
+
+    角色优先取自 GRF observation 的真实 left_team_roles / right_team_roles，
+    缺失或异常时回退 _DEFAULT_ROLES。entity ID 恒为 L0-L4 / R0-R4 / BALL。
+    """
     entities: List[EntityDefinition] = []
-    # 左队：角色取自场景，默认使用合理的 GK/DEF/MID/FWD 组合
-    left_roles = [0, 7, 9, 2, 1]  # GK, RM, CF, LB, CB
+    left_roles = _observed_roles(first_observation, "left_team_roles")
+    right_roles = _observed_roles(first_observation, "right_team_roles")
     for i, role in enumerate(left_roles):
         entities.append(EntityDefinition.from_grf_role(role, "L", i))
-    # 右队
-    right_roles = [0, 7, 9, 2, 1]
     for i, role in enumerate(right_roles):
         entities.append(EntityDefinition.from_grf_role(role, "R", i))
     # 球
@@ -105,7 +127,11 @@ def export_episode(
     )
 
     # ── 构建实体 ──────────────────────────────────────────────
-    entities = _build_entities()
+    first_obs = (
+        result.snapshots[0].observation
+        if result.snapshots else {}
+    )
+    entities = _build_entities(first_obs)
 
     # ── 目标帧率：GRF 原生 10fps，可选插值到更高帧率（如 30） ──
     source_step_seconds = 0.1  # GRF 默认：10 FPS 仿真

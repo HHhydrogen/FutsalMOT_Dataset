@@ -47,6 +47,9 @@ from player_motion import gk_entity_ids_from_meta  # noqa: E402
 # 方法引用，但显式保留模块级引用可防止任何环境下对象被垃圾回收。
 _ACTIVE_RENDER = None
 
+# （临时调试）BurnIn Widget：仅利用 OnOutputFrameStarted 每输出帧回调，不合成到图。
+BURN_IN_CLASS_PATH = "/Game/FutsalMOT/Blueprints/WBP_PoseMRQBurnIn.WBP_PoseMRQBurnIn_C"
+
 
 # ── 纯函数：帧选择与映射 ────────────────────────────────────────────────
 
@@ -493,6 +496,32 @@ def _find_or_add_overrides(config, cls_name: str, overrides: dict, label: str) -
     _set_config_overrides(setting, overrides, label)
 
 
+def _add_burn_in(config) -> None:
+    """（临时调试）向 RGB job 添加 BurnInSetting：OnOutputFrameStarted 回调。
+
+    BurnIn 不合成到最终图（b_composite_onto_final_image=False），Widget 本身透明，
+    仅利用 MoviePipelineBurnInWidget 的 OnOutputFrameStarted 每输出帧回调。
+    """
+    import unreal
+
+    cls = getattr(unreal, "MoviePipelineBurnInSetting", None)
+    if cls is None:
+        print("  WARNING: 无 MoviePipelineBurnInSetting，跳过 BurnIn")
+        return
+    try:
+        setting = config.find_or_add_setting_by_class(cls)
+    except Exception as e:
+        print(f"  WARNING: 添加 MoviePipelineBurnInSetting 失败: {e}")
+        return
+    try:
+        soft = unreal.SoftClassPath(BURN_IN_CLASS_PATH)
+        setting.set_editor_property("burn_in_class", soft)
+        setting.set_editor_property("b_composite_onto_final_image", False)
+        print(f"  [BurnIn] 已启用 {BURN_IN_CLASS_PATH}（不合成到最终图）")
+    except Exception as e:
+        print(f"  WARNING: 设置 BurnIn 属性失败: {e}")
+
+
 def _apply_mrq_preset(config, preset, cv_gt, is_mask: bool) -> None:
     """向 MRQ job 配置施加 cv_gt preset。
 
@@ -507,6 +536,7 @@ def _apply_mrq_preset(config, preset, cv_gt, is_mask: bool) -> None:
     aa_ov.update(mrq_warmup_overrides(preset, cv_gt))
     if not is_mask:
         aa_ov.update(mrq_aa_overrides(preset, cv_gt))
+        _add_burn_in(config)
     _find_or_add_overrides(config, "MoviePipelineAntiAliasingSetting", aa_ov, "antialiasing")
 
 

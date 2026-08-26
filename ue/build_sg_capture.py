@@ -50,6 +50,9 @@ def main():
     vec_struct = unreal.Vector.static_struct()
     vec_type = bl.get_struct_type(vec_struct)
     arr_vec = bl.get_array_type(vec_type)
+    rot_struct = unreal.Rotator.static_struct()
+    rot_type = bl.get_struct_type(rot_struct)
+    arr_rot = bl.get_array_type(rot_type)
 
     # 添加缺失变量（已存在会失败，打印即可，不崩溃）
     want = [
@@ -62,6 +65,7 @@ def main():
         ("actor_ids", arr_str, "string[]"),
         ("bone_names", arr_str, "string[]"),
         ("world_locations", arr_vec, "Vector[]"),
+        ("world_rotations", arr_rot, "Rotator[]"),
     ]
     for name, pt, label in want:
         try:

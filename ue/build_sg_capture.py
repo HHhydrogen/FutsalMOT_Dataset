@@ -57,6 +57,7 @@ def main():
         ("first_capture_game_time", real_type, "float"),
         ("total_samples", int_type, "int"),
         ("capture_indices", arr_int, "int[]"),
+        ("shot_frames", arr_int, "int[]"),
         ("game_times", arr_float, "float[]"),
         ("actor_ids", arr_str, "string[]"),
         ("bone_names", arr_str, "string[]"),

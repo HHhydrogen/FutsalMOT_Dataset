@@ -516,7 +516,7 @@ def _add_burn_in(config) -> None:
     try:
         soft = unreal.SoftClassPath(BURN_IN_CLASS_PATH)
         setting.set_editor_property("burn_in_class", soft)
-        setting.set_editor_property("b_composite_onto_final_image", False)
+        setting.set_editor_property("composite_onto_final_image", False)
         print(f"  [BurnIn] 已启用 {BURN_IN_CLASS_PATH}（不合成到最终图）")
     except Exception as e:
         print(f"  WARNING: 设置 BurnIn 属性失败: {e}")

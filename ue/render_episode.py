@@ -48,7 +48,7 @@ from player_motion import gk_entity_ids_from_meta  # noqa: E402
 _ACTIVE_RENDER = None
 
 # （临时调试）BurnIn Widget：仅利用 OnOutputFrameStarted 每输出帧回调，不合成到图。
-BURN_IN_CLASS_PATH = "/Game/FutsalMOT/Blueprints/WBP_PoseMRQBurnIn.WBP_PoseMRQBurnIn_C"
+BURN_IN_CLASS_PATH = "/Game/FutsalMOT/Blueprints/WBP_PoseMRQBurnInC4.WBP_PoseMRQBurnInC4_C"
 
 
 # ── 纯函数：帧选择与映射 ────────────────────────────────────────────────

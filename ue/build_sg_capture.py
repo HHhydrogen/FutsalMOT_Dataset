@@ -66,6 +66,7 @@ def main():
         ("bone_names", arr_str, "string[]"),
         ("world_locations", arr_vec, "Vector[]"),
         ("world_rotations", arr_rot, "Rotator[]"),
+        ("capture_durations", arr_float, "float[]"),
     ]
     for name, pt, label in want:
         try:

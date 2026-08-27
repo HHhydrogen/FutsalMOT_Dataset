@@ -43,6 +43,7 @@ def main():
     bl = unreal.BlueprintEditorLibrary
     int_type = bl.get_basic_type_by_name("int")
     real_type = bl.get_basic_type_by_name("real")
+    bool_type = bl.get_basic_type_by_name("bool")
     arr_int = bl.get_array_type(int_type)
     arr_float = bl.get_array_type(real_type)
     str_type = bl.get_basic_type_by_name("string")
@@ -67,6 +68,13 @@ def main():
         ("world_locations", arr_vec, "Vector[]"),
         ("world_rotations", arr_rot, "Rotator[]"),
         ("capture_durations", arr_float, "float[]"),
+        # C5.2：Capture Session 完整性元数据（Python 据此 fail-fast / 判定 stale）
+        ("capture_complete", bool_type, "bool"),
+        ("captured_frame_count", int_type, "int"),
+        ("expected_frame_count", int_type, "int"),
+        ("first_root_frame", int_type, "int"),
+        ("last_root_frame", int_type, "int"),
+        ("session_id", str_type, "string"),
     ]
     for name, pt, label in want:
         try:

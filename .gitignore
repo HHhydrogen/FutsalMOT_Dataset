@@ -29,6 +29,7 @@ Saved/
 
 # 运行时产物（resolved task / active task）
 .futsalmot/
+_futsalmot/
 runtime/
 reports/local/
 benchmarks/local/

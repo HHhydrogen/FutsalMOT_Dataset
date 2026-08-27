@@ -11,7 +11,7 @@ from pathlib import Path
 
 LOG = []
 LOG_PATH = Path(r"D:\projects\FustalMOT_UEDataset\Content\FutsalMOT\code\.futsalmot\mark_sg_instance_editable.log")
-SG_ASSET = "/Game/FutsalMOT/Blueprints/SG_PoseCapture"
+SG_ASSET = "/Game/FutsalMOT/Blueprints/Pose/SaveGame/SG_PoseCapture"
 FIELDS = [
     "capture_complete", "captured_frame_count", "expected_frame_count",
     "first_root_frame", "last_root_frame", "session_id",

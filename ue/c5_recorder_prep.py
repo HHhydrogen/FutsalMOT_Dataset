@@ -13,6 +13,7 @@ LOG_PATH = Path(r"D:\projects\FustalMOT_UEDataset\Content\FutsalMOT\code\.futsal
 EPISODE = "c5test"
 CAMERA = "CineCam_01"
 GROUPS = [f"BP_PoseRecorderC4_G{i}" for i in range(5)]
+BP_FOLDER = "/Game/FutsalMOT/Blueprints/Pose/Recorder"
 
 
 def _log(msg):
@@ -55,12 +56,12 @@ def main():
 
     # 1) 每个 G BP 的 CDO 默认值（PIE 实例从 CDO 复制）
     for i, name in enumerate(GROUPS):
-        bp = unreal.load_asset(f"/Game/FutsalMOT/Blueprints/{name}")
+        bp = unreal.load_asset(f"{BP_FOLDER}/{name}")
         gc = unreal.BlueprintEditorLibrary.generated_class(bp)
         cdo = unreal.get_default_object(gc)
         cdo.set_editor_property("saveslotname", slot_names[i])
         cdo.set_editor_property("sessionid", session_id)
-        unreal.EditorAssetLibrary.save_asset(f"/Game/FutsalMOT/Blueprints/{name}", only_if_is_dirty=True)
+        unreal.EditorAssetLibrary.save_asset(f"{BP_FOLDER}/{name}", only_if_is_dirty=True)
         _log(f"  CDO {name}: slot={cdo.get_editor_property('saveslotname')} sess={cdo.get_editor_property('sessionid')}")
 
     # 2) 销毁旧（升级前/陈旧）实例，重放新类
@@ -76,7 +77,7 @@ def main():
     _log(f"  销毁旧实例 {removed}")
 
     for i, name in enumerate(GROUPS):
-        bp = unreal.load_asset(f"/Game/FutsalMOT/Blueprints/{name}")
+        bp = unreal.load_asset(f"{BP_FOLDER}/{name}")
         cls = unreal.BlueprintEditorLibrary.generated_class(bp)
         a = ed.spawn_actor_from_class(cls, unreal.Vector(0, 0, 0), unreal.Rotator(0, 0, 0))
         a.set_actor_label(name)

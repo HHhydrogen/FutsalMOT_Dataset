@@ -23,8 +23,8 @@ from pathlib import Path
 
 LOG = []
 LOG_PATH = Path(r"D:\projects\FustalMOT_UEDataset\Content\FutsalMOT\code\.futsalmot\build_bp_recorder_c4.log")
-ASSET_BASE = "/Game/FutsalMOT/Blueprints/BP_PoseRecorderC4_G"
-SG_PATH = "/Game/FutsalMOT/Blueprints/SG_PoseCapture.SG_PoseCapture_C"
+ASSET_BASE = "/Game/FutsalMOT/Blueprints/Pose/Recorder/BP_PoseRecorderC4_G"
+SG_PATH = "/Game/FutsalMOT/Blueprints/Pose/SaveGame/SG_PoseCapture.SG_PoseCapture_C"
 SKELETAL_COMP = "/Script/Engine.SkeletalMeshComponent"
 
 # 每组 2 actor（tag, actor_id）
@@ -414,17 +414,20 @@ def _build_group(group):
 
 def main():
     import unreal
-    _log("======== 构建 BP_PoseRecorderC4_G0..G4（5 BP × 2 actor）========")
+    import os
+    sel = os.environ.get("C5_BUILD_GROUP")
+    groups = GROUPS if sel is None else [g for g in GROUPS if g["idx"] == int(sel)]
+    _log(f"======== 构建 BP_PoseRecorderC4（groups={[g['idx'] for g in groups]}）========")
 
     ok_count = 0
-    for group in GROUPS:
+    for group in groups:
         try:
             if _build_group(group):
                 ok_count += 1
         except Exception as e:
             _log(f"  G{group['idx']} 构建异常: {type(e).__name__} {e}")
 
-    _log(f"\n完成 {ok_count}/5 个 BP")
+    _log(f"\n完成 {ok_count}/{len(groups)} 个 BP")
     _flush()
 
 

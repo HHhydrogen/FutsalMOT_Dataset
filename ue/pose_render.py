@@ -26,8 +26,8 @@ LOG_PATH = Path(r"D:\projects\FustalMOT_UEDataset\Content\FutsalMOT\code\.futsal
 SEQ_ASSET = "/Game/FutsalMOT/Sequences/LS_Cam_01.LS_Cam_01"
 SEQ_LOAD = "/Game/FutsalMOT/Sequences/LS_Cam_01"
 MAP = "/Game/FutsalMOT/Maps/L_FutsalCourt"
-BURN_IN_CLASS = "/Game/FutsalMOT/Blueprints/WBP_PoseMRQBurnInC4.WBP_PoseMRQBurnInC4_C"
-RECORDER_BPS = [f"/Game/FutsalMOT/Blueprints/BP_PoseRecorderC4_G{i}" for i in range(5)]
+BURN_IN_CLASS = "/Game/FutsalMOT/Blueprints/Pose/MRQ/WBP_PoseMRQBurnInC4.WBP_PoseMRQBurnInC4_C"
+RECORDER_BPS = [f"/Game/FutsalMOT/Blueprints/Pose/Recorder/BP_PoseRecorderC4_G{i}" for i in range(5)]
 
 
 def _log(msg):

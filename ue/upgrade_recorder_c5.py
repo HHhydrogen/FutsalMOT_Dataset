@@ -21,8 +21,8 @@ from pathlib import Path
 
 LOG = []
 LOG_PATH = Path(r"D:\projects\FustalMOT_UEDataset\Content\FutsalMOT\code\.futsalmot\upgrade_recorder_c5.log")
-ASSET_BASE = "/Game/FutsalMOT/Blueprints/BP_PoseRecorderC4_G"
-SG_PATH = "/Game/FutsalMOT/Blueprints/SG_PoseCapture.SG_PoseCapture_C"
+ASSET_BASE = "/Game/FutsalMOT/Blueprints/Pose/Recorder/BP_PoseRecorderC4_G"
+SG_PATH = "/Game/FutsalMOT/Blueprints/Pose/SaveGame/SG_PoseCapture.SG_PoseCapture_C"
 
 
 def _log(msg):

@@ -9,7 +9,7 @@ from pathlib import Path
 
 LOG = []
 LOG_PATH = Path(r"D:\projects\FustalMOT_UEDataset\Content\FutsalMOT\code\.futsalmot\build_sg_capture.log")
-ASSET_PATH = "/Game/FutsalMOT/Blueprints/SG_PoseCapture"
+ASSET_PATH = "/Game/FutsalMOT/Blueprints/Pose/SaveGame/SG_PoseCapture"
 
 
 def _log(msg):

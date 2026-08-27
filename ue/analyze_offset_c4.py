@@ -10,9 +10,12 @@
 
 import json
 import math
+import sys
 from pathlib import Path
 
 EP = Path(r"G:\FutsalMOT_Dataset\episode_bp_frame_sync")
+if len(sys.argv) > 1:
+    EP = Path(sys.argv[1])  # 覆盖：可用于隔离 smoke
 CAM = EP / "CineCam_01"
 MB = CAM / "mask_bbox_c4.jsonl"
 KP = EP / "coco17_2d_c4.jsonl"

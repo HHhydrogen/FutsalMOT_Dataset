@@ -1,16 +1,16 @@
 {
   "schema": "futsalmot_dataset_task",
   "version": 2,
-  "task_id": "bp_frame_sync_30f",
-  "episode_name": "episode_bp_frame_sync",
+  "task_id": "c5_smoke_1280",
+  "episode_name": "episode_c5_smoke_1280",
 
-  "dataset_root": "G:/FutsalMOT_Dataset",
+  "dataset_root": "G:/FutsalMOT_Dataset/c5_resolution_smoke_1280",
   "ue_project_root": "D:/projects/FustalMOT_UEDataset",
 
   "export": {
     "scenario": "5_vs_5",
     "seed": 42,
-    "num_steps": 30,
+    "num_steps": 3,
     "target_fps": 30,
     "playback_fps": 30,
     "field_length_m": 40.0,
@@ -39,8 +39,6 @@
     },
     "annotation_export": {
       "enabled": true,
-      "image_width": 1920,
-      "image_height": 1080,
       "cameras": ["CineCam_01"],
       "frame_start": 0,
       "frame_end": null,
@@ -66,22 +64,15 @@
           "anti_aliasing": "taa",
           "temporal_sampling": false
         },
-        "output_resolution_x": 1920,
-        "output_resolution_y": 1080,
+        "output_resolution_x": 1280,
+        "output_resolution_y": 720,
         "frame_rate": 30,
         "file_name_format": "{frame_number}",
-        "zero_pad_frame_numbers": 6
+        "zero_pad_frame_numbers": 4
       },
       "instance_mask": {
         "enabled": false,
-        "mask_source": "object_id_pass",
-        "mask_channel": "r",
-        "id_scale": 1.0,
-        "id_offset": 0.0,
-        "background_value": 0,
-        "polygon_tolerance_px": 1.0,
-        "max_polygon_points": 64,
-        "post_process_material": null
+        "mask_source": "object_id_pass"
       }
     }
   },
@@ -98,6 +89,6 @@
 
   "audit": {
     "expected_cameras": 1,
-    "expected_frames_per_camera": 90
+    "expected_frames_per_camera": 3
   }
 }

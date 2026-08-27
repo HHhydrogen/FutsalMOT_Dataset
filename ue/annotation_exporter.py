@@ -53,6 +53,7 @@ from scene_apply import (
     find_actor,
 )
 from player_motion import gk_entity_ids_from_meta  # noqa: E402
+from render_preset import resolve_output_resolution  # noqa: E402
 
 CM_TO_M = 0.01  # 厘米 -> 米
 
@@ -522,8 +523,9 @@ def export_annotations(
     if not actors:
         return
 
-    image_width = int(cfg.get("image_width", 1920))
-    image_height = int(cfg.get("image_height", 1080))
+    # C5.1：分辨率唯一来源 = render_rgb.output_resolution（MRQ 渲染分辨率），
+    # 兼容旧任务 image_width/height；两者冲突或缺失时 fail fast（不静默 1280x720）。
+    image_width, image_height = resolve_output_resolution(cfg)
     camera_names = cfg.get("cameras") or []
     if not camera_names:
         print("WARNING: annotation_export.cameras 为空，跳过标注导出")

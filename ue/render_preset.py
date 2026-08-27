@@ -25,6 +25,8 @@ enum 值在返回 dict 中以 ("EnumClassName", "MemberName") 标记，由 UE �
 """
 
 from typing import Dict, Optional, Tuple
+import json
+from pathlib import Path
 
 PRESET_CV_GT = "cv_gt"
 PRESET_CINEMATIC = "cinematic"
@@ -185,3 +187,93 @@ def post_process_console_vars(preset, cv_gt) -> Dict[str, float]:
     if not cg["chromatic_aberration"]:
         cvars["r.SceneColorFringeQuality"] = 0.0
     return cvars
+
+
+# ── C5.1：输出分辨率唯一来源与一致性校验 ────────────────────────────────
+
+def resolve_output_resolution(cfg: Optional[dict]) -> Tuple[int, int]:
+    """从 annotation/render 配置解析最终输出分辨率（唯一来源）。
+
+    C5.1 历史根因：camera calibration 曾按 annotation 的 image_width/height
+    （1280×720）生成，而 MRQ 实际渲染 1920×1080，导致 Pose 整体错位。
+    正式设计：camera calibration 与 MRQ render 必须消费**同一**分辨率。
+
+    优先级：
+      - render_rgb.output_resolution_x/y（MRQ 渲染分辨率，规范来源）
+      - 兼容旧任务的 annotation image_width/height（legacy fallback）
+    两者都存在且不一致 → 抛错（禁止两套分辨率）。
+    两者都缺失 → 抛错（fail fast，绝不静默回退 1280×720）。
+
+    Args:
+        cfg: annotation_export 配置 dict（含 render_rgb 子块）。
+
+    Returns:
+        (width, height)。
+
+    Raises:
+        ValueError: 无法解析，或 render_rgb 与 image_width/height 冲突。
+    """
+    cfg = cfg or {}
+    rr = cfg.get("render_rgb") or {}
+    rw, rh = rr.get("output_resolution_x"), rr.get("output_resolution_y")
+    aw, ah = cfg.get("image_width"), cfg.get("image_height")
+    if rw is not None and rh is not None:
+        w, h = int(rw), int(rh)
+        if aw is not None and ah is not None and (int(aw) != w or int(ah) != h):
+            raise ValueError(
+                f"Camera calibration resolution mismatch: "
+                f"render_rgb.output_resolution={w}x{h} vs "
+                f"annotation image={aw}x{ah}"
+            )
+        return w, h
+    if aw is not None and ah is not None:
+        return int(aw), int(ah)
+    raise ValueError(
+        "无法解析输出分辨率：render_rgb.output_resolution 与 "
+        "annotation image_width/height 均缺失（禁止静默回退 1280x720）"
+    )
+
+
+def png_dimensions(path) -> Tuple[int, int]:
+    """读取 PNG IHDR 宽高（纯标准库，不依赖 PIL）。"""
+    with open(path, "rb") as f:
+        sig = f.read(8)
+        if sig != b"\x89PNG\r\n\x1a\n":
+            raise ValueError(f"非 PNG 文件: {path}")
+        f.read(4)  # IHDR 块长度
+        f.read(4)  # 'IHDR'
+        width = int.from_bytes(f.read(4), "big")
+        height = int.from_bytes(f.read(4), "big")
+    return width, height
+
+
+def validate_render_vs_calibration(render_dir, camera_json_path) -> None:
+    """后处理阶段 fail-fast：实际渲染输出分辨率 == camera.json calibration 分辨率。
+
+    C4 历史根因：calibration 1280×720 用于 1920×1080 渲染 → Pose 整体错位。
+    若不一致立即抛错，禁止继续生成看似合法但实际错位的 Pose 数据。
+
+    Args:
+        render_dir: 渲染输出目录（含 FinalImage PNG）。
+        camera_json_path: 该相机输出目录下的 camera.json。
+
+    Raises:
+        RuntimeError: 渲染分辨率与 calibration 分辨率不一致。
+    """
+    render_dir = Path(render_dir)
+    if not render_dir.is_dir():
+        return  # 无渲染输出可检查
+    pngs = sorted(render_dir.rglob("*.png"))
+    if not pngs:
+        return
+    w, h = png_dimensions(pngs[0])
+    cam = json.loads(Path(camera_json_path).read_text(encoding="utf-8"))
+    intr = cam.get("intrinsics") or {}
+    cal_w = int(cam.get("image_width") or intr.get("width") or 0)
+    cal_h = int(cam.get("image_height") or intr.get("height") or 0)
+    if (w, h) != (cal_w, cal_h):
+        raise RuntimeError(
+            f"Camera calibration resolution mismatch: "
+            f"rendered={w}x{h} calibration={cal_w}x{cal_h} "
+            f"(camera.json 未按任务真实输出分辨率生成)"
+        )

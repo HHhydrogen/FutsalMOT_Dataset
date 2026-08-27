@@ -14,6 +14,13 @@ from camera_projection import (
     project_world_to_image,
     world_bbox_corners,
 )
+from render_preset import (
+    resolve_output_resolution,
+    validate_render_vs_calibration,
+)
+import json
+
+import pytest
 
 
 def _camera_at_origin():
@@ -125,3 +132,92 @@ class TestBoxProjection:
         # 近平面附近的点投影到左侧很远
         assert xmin < 0
         assert xmax > 540.0
+
+
+class TestC5ResolutionAutomation:
+    """C5.1：camera intrinsics 必须随真实输出分辨率自动生成。
+
+    根因：calibration 曾按 1280×720 生成，而 MRQ 实际渲染 1920×1080，
+    导致 Pose 整体错位。本测试验证 fx/fy/cx/cy 随分辨率线性缩放，
+    且 1280×720 / 1920×1080 / 2560×1440 均正确。
+    """
+
+    FOCAL = 15.0
+    SW, SH = 23.76, 13.365
+
+    def test_intrinsics_scaling_across_resolutions(self):
+        for w, h in [(1280, 720), (1920, 1080), (2560, 1440)]:
+            intr = compute_intrinsics_from_focal_length(self.FOCAL, self.SW, self.SH, w, h)
+            assert math.isclose(intr.fx, self.FOCAL * w / self.SW, rel_tol=1e-9)
+            assert math.isclose(intr.fy, self.FOCAL * h / self.SH, rel_tol=1e-9)
+            assert math.isclose(intr.cx, (w - 1) / 2, rel_tol=1e-9)
+            assert math.isclose(intr.cy, (h - 1) / 2, rel_tol=1e-9)
+
+    def test_16_9_scaling_ratio(self):
+        i1280 = compute_intrinsics_from_focal_length(self.FOCAL, self.SW, self.SH, 1280, 720)
+        i1920 = compute_intrinsics_from_focal_length(self.FOCAL, self.SW, self.SH, 1920, 1080)
+        # 1280 → 1920 = 1.5×
+        assert math.isclose(i1920.fx / i1280.fx, 1.5, rel_tol=1e-9)
+        assert math.isclose(i1920.fy / i1280.fy, 1.5, rel_tol=1e-9)
+
+    def test_c4_1920_1080_expected_values(self):
+        intr = compute_intrinsics_from_focal_length(self.FOCAL, self.SW, self.SH, 1920, 1080)
+        assert math.isclose(intr.fx, 1212.1212, rel_tol=1e-3)
+        assert math.isclose(intr.fy, 1212.1212, rel_tol=1e-3)
+        assert intr.cx == 959.5
+        assert intr.cy == 539.5
+
+    def test_resolve_output_resolution_from_render(self):
+        cfg = {"render_rgb": {"output_resolution_x": 1920, "output_resolution_y": 1080}}
+        assert resolve_output_resolution(cfg) == (1920, 1080)
+
+    def test_resolve_output_resolution_legacy_fallback(self):
+        cfg = {"image_width": 1280, "image_height": 720}
+        assert resolve_output_resolution(cfg) == (1280, 720)
+
+    def test_resolve_output_resolution_mismatch_rejected(self):
+        # 负测试：task render = 1920×1080，但 annotation image = 1280×720 → 拒绝
+        cfg = {
+            "image_width": 1280,
+            "image_height": 720,
+            "render_rgb": {"output_resolution_x": 1920, "output_resolution_y": 1080},
+        }
+        with pytest.raises(ValueError):
+            resolve_output_resolution(cfg)
+
+    def test_resolve_output_resolution_missing_fails_fast(self):
+        with pytest.raises(ValueError):
+            resolve_output_resolution({})
+        with pytest.raises(ValueError):
+            resolve_output_resolution(None)
+
+    def test_validate_render_vs_calibration_mismatch(self, tmp_path):
+        render = tmp_path / "render"
+        render.mkdir()
+        _write_fake_png(render / "0000.png", 1920, 1080)
+        cam = tmp_path / "camera.json"
+        cam.write_text(json.dumps({"image_width": 1280, "image_height": 720, "intrinsics": {}}), encoding="utf-8")
+        with pytest.raises(RuntimeError):
+            validate_render_vs_calibration(render, cam)
+
+    def test_validate_render_vs_calibration_ok(self, tmp_path):
+        render = tmp_path / "render"
+        render.mkdir()
+        _write_fake_png(render / "0000.png", 1920, 1080)
+        cam = tmp_path / "camera.json"
+        cam.write_text(
+            json.dumps({"image_width": 1920, "image_height": 1080,
+                        "intrinsics": {"width": 1920, "height": 1080}}),
+            encoding="utf-8",
+        )
+        validate_render_vs_calibration(render, cam)  # 不抛错
+
+
+def _write_fake_png(path, width, height):
+    """写仅含 PNG 签名 + IHDR 头的伪 PNG（validate 只读前 24 字节）。"""
+    with open(path, "wb") as f:
+        f.write(b"\x89PNG\r\n\x1a\n")
+        f.write((13).to_bytes(4, "big"))
+        f.write(b"IHDR")
+        f.write((width).to_bytes(4, "big"))
+        f.write((height).to_bytes(4, "big"))

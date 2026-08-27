@@ -31,7 +31,8 @@ markers = [
     "grf_integration: 真实 GRF 引擎集成测试（本地运行：uv run pytest -m grf_integration -q）",
 ]
 # 默认不运行需要完整 GRF 引擎的集成测试；显式 -m grf_integration 覆盖
-addopts = ["-m", "not grf_integration"]
+# mcp_smoke_test.py 是 UE-only 冒烟脚本（import unreal），P1 pytest 排除
+addopts = ["-m", "not grf_integration", "--ignore=ue/mcp_smoke_test.py"]
 
 [tool.hatch.build.targets.wheel]
 packages = [

@@ -38,7 +38,9 @@ from render_preset import (  # noqa: E402
     mrq_temporal_overrides,
     mrq_warmup_overrides,
     post_process_console_vars,
+    resolve_output_resolution,
     resolve_preset,
+    validate_render_vs_calibration,
 )
 from scene_apply import apply_preview_frame, find_all_actors, find_actor  # noqa: E402
 from player_motion import gk_entity_ids_from_meta  # noqa: E402
@@ -109,7 +111,13 @@ def copy_rendered_frames(
     """把渲染帧中与 annotation 对齐的帧复制为 img1/{frame_index:06d}.png。
 
     返回复制的帧数。
+
+    C5.1 fail-fast：若该相机已有 camera.json，先校验渲染输出分辨率 ==
+    calibration 分辨率，不一致立即抛错（防止错位 Pose 数据）。
     """
+    cam_json = render_dir.parent / "camera.json"
+    if cam_json.exists():
+        validate_render_vs_calibration(render_dir, cam_json)
     rendered = find_rendered_frame_numbers(render_dir)
     mapping = map_rendered_to_annotation(sorted(rendered.keys()), keep_indices)
     ensure_dir(img1_dir)
@@ -1713,12 +1721,9 @@ def render_sequences(
     else:
         print("instance_mask.enabled = false，跳过 mask 渲染（仅 RGB）")
 
-    image_width = int(
-        render_cfg.get("output_resolution_x") or annotation_cfg.get("image_width", 1920)
-    )
-    image_height = int(
-        render_cfg.get("output_resolution_y") or annotation_cfg.get("image_height", 1080)
-    )
+    # C5.1：分辨率唯一来源 = render_rgb.output_resolution（MRQ 渲染分辨率），
+    # 兼容旧任务 image_width/height；冲突或缺失时 fail fast（不静默 1280x720）。
+    image_width, image_height = resolve_output_resolution(annotation_cfg)
     frame_rate = int(
         render_cfg.get("frame_rate") or annotation_cfg.get("playback_fps") or 30
     )

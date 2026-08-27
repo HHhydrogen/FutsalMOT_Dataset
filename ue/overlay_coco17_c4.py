@@ -16,6 +16,7 @@
 
 import json
 import colorsys
+import sys
 from pathlib import Path
 
 from PIL import Image, ImageDraw
@@ -23,6 +24,8 @@ from PIL import Image, ImageDraw
 from pose_bones import COCO_KEYPOINT_NAMES, COCO_SKELETON_EDGES
 
 EP = Path(r"G:\FutsalMOT_Dataset\episode_bp_frame_sync")
+if len(sys.argv) > 1:
+    EP = Path(sys.argv[1])  # 覆盖：可用于隔离 smoke
 CAM = EP / "CineCam_01"
 KP2D = EP / "coco17_2d_c4.jsonl"
 IMG_DIR = CAM / "img1"

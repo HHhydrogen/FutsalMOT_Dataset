@@ -13,6 +13,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from setup_c4_level import preflight_debug_cleanup  # noqa: E402
+from render_preset import resolve_output_resolution  # noqa: E402
 
 LOG = []
 LOG_PATH = Path(r"D:\projects\FustalMOT_UEDataset\Content\FutsalMOT\code\.futsalmot\mrq_run_c4.log")
@@ -24,8 +25,22 @@ BURN_IN_CLASS = "/Game/FutsalMOT/Blueprints/WBP_PoseMRQBurnInC4.WBP_PoseMRQBurnI
 SLOTS = [f"PoseCaptureG{i}" for i in range(5)]
 FRAME_START = 0
 FRAME_END = 90  # 90 帧 (0..89)
-IMAGE_W = 1920
-IMAGE_H = 1080
+# C5.1：MRQ 输出分辨率也来自 resolved task（render_rgb.output_resolution），
+# 与 camera calibration 同一唯一来源，禁止渲染侧硬编码与配置脱节。
+RESOLVED_TASK = Path(
+    r"D:\projects\FustalMOT_UEDataset\Content\FutsalMOT\code\.futsalmot\runtime\bp_frame_sync_30f\resolved-task.json"
+)
+IMAGE_W = None
+IMAGE_H = None
+
+
+def _resolve_render_resolution():
+    global IMAGE_W, IMAGE_H
+    import json
+    rt = json.loads(RESOLVED_TASK.read_text(encoding="utf-8"))
+    ann_cfg = rt["ue_profile"].get("annotation_export") or {}
+    IMAGE_W, IMAGE_H = resolve_output_resolution(ann_cfg)
+    _log(f"  render resolution (resolved task) = {IMAGE_W}x{IMAGE_H}")
 
 
 def _log(msg):
@@ -50,6 +65,13 @@ def main():
     _log(f"[preflight] removed={removed} remaining={remaining} ok={ok}")
     if not ok:
         _log("  ERROR: preflight 未通过（仍有调试 actor），禁止启动 MRQ")
+        _flush()
+        return
+
+    # 0b) C5.1：从 resolved task 解析 MRQ 输出分辨率（与 camera calibration 同源）
+    _resolve_render_resolution()
+    if IMAGE_W is None or IMAGE_H is None:
+        _log("  ERROR: 无法解析渲染分辨率，禁止启动 MRQ")
         _flush()
         return
 

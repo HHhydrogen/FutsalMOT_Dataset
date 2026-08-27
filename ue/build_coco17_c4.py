@@ -29,6 +29,8 @@ from pose_bones import (
 )
 
 EP = Path(r"G:\FutsalMOT_Dataset\episode_bp_frame_sync")
+if len(sys.argv) > 1:
+    EP = Path(sys.argv[1])  # 覆盖：可用于隔离 smoke（如 c5_resolution_smoke_1280）
 CAM = EP / "CineCam_01"
 PC = EP / "pose_capture_c4.jsonl"
 CAMERA = CAM / "camera.json"

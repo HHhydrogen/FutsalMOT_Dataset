@@ -16,6 +16,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 from grf_ue_bridge.cryptomatte import load_cryptomatte, hex_id_to_float  # noqa: E402
 
 EP = Path(r"G:\FutsalMOT_Dataset\episode_bp_frame_sync")
+if len(sys.argv) > 1:
+    EP = Path(sys.argv[1])  # 覆盖：可用于隔离 smoke
 MASK_DIR = EP / "CineCam_01" / "mask_c4_render"
 OUT_BBOX = EP / "CineCam_01" / "mask_bbox_c4.jsonl"
 OUT_CAM = EP / "CineCam_01" / "mask_camera_c4.jsonl"

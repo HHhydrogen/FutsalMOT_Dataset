@@ -188,13 +188,27 @@ def main() -> int:
     if mode == "pose-finalize":
         os.environ["C5_POSE_TASK"] = str(args.resolved_task or os.environ.get("C5_RESOLVED_TASK"))
         os.environ["C5_POSE_EXPECT"] = str(meta_timing_num_steps)
+        # 防止旧 pose_capture.jsonl / pose_session.json 被误读：
+        # 先删除旧文件，pose_capture_export 只在 capture_complete=True 时才写新文件。
+        ep_out = dataset_root / episode_name
+        for stale in ("pose_capture.jsonl", "pose_session.json"):
+            stale_path = ep_out / stale
+            if stale_path.exists():
+                stale_path.unlink()
+                print(f"  [防残留] 删除旧 {stale}（避免误读 incomplete 数据）")
         print("\n--- Runtime Pose 导出（pose_capture_export）---")
         import pose_capture_export
         pose_capture_export.main()
-        # 检查 pose_capture.jsonl 是否生成（capture_complete=True 才继续 COCO17）
-        pc_path = dataset_root / episode_name / "pose_capture.jsonl"
-        if not pc_path.is_file():
-            return _fail("pose_capture.jsonl 未生成（Runtime Pose 捕获失败或 incomplete），跳过 COCO17")
+        # pose_capture_export 在 incomplete 时 fail-fast（不写文件）。
+        # 必须检查新文件存在 + pose_session.capture_complete=True 才继续 COCO17。
+        pc_path = ep_out / "pose_capture.jsonl"
+        ps_path = ep_out / "pose_session.json"
+        if not pc_path.is_file() or not ps_path.is_file():
+            return _fail("pose_capture_export 未生成 pose_capture.jsonl（Runtime Pose 捕获 incomplete 或失败），禁止 COCO17")
+        import json as _json
+        ps = _json.loads(ps_path.read_text(encoding="utf-8"))
+        if not ps.get("capture_complete"):
+            return _fail(f"pose_session.capture_complete=False (captured={ps.get('captured_frame_count')}/expected={ps.get('expected_frame_count')})，禁止 COCO17")
         print("\n--- COCO17 3D/2D 生成（build_coco17）---")
         os.environ["C5_EPISODE_DIR"] = str(dataset_root / episode_name)
         os.environ["C5_COCO17_CAMERA"] = cameras[0]

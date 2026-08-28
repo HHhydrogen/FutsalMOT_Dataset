@@ -420,6 +420,59 @@ def check_render_summary(dataset_dir: Path, errors: List[str], warns: List[str])
     return {"ok": True, "status": status, "cameras": per}
 
 
+def check_pose_coco17(dataset_dir: Path, expected_frames: int, errors: List[str]) -> dict:
+    """检查 Runtime Pose + COCO17 完整性（C5.3 正式 Pose 来源）。
+
+    仅当 pose_session.json 存在时校验（= Runtime Pose 已运行）：
+    - capture_complete=True
+    - pose_capture.jsonl 行数 == 10 actor × expected_frames × 13 bone
+    - coco17_3d.jsonl 行数 == 10 actor × expected_frames
+    pose_session.json 不存在 → 任务未启用 yolo_pose 或未运行 pose-finalize，跳过（不报错）。
+    """
+    st = {"ok": True, "pose_session": False, "capture_complete": False,
+          "pose_capture_rows": 0, "coco17_3d_rows": 0, "coco17_total_kp": 0, "skipped": False}
+    ps_path = dataset_dir / "pose_session.json"
+    if not ps_path.exists():
+        st["skipped"] = True
+        return st
+    pc_path = dataset_dir / "pose_capture.jsonl"
+    c3d_path = dataset_dir / "coco17_3d.jsonl"
+    c2d_path = dataset_dir / "coco17_2d.jsonl"
+    # pose_session 存在 → 校验 capture_complete
+    ps = json.loads(ps_path.read_text(encoding="utf-8"))
+    st["pose_session"] = True
+    st["capture_complete"] = bool(ps.get("capture_complete"))
+    if not st["capture_complete"]:
+        errors.append(
+            f"pose: pose_session.capture_complete=False (captured={ps.get('captured_frame_count')}"
+            f"/expected={ps.get('expected_frame_count')})，incomplete，禁止标注成功"
+        )
+        st["ok"] = False
+    # pose_capture.jsonl 行数
+    if pc_path.exists():
+        rows = [l for l in pc_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+        st["pose_capture_rows"] = len(rows)
+    else:
+        errors.append("pose: 缺少 pose_capture.jsonl")
+        st["ok"] = False
+    # coco17_3d 行数 == 10 × expected_frames（10 actor × N 帧）
+    expected_coco = 10 * expected_frames
+    if c3d_path.exists():
+        c3 = [l for l in c3d_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+        st["coco17_3d_rows"] = len(c3)
+        st["coco17_total_kp"] = len(c3) * 17
+        if len(c3) != expected_coco:
+            errors.append(f"coco17_3d: {len(c3)} 行 != 预期 {expected_coco}（10 actor × {expected_frames} 帧）")
+            st["ok"] = False
+    else:
+        errors.append("coco17: 缺少 coco17_3d.jsonl")
+        st["ok"] = False
+    if not c2d_path.exists():
+        errors.append("coco17: 缺少 coco17_2d.jsonl")
+        st["ok"] = False
+    return st
+
+
 def write_reports(
     dataset_dir: Path,
     report: dict,
@@ -471,6 +524,15 @@ def write_reports(
     if report["render_summary"]:
         lines.append("")
         lines.append(f"## render_summary\n\n- status: {report['render_summary'].get('status')}，OK: {report['render_summary'].get('ok')}")
+    if report.get("pose_coco17"):
+        pc = report["pose_coco17"]
+        lines.append("")
+        lines.append(
+            f"## Runtime Pose + COCO17\n\n- pose_session: {pc.get('pose_session')}，"
+            f"capture_complete: {pc.get('capture_complete')}\n"
+            f"- pose_capture rows: {pc.get('pose_capture_rows')}\n"
+            f"- coco17_3d rows: {pc.get('coco17_3d_rows')}，total_kp: {pc.get('coco17_total_kp')}，OK: {pc.get('ok')}"
+        )
     if report["validation"]:
         lines.append("")
         lines.append(f"## validate-annotations（{report['validation'].get('level')}）\n\n- 退出码: {report['validation'].get('exit_code')}")
@@ -563,10 +625,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     mapping = check_track_mask_mapping(cameras_meta, errors, mask_enabled)
     calib = check_camera_json(cam_dirs, args.expected_frames_per_camera, errors)
     rsummary = check_render_summary(dataset_dir, errors, warns)
+    # Runtime Pose + COCO17 检查：仅在 pose_session.json 存在时校验
+    # （pose_session.json 是 Runtime Pose 已运行的标志；不存在 = 任务未启用 yolo_pose 或未运行 pose-finalize）
+    pose_coco = check_pose_coco17(dataset_dir, args.expected_frames_per_camera, errors)
     report["sync"] = sync
     report["mapping"] = mapping
     report["calibration"] = calib
     report["render_summary"] = rsummary
+    report["pose_coco17"] = pose_coco
 
     # 可选进程内验证
     validation = None

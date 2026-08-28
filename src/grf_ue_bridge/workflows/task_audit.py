@@ -476,6 +476,50 @@ def check_pose_coco17(dataset_dir: Path, expected_frames: int, errors: List[str]
     return st
 
 
+def check_cross_camera_identity(cam_dirs: List[Path], errors: List[str]) -> dict:
+    """跨 camera canonical identity audit：所有 camera 的所有 visible object 的
+    track_id / mask_id 必须与 entity_id 的 canonical mapping 一致。
+
+    允许某 camera 某 frame 不出现某 entity（遮挡/out-of-FOV），
+    但一旦出现，track_id/mask_id 必须匹配 canonical mapping。
+    """
+    st = {"ok": True, "checked_objects": 0, "identity_errors": 0}
+    for cam in cam_dirs:
+        ann_path = cam / "annotations.jsonl"
+        if not ann_path.exists():
+            continue
+        with open(ann_path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    fr = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                fi = fr.get("frame_index")
+                for obj in fr.get("objects", []):
+                    eid = obj.get("entity_id", "")
+                    tid = obj.get("track_id")
+                    mid = obj.get("mask_id")
+                    st["checked_objects"] += 1
+                    expected_tid = TRACK_MAP.get(eid)
+                    expected_mid = MASK_MAP.get(eid)
+                    if expected_tid is not None and tid != expected_tid:
+                        errors.append(
+                            f"identity: {cam.name} f{fi} {eid} track_id={tid} expected={expected_tid}"
+                        )
+                        st["identity_errors"] += 1
+                        st["ok"] = False
+                    if expected_mid is not None and mid is not None and mid != expected_mid:
+                        errors.append(
+                            f"identity: {cam.name} f{fi} {eid} mask_id={mid} expected={expected_mid}"
+                        )
+                        st["identity_errors"] += 1
+                        st["ok"] = False
+    return st
+
+
 def write_reports(
     dataset_dir: Path,
     report: dict,
@@ -535,6 +579,13 @@ def write_reports(
             f"capture_complete: {pc.get('capture_complete')}\n"
             f"- pose_capture rows: {pc.get('pose_capture_rows')}\n"
             f"- coco17_3d rows: {pc.get('coco17_3d_rows')}，total_kp: {pc.get('coco17_total_kp')}，OK: {pc.get('ok')}"
+        )
+    if report.get("cross_camera_identity"):
+        ci = report["cross_camera_identity"]
+        lines.append("")
+        lines.append(
+            f"## Cross-Camera Identity Audit\n\n- checked_objects: {ci.get('checked_objects')}，"
+            f"identity_errors: {ci.get('identity_errors')}，OK: {ci.get('ok')}"
         )
     if report["validation"]:
         lines.append("")
@@ -631,11 +682,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     # Runtime Pose + COCO17 检查：仅在 pose_session.json 存在时校验
     # （pose_session.json 是 Runtime Pose 已运行的标志；不存在 = 任务未启用 yolo_pose 或未运行 pose-finalize）
     pose_coco = check_pose_coco17(dataset_dir, args.expected_frames_per_camera, errors)
+    cross_identity = check_cross_camera_identity(cam_dirs, errors)
     report["sync"] = sync
     report["mapping"] = mapping
     report["calibration"] = calib
     report["render_summary"] = rsummary
     report["pose_coco17"] = pose_coco
+    report["cross_camera_identity"] = cross_identity
 
     # 可选进程内验证
     validation = None

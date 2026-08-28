@@ -211,7 +211,7 @@ def main() -> int:
             return _fail(f"pose_session.capture_complete=False (captured={ps.get('captured_frame_count')}/expected={ps.get('expected_frame_count')})，禁止 COCO17")
         print("\n--- COCO17 3D/2D 生成（build_coco17）---")
         os.environ["C5_EPISODE_DIR"] = str(dataset_root / episode_name)
-        os.environ["C5_COCO17_CAMERA"] = cameras[0]
+        os.environ["C5_COCO17_CAMERAS"] = ",".join(cameras)
         import build_coco17
         rc = build_coco17.main()
         if rc:
@@ -237,33 +237,34 @@ def main() -> int:
                 meta, frames, mapping, replace_existing, seq_pkg, seq_list, ball_rolling
             )
             export_annotations(episode_dir, mapping_path, dataset_root, ann_cfg)
-            # C5.3：Runtime Pose prep（替代旧 pose_export Editor 采样）
-            if pose_enabled:
-                print("\n--- Runtime Pose prep（Recorder CDO + slot 清空 + 序列 playback）---")
-                from pose_render import _prep_recorders
-                for cam in cameras:
-                    _prep_recorders(episode_name, cam)
-                    # 清空动态 slot
-                    for i in range(5):
-                        try:
-                            unreal.GameplayStatics.delete_game_in_slot(
-                                f"PoseCapture_{episode_name}_{cam}_G{i}", 0)
-                        except Exception:
-                            pass
-                    print(f"  {cam}: slots 已清空")
-                # 序列 playback 限到数据集帧数（BurnIn 捕获与 RGB 帧一致，避免多渲 1 帧）
-                for s in seq_list:
-                    seq = unreal.load_asset(f"{seq_pkg}/{s['name']}")
-                    if seq is not None:
-                        seq.set_playback_start(0)
-                        seq.set_playback_end(meta_timing_num_steps)
-                        print(f"  序列 {s['name']} playback -> [0, {meta_timing_num_steps})")
+        # 序列 playback 限到数据集帧数（BurnIn 捕获与 RGB 帧一致，避免多渲 1 帧）
+        for s in seq_list:
+            seq = unreal.load_asset(f"{seq_pkg}/{s['name']}")
+            if seq is not None:
+                seq.set_playback_start(0)
+                seq.set_playback_end(meta_timing_num_steps)
+                print(f"  序列 {s['name']} playback -> [0, {meta_timing_num_steps})")
+        # Runtime Pose prep：多 camera 下，Recorder CDO 是共享的（5 个 actor），
+        # 只能 prep 一个 camera 的 slot。Runtime Pose 捕获的是世界骨骼 transform
+        # （camera 无关），故只需一个 camera 的完整捕获即可得到正确 pose_capture。
+        # 用首个 camera 的 slot prep（pose_capture_export 也以首个 camera 为 primary）。
+        if pose_enabled and mode == "full":
+            print(f"\n--- Runtime Pose prep（primary={cameras[0]}）---")
+            from pose_render import _prep_recorders
+            _prep_recorders(episode_name, cameras[0])
+            for i in range(5):
+                try:
+                    unreal.GameplayStatics.delete_game_in_slot(
+                        f"PoseCapture_{episode_name}_{cameras[0]}_G{i}", 0)
+                except Exception:
+                    pass
+            print(f"  {cameras[0]}: slots 已清空")
         render_sequences(
             seq_list, ann_cfg, seq_pkg, episode_dir, dataset_root, mapping_path
         )
         print("\n已提交。MRQ 渲染为异步执行（不阻塞编辑器），完成后自动复制 RGB 到 img1/"
               "（及统计 Instance-ID Mask 对齐帧）并写 render_summary.json。")
-        print("Runtime Pose 捕获：BurnIn OnOutputFrameStarted 每帧写入 5×SaveGame。")
+        print(f"Runtime Pose 捕获：BurnIn 写入 {cameras[0]} 的 5×SaveGame（世界 3D，camera 无关）。")
         print("渲染完成后运行：py run_task.py --mode pose-finalize（导出 pose_capture + COCO17）。")
         return 0
 

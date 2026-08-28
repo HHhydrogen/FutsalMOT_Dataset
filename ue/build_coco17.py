@@ -3,14 +3,14 @@
 读：
   - <episode>/pose_capture.jsonl（C5.2-B 正式产物：root/shot/game_time/actor_id/bone/
     x/y/z/qx/qy/qz/qw，cm）
-  - <episode>/<camera>/camera.json
+  - <episode>/<camera>/camera.json（每 camera 各自的内参/外参）
 写：
-  - <episode>/coco17_3d.jsonl  每帧一行 {actor_id, root, keypoints_3d_m: [[x,y,z]×17]}
-  - <episode>/coco17_2d.jsonl  每帧一行 {actor_id, root, keypoints_2d_px: [[x,y]×17], visible}
+  - <episode>/coco17_3d.jsonl   全局一份（3D world 与 camera 无关）
+  - <episode>/<camera>/coco17_2d.jsonl  每 camera 一份（投影不同）
 
 env:
   C5_EPISODE_DIR    episode 目录（必须；也可用 C5_POSE_TASK 从 resolved task 派生）
-  C5_COCO17_CAMERA  camera 名（可选；缺省 CineCam_01）
+  C5_COCO17_CAMERAS  camera 名列表，逗号分隔（可选；缺省 CineCam_01）
 
 可由 run_task --mode pose-finalize 自动调用（设置好 env 后 import main()），
 也可独立运行：
@@ -72,17 +72,18 @@ def main() -> int:
         _log("ERROR: 需要 C5_EPISODE_DIR（或 C5_POSE_TASK）")
         return 1
     ep = Path(ep_str)
-    camera = os.environ.get("C5_COCO17_CAMERA", "CineCam_01")
-    cam_dir = ep / camera
+    cameras = [c.strip() for c in os.environ.get("C5_COCO17_CAMERAS", "CineCam_01").split(",") if c.strip()]
     pc = ep / "pose_capture.jsonl"
     if not pc.is_file():
         _log(f"ERROR: 缺 {pc}（先运行 pose_capture_export）")
         return 1
-    if not (cam_dir / "camera.json").is_file():
-        _log(f"ERROR: 缺 {cam_dir / 'camera.json'}")
-        return 1
+    # 检查每 camera 的 camera.json
+    for cam in cameras:
+        if not (ep / cam / "camera.json").is_file():
+            _log(f"ERROR: 缺 {ep / cam / 'camera.json'}")
+            return 1
 
-    _log(f"======== build_coco17：{ep.name} camera={camera} ========")
+    _log(f"======== build_coco17：{ep.name} cameras={cameras} ========")
     rows = [json.loads(l) for l in pc.read_text(encoding="utf-8").splitlines()]
     _log(f"pose_capture 记录: {len(rows)}")
 
@@ -91,12 +92,12 @@ def main() -> int:
     for r in rows:
         by_actor_frame.setdefault((r["actor_id"], r["root"]), []).append(r)
 
-    I, R, loc = load_camera(cam_dir)
     all_bones = sorted({r["bone"] for r in rows})
     limb_map = resolve_limb_bone_map(all_bones)
     _log(f"骨骼集合 ({len(all_bones)} 骨, 肢体映射 {len(limb_map)}/12)")
 
-    out3d, out2d = [], []
+    # 计算 3D world keypoints（camera 无关，只算一次）
+    out3d = []
     missing = {}
     frames_per_actor = {}
     for (aid, root), recs in sorted(by_actor_frame.items()):
@@ -123,33 +124,44 @@ def main() -> int:
                 kp_m.append(None)
             else:
                 kp_m.append([p[0] * CM_TO_M, p[1] * CM_TO_M, p[2] * CM_TO_M])
-        kp_2d, vis = [], []
-        for p in kp_m:
-            if p is None:
-                kp_2d.append(None)
-                vis.append(False)
-            else:
-                px = project(p, I, R, loc)
-                if px is None:
-                    kp_2d.append(None)
-                    vis.append(False)
-                else:
-                    kp_2d.append([round(px[0], 3), round(px[1], 3)])
-                    vis.append(True)
         out3d.append({"actor_id": aid, "root": root, "keypoints_3d_m": kp_m})
-        out2d.append({"actor_id": aid, "root": root, "keypoints_2d_px": kp_2d, "visible": vis})
 
+    # 写 coco17_3d.jsonl（全局一份，3D world 与 camera 无关）
     (ep / "coco17_3d.jsonl").write_text(
         "\n".join(json.dumps(o) for o in out3d) + "\n", encoding="utf-8")
-    (ep / "coco17_2d.jsonl").write_text(
-        "\n".join(json.dumps(o) for o in out2d) + "\n", encoding="utf-8")
-
     n_actor_frame = len(out3d)
     total_kp = n_actor_frame * 17
     roots = sorted({r["root"] for r in rows})
     _log(f"actor 集合: {actor_ids}（{len(actor_ids)}）")
     _log(f"root 范围: [{roots[0]}, {roots[-1]}]（{len(roots)} 帧）")
-    _log(f"coco17_3d/2d 已写（{n_actor_frame} actor×帧，×17 = {total_kp} 关键点）")
+    _log(f"coco17_3d 已写（{n_actor_frame} actor×帧，×17 = {total_kp} 关键点）")
+
+    # 每 camera 各自投影 2D
+    for cam in cameras:
+        cam_dir = ep / cam
+        I, R, loc = load_camera(cam_dir)
+        out2d = []
+        for o in out3d:
+            kp_m = o["keypoints_3d_m"]
+            kp_2d, vis = [], []
+            for p in kp_m:
+                if p is None:
+                    kp_2d.append(None)
+                    vis.append(False)
+                else:
+                    px = project(p, I, R, loc)
+                    if px is None:
+                        kp_2d.append(None)
+                        vis.append(False)
+                    else:
+                        kp_2d.append([round(px[0], 3), round(px[1], 3)])
+                        vis.append(True)
+            out2d.append({"actor_id": o["actor_id"], "root": o["root"],
+                          "keypoints_2d_px": kp_2d, "visible": vis})
+        (cam_dir / "coco17_2d.jsonl").write_text(
+            "\n".join(json.dumps(o) for o in out2d) + "\n", encoding="utf-8")
+        _log(f"coco17_2d 已写 [{cam}]（{len(out2d)} actor×帧）")
+
     if missing:
         _log(f"缺失 bone 的点: {len(missing)} 处")
         return 1

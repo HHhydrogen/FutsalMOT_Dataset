@@ -467,9 +467,12 @@ def check_pose_coco17(dataset_dir: Path, expected_frames: int, errors: List[str]
     else:
         errors.append("coco17: 缺少 coco17_3d.jsonl")
         st["ok"] = False
-    if not c2d_path.exists():
-        errors.append("coco17: 缺少 coco17_2d.jsonl")
+    # coco17_2d 按 camera 分文件：检查每个 camera 子目录
+    cam_dirs_c2d = [d for d in dataset_dir.iterdir() if d.is_dir() and (d / "coco17_2d.jsonl").exists()]
+    if not cam_dirs_c2d:
+        errors.append("coco17: 缺少任何 <camera>/coco17_2d.jsonl")
         st["ok"] = False
+    st["coco17_2d_cameras"] = sorted(d.name for d in cam_dirs_c2d)
     return st
 
 

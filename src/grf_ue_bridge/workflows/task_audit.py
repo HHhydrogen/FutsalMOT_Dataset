@@ -136,8 +136,12 @@ def check_camera(
     keep_indices: List[int],
     errors: List[str],
     warns: List[str],
+    mask_enabled: bool = True,
 ) -> dict:
-    """审计单个相机目录，返回统计 dict，并把失败项写入 errors。"""
+    """审计单个相机目录，返回统计 dict，并把失败项写入 errors。
+
+    mask_enabled=False（任务未启用 instance_mask）时跳过 mask/render_mask 相关检查。
+    """
     cam_id = cam_dir.name
     st: dict = {"camera_id": cam_id, "ok": True}
 
@@ -196,10 +200,10 @@ def check_camera(
     _n2, miss_mask, dup_mask = _counts_and_missing(mask_files, expected_frames)
     st["mask_missing"] = miss_mask
     st["mask_dup"] = dup_mask
-    if miss_mask:
+    if mask_enabled and miss_mask:
         errors.append(f"{cam_id}: mask 缺帧 {miss_mask[:10]}...")
         st["ok"] = False
-    if dup_mask:
+    if mask_enabled and dup_mask:
         errors.append(f"{cam_id}: mask 重复帧 {dup_mask[:10]}")
         st["ok"] = False
 
@@ -211,7 +215,7 @@ def check_camera(
     if miss_render:
         errors.append(f"{cam_id}: render/ 缺少目标帧 {miss_render[:10]}...")
         st["ok"] = False
-    if miss_exr:
+    if mask_enabled and miss_exr:
         errors.append(f"{cam_id}: render_mask/ 缺少目标 EXR 帧 {miss_exr[:10]}...")
         st["ok"] = False
 
@@ -299,8 +303,12 @@ def check_sync(
     return st
 
 
-def check_track_mask_mapping(cameras_meta: Dict[str, List[dict]], errors: List[str]) -> dict:
-    """校验每个实体的 track_id / mask_id 与稳定映射一致，且同帧不冲突。"""
+def check_track_mask_mapping(cameras_meta: Dict[str, List[dict]], errors: List[str],
+                            mask_enabled: bool = True) -> dict:
+    """校验每个实体的 track_id / mask_id 与稳定映射一致，且同帧不冲突。
+
+    mask_enabled=False 时仅校验 track_id（mask_id 可为 None）。
+    """
     st = {"ok": True, "checked_objects": 0}
     seen: Dict[str, Tuple[int, int]] = {}
     for cam, frames in cameras_meta.items():
@@ -317,17 +325,27 @@ def check_track_mask_mapping(cameras_meta: Dict[str, List[dict]], errors: List[s
                     st["ok"] = False
                     continue
                 got = (o.get("track_id"), o.get("mask_id"))
-                if (o.get("track_id"), o.get("mask_id")) != (expect_track, expect_mask):
-                    errors.append(
-                        f"映射: {eid} 在 {cam} 帧 {fr.get('frame_index')} "
-                        f"track/mask={got}，期望 ({expect_track},{expect_mask})"
-                    )
-                    st["ok"] = False
-                if eid in seen and seen[eid] != got:
-                    errors.append(f"映射: {eid} 在不同位置出现不一致 track/mask {got} vs {seen[eid]}")
+                # mask 关闭时 mask_id 可为 None，仅校验 track_id
+                if mask_enabled:
+                    if got != (expect_track, expect_mask):
+                        errors.append(
+                            f"映射: {eid} 在 {cam} 帧 {fr.get('frame_index')} "
+                            f"track/mask={got}，期望 ({expect_track},{expect_mask})"
+                        )
+                        st["ok"] = False
+                else:
+                    if o.get("track_id") != expect_track:
+                        errors.append(
+                            f"映射: {eid} 在 {cam} 帧 {fr.get('frame_index')} "
+                            f"track={o.get('track_id')}，期望 {expect_track}"
+                        )
+                        st["ok"] = False
+                key = got if mask_enabled else (o.get("track_id"),)
+                if eid in seen and seen[eid] != key:
+                    errors.append(f"映射: {eid} 在不同位置出现不一致 {got} vs {seen[eid]}")
                     st["ok"] = False
                 else:
-                    seen[eid] = got
+                    seen[eid] = key
     return st
 
 
@@ -480,8 +498,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--episode", default=None, help="episode 目录（读 meta 时序，精确校验渲染帧覆盖）")
     ap.add_argument("--render-fps", type=int, default=30, help="MRQ 渲染帧率（缺省 30）")
     ap.add_argument("--validation-level", default="quick", choices=["quick", "full", "none"])
+    ap.add_argument("--mask-enabled", default="true", help="是否启用 instance_mask 校验（true/false，缺省 true）")
     ap.add_argument("--output", default=None, help="报告输出目录（默认 <input>/audit）")
     args = ap.parse_args(argv)
+
+    mask_enabled = str(args.mask_enabled).lower() in ("true", "1", "yes")
 
     dataset_dir = Path(args.input)
     if not dataset_dir.is_dir():
@@ -531,7 +552,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     cameras: Dict[str, dict] = {}
     cameras_meta: Dict[str, List[dict]] = {}
     for cam in cam_dirs:
-        st = check_camera(cam, args.expected_frames_per_camera, keep_indices, errors, warns)
+        st = check_camera(cam, args.expected_frames_per_camera, keep_indices, errors, warns, mask_enabled)
         frames, _ = _read_frame_meta(cam)
         cameras_meta[cam.name] = frames or []
         cameras[cam.name] = st
@@ -539,7 +560,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     # 跨相机同步 + 映射
     sync = check_sync(cameras_meta, errors)
-    mapping = check_track_mask_mapping(cameras_meta, errors)
+    mapping = check_track_mask_mapping(cameras_meta, errors, mask_enabled)
     calib = check_camera_json(cam_dirs, args.expected_frames_per_camera, errors)
     rsummary = check_render_summary(dataset_dir, errors, warns)
     report["sync"] = sync

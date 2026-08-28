@@ -49,8 +49,9 @@ from player_motion import gk_entity_ids_from_meta  # noqa: E402
 # 方法引用，但显式保留模块级引用可防止任何环境下对象被垃圾回收。
 _ACTIVE_RENDER = None
 
-# （临时调试）BurnIn Widget：仅利用 OnOutputFrameStarted 每输出帧回调，不合成到图。
-BURN_IN_CLASS_PATH = "/Game/FutsalMOT/Blueprints/WBP_PoseMRQBurnInC4.WBP_PoseMRQBurnInC4_C"
+# Runtime Pose 捕获：BurnIn Widget 仅利用 OnOutputFrameStarted 每输出帧回调，不合成到图。
+# 资产路径与 pose_render.py 保持一致（Housekeeping 后正式路径：Blueprints/Pose/MRQ/）。
+BURN_IN_CLASS_PATH = "/Game/FutsalMOT/Blueprints/Pose/MRQ/WBP_PoseMRQBurnInC4.WBP_PoseMRQBurnInC4_C"
 
 
 # ── 纯函数：帧选择与映射 ────────────────────────────────────────────────
@@ -94,13 +95,25 @@ def find_rendered_frame_numbers(render_dir: Path) -> Dict[int, Path]:
     """扫描 render 目录（含子目录），从 PNG 文件名里解析帧号。
 
     返回 {frame_number: path}。文件名须包含数字（MRQ 输出如 000000.png）。
+
+    若存在多组前缀（如 FinalImage + BurnInOverlay），优先取 FinalImage
+    （RGB 主帧），避免 BurnInOverlay（半透明 overlay）覆盖真实 RGB。
     """
-    result: Dict[int, Path] = {}
+    groups: Dict[str, Dict[int, Path]] = {}
     for p in sorted(render_dir.rglob("*.png")):
         digits = "".join(ch for ch in p.stem if ch.isdigit())
-        if digits:
-            result[int(digits)] = p
-    return result
+        if not digits:
+            continue
+        prefix = p.stem[: -len(digits)]
+        groups.setdefault(prefix, {})[int(digits)] = p
+    if not groups:
+        return {}
+    # 优先 FinalImage（RGB 主帧）；否则取帧数最多的组兜底
+    for prefix in ("FinalImage", "Final", "RGB"):
+        for g_prefix, mapping in groups.items():
+            if g_prefix == prefix or g_prefix.startswith(prefix):
+                return mapping
+    return max(groups.values(), key=len)
 
 
 def copy_rendered_frames(
@@ -216,7 +229,10 @@ def recover_render_to_img1(
     meta, frames = load_episode(episode_dir)
     episode_id = meta.get("episode_id") or episode_dir.name
     source_step = float(meta["timing"].get("source_step_seconds", 0.1))
-    frame_rate = int(render_cfg.get("frame_rate") or annotation_cfg.get("playback_fps") or 30)
+    # 帧映射用 Sequence display rate（playback_fps），不是 MRQ 输出 frame_rate。
+    frame_rate = int(
+        annotation_cfg.get("playback_fps") or render_cfg.get("frame_rate") or 30
+    )
     keep_indices = select_rendered_frame_indices(len(frames), source_step, frame_rate)
 
     per_camera = {}
@@ -1724,8 +1740,10 @@ def render_sequences(
     # C5.1：分辨率唯一来源 = render_rgb.output_resolution（MRQ 渲染分辨率），
     # 兼容旧任务 image_width/height；冲突或缺失时 fail fast（不静默 1280x720）。
     image_width, image_height = resolve_output_resolution(annotation_cfg)
+    # 帧映射用 Sequence display rate（playback_fps），不是 MRQ 输出 frame_rate。
+    # MRQ 渲染 Sequence 的 display rate（= playback_fps），渲染全范围后按映射取帧。
     frame_rate = int(
-        render_cfg.get("frame_rate") or annotation_cfg.get("playback_fps") or 30
+        annotation_cfg.get("playback_fps") or render_cfg.get("frame_rate") or 30
     )
     file_name_format = render_cfg.get("file_name_format", "{frame_number}")
     zero_pad = int(render_cfg.get("zero_pad_frame_numbers", 6))

@@ -76,6 +76,14 @@ def resolve_task(task_file: Path) -> m.ResolvedTask:
 
     actor_mapping = _paths.resolve_task_relative(task.ue.actor_mapping, repo_root)
 
+    # 把 export.playback_fps 注入 annotation_export，让 render_episode 帧映射正确
+    # （render_episode 用 annotation_export.playback_fps 做 Sequence display rate 帧映射）
+    ue_profile = task.ue.model_dump()
+    ann_export = ue_profile.get("annotation_export") or {}
+    if "playback_fps" not in ann_export:
+        ann_export["playback_fps"] = task.export.playback_fps
+    ue_profile["annotation_export"] = ann_export
+
     return m.ResolvedTask(
         task_id=task.task_id,
         episode_name=task.episode_name,
@@ -86,7 +94,7 @@ def resolve_task(task_file: Path) -> m.ResolvedTask:
         trajectory_output=str(episode_dir),
         dataset_episode_dir=str(episode_dir),
         export_profile=task.export.model_dump(),
-        ue_profile=task.ue.model_dump(),
+        ue_profile=ue_profile,
         actor_mapping=str(actor_mapping),
         postprocess=task.postprocess.model_dump(),
         audit=task.audit.model_dump(),

@@ -785,12 +785,16 @@ def task_audit(
 
     _task_file, resolved = _resolve_runtime(task)
     audit_cfg = resolved.audit
+    # instance_mask 是否启用（决定 audit 是否校验 mask/render_mask）
+    ue_ann = (resolved.ue_profile.get("annotation_export") or {}) if resolved.ue_profile else {}
+    mask_enabled = bool((ue_ann.get("instance_mask") or {}).get("enabled", True))
     rc = audit_main([
         "--input", resolved.dataset_episode_dir,
         "--expected-cameras", str(audit_cfg.get("expected_cameras", 4)),
         "--expected-frames-per-camera", str(audit_cfg.get("expected_frames_per_camera", 300)),
         "--episode", resolved.trajectory_output,
         "--validation-level", validation_level,
+        "--mask-enabled", "true" if mask_enabled else "false",
     ])
     if rc != 0:
         raise typer.Exit(rc)

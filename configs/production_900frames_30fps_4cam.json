@@ -2,9 +2,9 @@
   "schema": "futsalmot_dataset_task",
   "version": 2,
   "task_id": "production_900frames_30fps_4cam",
-  "episode_name": "episode_prod_900f_30fps_4cam",
+  "episode_name": "episode_prod_900f_30fps_4cam_v3",
 
-  "dataset_root": "G:/FutsalMOT_Dataset",
+  "dataset_root": "G:/FutsalMOT_Dataset/prod_900f_4cam_v3",
   "ue_project_root": "D:/projects/FustalMOT_UEDataset",
 
   "export": {

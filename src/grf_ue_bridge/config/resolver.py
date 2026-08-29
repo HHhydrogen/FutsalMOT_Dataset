@@ -61,19 +61,17 @@ def validate_task(task_file: Path) -> List[str]:
 
     # source duration 必须满足 output_frames × tempo（fail-fast，禁止截断/重复/补末帧）
     # source_time = dataset_time × tempo；GRF 引擎需运行到 source_last 时刻。
-    # game_duration 是 GRF 单局时长（秒，缺省 10000）。若不足则 source 轨迹会被截断，
-    # 导致 Hermite 补帧在末段依赖不存在的 source → 静默失真。必须显式 FAIL。
+    # compute_source_steps 已用 +2 步（0.2s）为 Hermite 后继 sample 留余量，
+    # 故此处只需保证 game_duration 覆盖到 source_last = (output_frames-1)/fps × tempo。
     tempo = float(task.export.trajectory_time_scale or 1.0)
     if tempo >= 1.0 and task.export.game_duration:
         output_frames = expected_frames
-        dataset_last = (output_frames - 1) / float(task.export.target_fps or 10)
-        required_source_s = dataset_last * tempo
+        source_last = (output_frames - 1) / float(task.export.target_fps or 10) * tempo
         available_source_s = float(task.export.game_duration)
-        # 留 2 个 source step（+0.2s）余量供 Hermite 后继 sample（与 compute_source_steps 一致）
-        if available_source_s < required_source_s + 0.2:
+        if available_source_s < source_last:
             problems.append(
-                f"source duration 不足：需要 ≥ {required_source_s + 0.2:.1f}s（output {output_frames}帧 "
-                f"× tempo {tempo} + 0.2s），但 game_duration={available_source_s:.0f}s。"
+                f"source duration 不足：需要 ≥ {source_last:.1f}s（output {output_frames}帧 "
+                f"× tempo {tempo} 的 source_last），但 game_duration={available_source_s:.0f}s。"
                 f"请增大 export.game_duration 或降低 num_steps/tempo，禁止截断/重复/补末帧。"
             )
 

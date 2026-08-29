@@ -1,0 +1,96 @@
+{
+  "schema": "futsalmot_dataset_task",
+  "version": 2,
+  "task_id": "c6p0_visual_2p0",
+  "episode_name": "episode_c6p0_visual_2p0",
+  "dataset_root": "G:/FutsalMOT_Dataset/c6p0_visual_2p0",
+  "ue_project_root": "D:/projects/FustalMOT_UEDataset",
+  "export": {
+    "scenario": "5_vs_5",
+    "seed": 42,
+    "num_steps": 150,
+    "target_fps": 30,
+    "playback_fps": 30,
+    "field_length_m": 40.0,
+    "field_width_m": 20.0,
+    "render": false,
+    "write_video": false,
+    "dump_full_raw_observation": false,
+    "game_duration": 10000,
+    "left_team_difficulty": 0.5,
+    "right_team_difficulty": 0.5,
+    "trajectory_time_scale": 2.0
+  },
+  "ue": {
+    "actor_mapping": "ue/actor_mapping.example.json",
+    "sequence_package_path": "/Game/FutsalMOT/Sequences",
+    "sequences": [
+      {
+        "name": "LS_Cam_01_2p0",
+        "camera_actor": "CineCam_01"
+      }
+    ],
+    "replace_existing": true,
+    "ball_rolling": {
+      "enabled": true,
+      "radius_m": 0.11,
+      "minimum_move_distance_m": 0.0001,
+      "roll_sign": 1.0
+    },
+    "annotation_export": {
+      "enabled": true,
+      "cameras": [
+        "CineCam_01"
+      ],
+      "frame_start": 0,
+      "frame_end": null,
+      "export_internal_jsonl": true,
+      "export_mot": false,
+      "include_ball": false,
+      "mot_visibility_mode": "unoccluded",
+      "ball_scale": null,
+      "ball_radius_m": 0.11,
+      "player_bbox": {
+        "source": "capsule",
+        "width_scale": 0.7,
+        "height_scale": 1.0
+      },
+      "render_rgb": {
+        "enabled": true,
+        "preset": "cv_gt",
+        "cv_gt": {
+          "motion_blur": false,
+          "depth_of_field": false,
+          "chromatic_aberration": false,
+          "lens_distortion": false,
+          "anti_aliasing": "taa",
+          "temporal_sampling": false
+        },
+        "output_resolution_x": 1920,
+        "output_resolution_y": 1080,
+        "frame_rate": 30,
+        "file_name_format": "{frame_number}",
+        "zero_pad_frame_numbers": 6
+      },
+      "instance_mask": {
+        "enabled": false,
+        "mask_source": "object_id_pass"
+      }
+    }
+  },
+  "postprocess": {
+    "include_ball": true,
+    "workers": 1,
+    "chunk_size": 10,
+    "png_compress_level": 1,
+    "formats": [
+      "json"
+    ],
+    "clean_stale": true,
+    "validation_level": "quick"
+  },
+  "audit": {
+    "expected_cameras": 1,
+    "expected_frames_per_camera": 300
+  }
+}

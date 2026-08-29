@@ -169,8 +169,13 @@ def main() -> int:
     episode_name = rt.get("episode_name") or "episode"
     cameras = ann_cfg.get("cameras") or ["CineCam_01"]
 
-    # 帧数：来自 meta.timing.num_steps（resolved task export_profile.num_steps）
-    meta_timing_num_steps = int((rt.get("export_profile") or {}).get("num_steps") or 3)
+    # 帧数：实际输出帧 = num_steps × factor（target_fps>10 时 Hermite 插值）。
+    # 不能只取 export_profile.num_steps（否则 target_fps=30 时 playback 只到 num_steps，
+    # 导致 sequence 有 num_steps×factor 帧却只渲染前 num_steps 帧 → img1 缺帧）。
+    _export_ns = int((rt.get("export_profile") or {}).get("num_steps") or 3)
+    _export_fps = int((rt.get("export_profile") or {}).get("target_fps") or 10)
+    _factor = max(1, _export_fps // 10)
+    meta_timing_num_steps = _export_ns * _factor
 
     if not episode_dir.is_dir():
         return _fail(f"trajectory 目录不存在（先运行 grf-ue task export）: {episode_dir}")

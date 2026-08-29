@@ -324,11 +324,13 @@ class TestEndToEnd:
         assert "kpt_shape: [17, 3]" in text
         assert "flip_idx: [0, 2, 1, 4, 3, 6, 5, 8, 7, 10, 9, 12, 11, 14, 13, 16, 15]" in text
         assert "names:" in text and "0: player" in text
-        assert "train: images" in text and "val: images" in text
-        assert f"path: {(tmp_path / 'yolo_pose').resolve().as_posix()}" in text
-        # yolo_pose 暂存目录：images 硬链接 + labels 副本
-        assert (tmp_path / "yolo_pose" / "images" / "Cam_01" / "000001.png").exists()
+        # C6-P1.7 zero-waste：path 指向 episode 根，images 引用各 camera img1（不复制 RGB）
+        assert f"path: {tmp_path.resolve().as_posix()}" in text
+        # yolo_pose 暂存目录：只保留 labels 副本（不生成 images 副本）
+        assert not (tmp_path / "yolo_pose" / "images").exists()
         assert (tmp_path / "yolo_pose" / "labels" / "Cam_01" / "000001.txt").exists()
+        # img1 是唯一 RGB，保留
+        assert (tmp_path / "Cam_01" / "img1" / "000001.png").exists()
 
     def test_pose_validator_passes(self, tmp_path):
         cam = _make_camera_dir(tmp_path)

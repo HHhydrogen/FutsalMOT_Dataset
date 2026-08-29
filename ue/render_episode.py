@@ -1602,6 +1602,18 @@ class _AsyncRenderPipeline:
                 if ann_count is not None:
                     entry["annotations_jsonl_frames"] = ann_count
                     entry["annotation_img1_match"] = ann_count == copied
+                # Zero-waste（C6-P1.7）：img1 是唯一 RGB 物理副本。
+                # 复制成功后删除 render/ 的 FinalImage / BurnInOverlay PNG（不保留重复 RGB）。
+                if copied == expected and render_dir.is_dir():
+                    removed = 0
+                    for rp in render_dir.glob("*.png"):
+                        try:
+                            rp.unlink()
+                            removed += 1
+                        except OSError:
+                            pass
+                    if removed:
+                        print(f"  [zero-waste] {cam_id}: render/ 已删除 {removed} 张重复 RGB PNG（img1 为唯一副本）")
             entry["ok"] = entry["ok"] and (copied == expected)
             mark = "MISSING" if copied == 0 else ("OK" if copied == expected else "PARTIAL")
             print(f"  [{mark}] {cam_id}: {label} {copied}/{expected} 帧")

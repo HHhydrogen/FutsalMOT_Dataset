@@ -1,16 +1,14 @@
 {
   "schema": "futsalmot_dataset_task",
   "version": 2,
-  "task_id": "production_900frames_30fps_4cam",
-  "episode_name": "episode_prod_900f_30fps_4cam_v4",
-
-  "dataset_root": "G:/FutsalMOT_Dataset/prod_900f_4cam_v4",
+  "task_id": "c6p1_zw_4cam",
+  "episode_name": "episode_c6p1_zw_4cam",
+  "dataset_root": "G:/FutsalMOT_Dataset/c6p1_zw_4cam",
   "ue_project_root": "D:/projects/FustalMOT_UEDataset",
-
   "export": {
     "scenario": "5_vs_5",
     "seed": 999,
-    "num_steps": 300,
+    "num_steps": 10,
     "target_fps": 30,
     "playback_fps": 30,
     "field_length_m": 40.0,
@@ -23,15 +21,26 @@
     "right_team_difficulty": 0.5,
     "trajectory_time_scale": 2.0
   },
-
   "ue": {
     "actor_mapping": "ue/actor_mapping.example.json",
     "sequence_package_path": "/Game/FutsalMOT/Sequences",
     "sequences": [
-      { "name": "LS_Cam_01", "camera_actor": "CineCam_01" },
-      { "name": "LS_Cam_02", "camera_actor": "CineCam_02" },
-      { "name": "LS_Cam_03", "camera_actor": "CineCam_03" },
-      { "name": "LS_Cam_04", "camera_actor": "CineCam_04" }
+      {
+        "name": "LS_Cam_01",
+        "camera_actor": "CineCam_01"
+      },
+      {
+        "name": "LS_Cam_02",
+        "camera_actor": "CineCam_02"
+      },
+      {
+        "name": "LS_Cam_03",
+        "camera_actor": "CineCam_03"
+      },
+      {
+        "name": "LS_Cam_04",
+        "camera_actor": "CineCam_04"
+      }
     ],
     "replace_existing": true,
     "ball_rolling": {
@@ -42,9 +51,12 @@
     },
     "annotation_export": {
       "enabled": true,
-      "image_width": 1920,
-      "image_height": 1080,
-      "cameras": ["CineCam_01", "CineCam_02", "CineCam_03", "CineCam_04"],
+      "cameras": [
+        "CineCam_01",
+        "CineCam_02",
+        "CineCam_03",
+        "CineCam_04"
+      ],
       "frame_start": 0,
       "frame_end": null,
       "export_internal_jsonl": true,
@@ -77,26 +89,23 @@
       },
       "instance_mask": {
         "enabled": true,
-        "mask_source": "object_id_pass",
-        "mask_channel": "r",
-        "id_scale": 1.0,
-        "id_offset": 0.0,
-        "background_value": 0,
-        "polygon_tolerance_px": 1.0,
-        "max_polygon_points": 64,
-        "post_process_material": null
+        "mask_source": "object_id_pass"
       }
     }
   },
-
   "postprocess": {
     "include_ball": true,
-    "workers": 4,
-    "chunk_size": 50,
+    "workers": 1,
+    "chunk_size": 10,
     "png_compress_level": 1,
-    "formats": ["json", "mot", "yolo-det", "yolo-seg"],
+    "formats": [
+      "json",
+      "mot",
+      "yolo-det",
+      "yolo-seg"
+    ],
     "clean_stale": true,
-    "validation_level": "full",
+    "validation_level": "quick",
     "yolo_pose": {
       "enabled": true,
       "visibility_neighborhood_radius": 2,
@@ -115,9 +124,11 @@
       "pose_edge_width": 3
     }
   },
-
   "audit": {
     "expected_cameras": 4,
-    "expected_frames_per_camera": 900
+    "expected_frames_per_camera": 30
+  },
+  "artifact_policy": {
+    "profile": "research_minimal"
   }
 }

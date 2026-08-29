@@ -553,48 +553,46 @@ def _hardlink_or_copy(src: Path, dst: Path) -> None:
 
 
 def _write_pose_yaml(episode_root: Path, stage_dir: Path) -> Path:
-    """写 futsal_pose.yaml（可直接用于 yolo pose train）。"""
+    """写 futsal_pose.yaml。
+
+    C6-P1.7 zero-waste：不生成 yolo_pose/images 副本，yaml 的 path 指向 episode 根，
+    注释说明 images 位于各 camera 的 img1。labels 位于 yolo_pose/labels/<cam>/。
+    """
     data = {
-        "path": stage_dir.resolve().as_posix(),
-        "train": "images",
-        "val": "images",
+        "path": episode_root.resolve().as_posix(),
         "names": {0: "player"},
         "kpt_shape": [NUM_COCO_KEYPOINTS, 3],
         "flip_idx": COCO_FLIP_IDX,
     }
-    lines = [f"path: {data['path']}", "train: images", "val: images",
+    lines = [f"path: {data['path']}",
+             "# zero-waste: 不复制 RGB。images 为各 camera 的 img1（<episode>/<camera>/img1）；",
+             "# 训练时请把 images 指向这些 img1 目录（labels 位于 yolo_pose/labels/<camera>/）。",
              "names:", "  0: player",
              f"kpt_shape: [{NUM_COCO_KEYPOINTS}, 3]",
              "flip_idx: [" + ", ".join(str(i) for i in COCO_FLIP_IDX) + "]", ""]
     path = episode_root / POSE_YAML_FILENAME
     write_text_atomic(path, "\n".join(lines))
-    # 同时在 yolo_pose/ 内放一份，方便直接指定 data=.../yolo_pose/futsal_pose.yaml
     stage_yaml = stage_dir / POSE_YAML_FILENAME
     write_text_atomic(stage_yaml, "\n".join(lines))
     return path
 
 
 def write_pose_dataset(episode_root: Path, camera_names: List[str]) -> Path:
-    """在 episode 根生成 yolo_pose/ 暂存目录（images + labels）与 futsal_pose.yaml。
+    """在 episode 根生成 yolo_pose/ 暂存目录（labels）与 futsal_pose.yaml。
 
-    图片用硬链接（不复制像素，失败回退复制），标签复制自 labels_pose/。
-    camera_names 不存在时仍写 yaml（指向空 images，供空场景说明）。
+    C6-P1.7 zero-waste：**不复制/硬链 RGB 到 yolo_pose/images**——img1 是唯一 RGB
+    物理副本，YOLO 训练直接引用各 camera 的 img1（见 yaml 注释）。
+    yolo_pose/ 只保留 labels + 指向 img1 的 yaml。
     """
     stage = episode_root / YOLO_POSE_STAGE_DIRNAME
     for cam in camera_names:
-        src_img = episode_root / cam / "img1"
-        dst_img = stage / "images" / cam
-        if src_img.is_dir():
-            ensure_dir(dst_img)
-            for p in sorted(src_img.glob("*.png")):
-                _hardlink_or_copy(p, dst_img / p.name)
         src_lbl = episode_root / cam / LABELS_POSE_DIRNAME
         dst_lbl = stage / "labels" / cam
         if src_lbl.is_dir():
             ensure_dir(dst_lbl)
             for p in sorted(src_lbl.glob("*.txt")):
                 shutil.copy2(str(p), str(dst_lbl / p.name))
-    print(f"  YOLO Pose 可训练数据集: {stage}")
+    print(f"  YOLO Pose 可训练数据集: {stage}（labels；images 引用各 camera img1）")
     return _write_pose_yaml(episode_root, stage)
 
 

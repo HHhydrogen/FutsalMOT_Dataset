@@ -208,12 +208,14 @@ def check_camera(
         st["ok"] = False
 
     # render / render_mask 是否覆盖全部 keep_indices（均为 transient 渲染产物：
-    # img1 是 canonical RGB；research_minimal cleanup 删除 render/render_mask 后不要求存在）
+    # img1 是 canonical RGB；zero-waste 已删除 render/，render_mask/ 由 cleanup 删除后均不要求存在）
     render_nums = set(_frame_numbers(render_files))
     exr_nums = set(_frame_numbers(exr_files))
     miss_render = sorted(set(keep_indices) - render_nums)
     miss_exr = sorted(set(keep_indices) - exr_nums)
-    if mask_enabled and miss_render:
+    # 仅当 render/ 仍有 PNG 时才校验其完整性（img1 已保证 RGB 完整性；
+    # zero-waste 删除 render/ PNG 后 render_files 为空，跳过）
+    if mask_enabled and render_files and miss_render:
         errors.append(f"{cam_id}: render/ 缺少目标帧 {miss_render[:10]}...")
         st["ok"] = False
     if mask_enabled and miss_exr:

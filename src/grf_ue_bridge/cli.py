@@ -800,6 +800,43 @@ def task_audit(
         raise typer.Exit(rc)
 
 
+@task_app.command("motion-quality")
+def task_motion_quality(
+    task: Optional[Path] = typer.Argument(
+        None, help="task 文件（缺省用 active task）"
+    ),
+    min_window_s: float = typer.Option(60.0, "--min-window-s",
+                                        help="期望的最小连续 active-play 秒数"),
+    out: Optional[Path] = typer.Option(None, "--out", help="JSON 报告输出路径"),
+):
+    """对 task 的 trajectory（frames.jsonl）运行 Motion Quality Audit。"""
+    from grf_ue_bridge.motion_quality import analyze_frames, find_active_window
+
+    _task_file, resolved = _resolve_runtime(task)
+    frames_path = Path(resolved.trajectory_output) / "frames.jsonl"
+    if not frames_path.is_file():
+        typer.echo(f"ERROR: 缺 {frames_path}（先运行 grf-ue task export）", err=True)
+        raise typer.Exit(1)
+    frames = [json.loads(l) for l in frames_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+    # 门将从 meta.entities.is_goalkeeper 读取
+    meta_path = Path(resolved.trajectory_output) / "meta.json"
+    gk_ids = None
+    if meta_path.is_file():
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        gk_ids = [e["id"] for e in meta.get("entities", []) if e.get("is_goalkeeper")]
+    dt = 1.0 / float(resolved.export_profile.get("playback_fps") or 30)
+    metrics = analyze_frames(frames, dt_s=dt, gk_ids=gk_ids)
+    typer.echo(json.dumps(metrics, indent=2, ensure_ascii=False))
+    win = find_active_window(frames, min_window_s, dt_s=dt, gk_ids=gk_ids)
+    if win:
+        typer.echo(f"\n[active-window] {win[0]}..{win[1]} = {(win[1]-win[0])*dt:.1f}s (>= {min_window_s}s)")
+    else:
+        typer.echo(f"\n[active-window] NONE (>= {min_window_s}s)")
+    out_path = out or (Path(resolved.trajectory_output) / "motion_quality.json")
+    out_path.write_text(json.dumps(metrics, indent=2, ensure_ascii=False), encoding="utf-8")
+    typer.echo(f"Report written: {out_path}")
+
+
 @task_app.command("status")
 def task_status(
     task: Optional[Path] = typer.Argument(

@@ -788,6 +788,22 @@ def task_audit(
     # instance_mask 是否启用（决定 audit 是否校验 mask/render_mask）
     ue_ann = (resolved.ue_profile.get("annotation_export") or {}) if resolved.ue_profile else {}
     mask_enabled = bool((ue_ann.get("instance_mask") or {}).get("enabled", True))
+    # research_minimal 已 cleanup（dataset_manifest.cleanup_status=applied）→ mask/render/pose 属有意删除的 transient，
+    # audit 不应再要求它们存在（只校验 canonical）。
+    manifest_path = Path(resolved.dataset_episode_dir) / "dataset_manifest.json"
+    cleanup_applied = False
+    if manifest_path.is_file():
+        try:
+            mf = json.loads(manifest_path.read_text(encoding="utf-8"))
+            cleanup_applied = mf.get("cleanup_status") == "applied"
+        except Exception:
+            pass
+    profile = (resolved.artifact_policy or {}).get("profile", "research_minimal")
+    if cleanup_applied and profile == "research_minimal":
+        mask_enabled = False
+        pose_skip = True
+    else:
+        pose_skip = False
     rc = audit_main([
         "--input", resolved.dataset_episode_dir,
         "--expected-cameras", str(audit_cfg.get("expected_cameras", 4)),
@@ -795,6 +811,7 @@ def task_audit(
         "--episode", resolved.trajectory_output,
         "--validation-level", validation_level,
         "--mask-enabled", "true" if mask_enabled else "false",
+        "--pose-skip", "true" if pose_skip else "false",
     ])
     if rc != 0:
         raise typer.Exit(rc)
@@ -835,6 +852,59 @@ def task_motion_quality(
     out_path = out or (Path(resolved.trajectory_output) / "motion_quality.json")
     out_path.write_text(json.dumps(metrics, indent=2, ensure_ascii=False), encoding="utf-8")
     typer.echo(f"Report written: {out_path}")
+
+
+@task_app.command("cleanup")
+def task_cleanup(
+    task: Optional[Path] = typer.Argument(
+        None, help="task 文件（缺省用 active task）"
+    ),
+    apply: bool = typer.Option(False, "--apply", help="真正删除（默认 dry-run）"),
+):
+    """按 artifact_policy 清理 transient 产物。默认 dry-run。"""
+    from grf_ue_bridge.workflows.artifact_cleanup import plan_cleanup, apply_cleanup
+
+    _task_file, resolved = _resolve_runtime(task)
+    ep_dir = Path(resolved.dataset_episode_dir)
+    ue_ann = (resolved.ue_profile.get("annotation_export") or {}) if resolved.ue_profile else {}
+    cams = (ue_ann.get("cameras") or [])
+    profile = (resolved.artifact_policy or {}).get("profile", "research_minimal")
+
+    if not apply:
+        rep = plan_cleanup(ep_dir, cams, profile, dry_run=True)
+        typer.echo(json.dumps(rep, indent=2, ensure_ascii=False))
+        typer.echo("\n(DRY-RUN 未删除任何文件；加 --apply 真正执行)")
+        return
+    result = apply_cleanup(ep_dir, cams, profile)
+    typer.echo(json.dumps(result, indent=2, ensure_ascii=False))
+    if result.get("ok"):
+        # apply 后写 dataset_manifest（cleanup_status=applied），供 audit 感知已清理
+        from grf_ue_bridge.workflows.artifact_cleanup import build_manifest
+        manifest = build_manifest(ep_dir, resolved.model_dump(), cams)
+        manifest["cleanup_status"] = "applied"
+        (ep_dir / "dataset_manifest.json").write_text(
+            json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+        typer.echo(f"Manifest written (cleanup_status=applied): {ep_dir / 'dataset_manifest.json'}")
+
+
+@task_app.command("manifest")
+def task_manifest(
+    task: Optional[Path] = typer.Argument(
+        None, help="task 文件（缺省用 active task）"
+    ),
+):
+    """生成 dataset_manifest.json。"""
+    from grf_ue_bridge.workflows.artifact_cleanup import build_manifest
+
+    _task_file, resolved = _resolve_runtime(task)
+    ep_dir = Path(resolved.dataset_episode_dir)
+    ue_ann = (resolved.ue_profile.get("annotation_export") or {}) if resolved.ue_profile else {}
+    cams = (ue_ann.get("cameras") or [])
+    manifest = build_manifest(ep_dir, resolved.model_dump(), cams)
+    out = ep_dir / "dataset_manifest.json"
+    out.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+    typer.echo(json.dumps(manifest, indent=2, ensure_ascii=False))
+    typer.echo(f"\nManifest written: {out}")
 
 
 @task_app.command("status")

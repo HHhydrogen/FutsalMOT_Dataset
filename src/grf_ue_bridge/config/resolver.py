@@ -114,6 +114,7 @@ def resolve_task(task_file: Path) -> m.ResolvedTask:
         actor_mapping=str(actor_mapping),
         postprocess=task.postprocess.model_dump(),
         audit=task.audit.model_dump(),
+        artifact_policy=dict(task.artifact_policy or {"profile": "research_minimal"}),
     )
 
 

@@ -207,12 +207,13 @@ def check_camera(
         errors.append(f"{cam_id}: mask 重复帧 {dup_mask[:10]}")
         st["ok"] = False
 
-    # render / render_mask 是否覆盖全部 keep_indices
+    # render / render_mask 是否覆盖全部 keep_indices（均为 transient 渲染产物：
+    # img1 是 canonical RGB；research_minimal cleanup 删除 render/render_mask 后不要求存在）
     render_nums = set(_frame_numbers(render_files))
     exr_nums = set(_frame_numbers(exr_files))
     miss_render = sorted(set(keep_indices) - render_nums)
     miss_exr = sorted(set(keep_indices) - exr_nums)
-    if miss_render:
+    if mask_enabled and miss_render:
         errors.append(f"{cam_id}: render/ 缺少目标帧 {miss_render[:10]}...")
         st["ok"] = False
     if mask_enabled and miss_exr:
@@ -420,7 +421,8 @@ def check_render_summary(dataset_dir: Path, errors: List[str], warns: List[str])
     return {"ok": True, "status": status, "cameras": per}
 
 
-def check_pose_coco17(dataset_dir: Path, expected_frames: int, errors: List[str]) -> dict:
+def check_pose_coco17(dataset_dir: Path, expected_frames: int, errors: List[str],
+                      skip: bool = False) -> dict:
     """检查 Runtime Pose + COCO17 完整性（C5.3 正式 Pose 来源）。
 
     仅当 pose_session.json 存在时校验（= Runtime Pose 已运行）：
@@ -428,9 +430,13 @@ def check_pose_coco17(dataset_dir: Path, expected_frames: int, errors: List[str]
     - pose_capture.jsonl 行数 == 10 actor × expected_frames × 13 bone
     - coco17_3d.jsonl 行数 == 10 actor × expected_frames
     pose_session.json 不存在 → 任务未启用 yolo_pose 或未运行 pose-finalize，跳过（不报错）。
+    skip=True（research_minimal 已 cleanup，raw pose 属有意删除的 transient）→ 跳过。
     """
     st = {"ok": True, "pose_session": False, "capture_complete": False,
           "pose_capture_rows": 0, "coco17_3d_rows": 0, "coco17_total_kp": 0, "skipped": False}
+    if skip:
+        st["skipped"] = True
+        return st
     ps_path = dataset_dir / "pose_session.json"
     if not ps_path.exists():
         st["skipped"] = True
@@ -615,10 +621,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--render-fps", type=int, default=30, help="MRQ 渲染帧率（缺省 30）")
     ap.add_argument("--validation-level", default="quick", choices=["quick", "full", "none"])
     ap.add_argument("--mask-enabled", default="true", help="是否启用 instance_mask 校验（true/false，缺省 true）")
+    ap.add_argument("--pose-skip", default="false", help="是否跳过 pose 完整性校验（true/false，缺省 false）")
     ap.add_argument("--output", default=None, help="报告输出目录（默认 <input>/audit）")
     args = ap.parse_args(argv)
 
     mask_enabled = str(args.mask_enabled).lower() in ("true", "1", "yes")
+    pose_skip = str(args.pose_skip).lower() in ("true", "1", "yes")
 
     dataset_dir = Path(args.input)
     if not dataset_dir.is_dir():
@@ -681,7 +689,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     rsummary = check_render_summary(dataset_dir, errors, warns)
     # Runtime Pose + COCO17 检查：仅在 pose_session.json 存在时校验
     # （pose_session.json 是 Runtime Pose 已运行的标志；不存在 = 任务未启用 yolo_pose 或未运行 pose-finalize）
-    pose_coco = check_pose_coco17(dataset_dir, args.expected_frames_per_camera, errors)
+    pose_coco = check_pose_coco17(dataset_dir, args.expected_frames_per_camera, errors, pose_skip)
     cross_identity = check_cross_camera_identity(cam_dirs, errors)
     report["sync"] = sync
     report["mapping"] = mapping

@@ -193,6 +193,12 @@ class DatasetTaskConfig(BaseModel):
     postprocess: PostprocessTaskConfig = Field(default_factory=PostprocessTaskConfig)
     audit: AuditTaskConfig = Field(default_factory=AuditTaskConfig)
 
+    # C6-P1.6 产物生命周期：cleanup 策略（research_minimal = 默认清理 transient）。
+    artifact_policy: Dict = Field(
+        default_factory=lambda: {"profile": "research_minimal"},
+        description="产物策略：profile ∈ {research_minimal, full}",
+    )
+
     model_config = {"populate_by_name": True}
 
 
@@ -226,6 +232,10 @@ class ResolvedTask(BaseModel):
 
     postprocess: Dict = Field(default_factory=dict)
     audit: Dict = Field(default_factory=dict)
+    artifact_policy: Dict = Field(
+        default_factory=lambda: {"profile": "research_minimal"},
+        description="产物策略（cleanup 依据）",
+    )
 
     model_config = {"populate_by_name": True}
 

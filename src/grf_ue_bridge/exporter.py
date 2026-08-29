@@ -206,7 +206,7 @@ def export_episode(
             source_step_seconds=0.1,
         ))
 
-    if factor > 1:
+    if factor > 1 or config.trajectory_time_scale > 1.0:
         from .interpolate import interpolate_frames, resample_frames_time_scale
 
         raw10 = [f.model_dump() for f in frames]

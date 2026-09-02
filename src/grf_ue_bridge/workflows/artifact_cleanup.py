@@ -82,23 +82,26 @@ def collect_transient(dataset_episode_dir: Path, cams, profile="research_minimal
     return to_delete
 
 
-def _requested_contract(resolved=None) -> tuple[set, set]:
+def _requested_contract(resolved=None):
     """读取 resolved Config v3 的公开 annotations/classes 请求。"""
     if resolved is None:
-        return set(), set()
+        return None
     if hasattr(resolved, "config_v3"):
         contract = resolved.config_v3 or {}
     elif isinstance(resolved, dict):
         contract = resolved.get("config_v3") or resolved
     else:
-        contract = {}
-    return set(contract.get("annotations") or ()), set(contract.get("classes") or ())
+        return None
+    if not isinstance(contract, dict) or not contract.get("annotations"):
+        return None
+    return set(contract["annotations"]), set(contract.get("classes") or ())
 
 
 def _validation_gate(dataset_episode_dir: Path, resolved=None) -> list:
     """返回阻止 cleanup 的原因列表（空 = 可通过）。"""
     problems = []
-    annotations, _classes = _requested_contract(resolved)
+    requested = _requested_contract(resolved)
+    annotations = requested[0] if requested is not None else None
     public_output = (dataset_episode_dir / "episode_manifest.json").is_file()
     if public_output:
         try:
@@ -108,7 +111,7 @@ def _validation_gate(dataset_episode_dir: Path, resolved=None) -> list:
                 problems.extend(f"public validation failed: {error}" for error in result.errors)
         except Exception as exc:
             problems.append(f"public validation exception: {exc}")
-    if annotations:
+    if annotations is None or annotations:
         rs_path = dataset_episode_dir / "render_summary.json"
         if rs_path.exists():
             try:
@@ -119,7 +122,7 @@ def _validation_gate(dataset_episode_dir: Path, resolved=None) -> list:
                 problems.append(f"render_summary.json 解析失败: {e}")
         else:
             problems.append("缺少 render_summary.json（渲染未成功/未完成）")
-    if "pose" in annotations:
+    if annotations is None or "pose" in annotations:
         ps_path = dataset_episode_dir / "pose_session.json"
         if ps_path.exists():
             try:

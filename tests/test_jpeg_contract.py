@@ -147,10 +147,17 @@ def test_cleanup_blocks_when_public_validation_fails(tmp_path, monkeypatch):
     _write_real_public_fixture(tmp_path)
     (tmp_path / "FutsalMOT_episode_01_C01" / "render_mask").mkdir()
     (tmp_path / "FutsalMOT_episode_01_C01" / "render_mask" / "000000.exr").write_bytes(b"exr")
-    monkeypatch.setattr("grf_ue_bridge.public_validator.validate_public_episode", lambda _: type("Result", (), {"ok": False, "errors": ["bad public output"]})())
+    calls = []
+
+    def reject_public_output(episode_dir, resolved_task=None):
+        calls.append(resolved_task)
+        return type("Result", (), {"ok": False, "errors": ["bad public output"]})()
+
+    monkeypatch.setattr("grf_ue_bridge.public_validator.validate_public_episode", reject_public_output)
     result = apply_cleanup(tmp_path, ["FutsalMOT_episode_01_C01"])
     assert not result["ok"]
     assert result["reason"] == "validation_gate_failed"
+    assert calls == [None]
 
 
 def test_cleanup_blocks_real_public_fixture_when_audit_report_fails(tmp_path):
@@ -174,12 +181,15 @@ def _write_resolved_cleanup_fixture(root: Path, annotations):
     (cam / "render").mkdir()
     (cam / "render" / "000000.jpg").write_bytes(b"render")
     (root / "render_summary.json").write_text(json.dumps({"status": "success"}), encoding="utf-8")
-    return cam, {
-        "config_v3": {
+    return cam, ResolvedTask(
+        task_id="task", episode_name="episode", source_task_file="task.json",
+        repo_root=str(root), ue_project_root=str(root), dataset_root=str(root),
+        trajectory_output=str(root / "trajectory"), dataset_episode_dir=str(root),
+        config_v3={
             "annotations": annotations,
             "classes": ["player", "ball"],
         }
-    }
+    )
 
 
 def test_cleanup_allows_resolved_mot_without_pose_files(tmp_path):
@@ -202,3 +212,39 @@ def test_cleanup_allows_resolved_mot_mots_without_pose_files(tmp_path):
     assert report["gate_ok"]
     assert result["ok"]
     assert not (cam / "render").exists()
+
+
+def test_cleanup_blocks_legacy_resolved_task_without_render_or_pose_files(tmp_path):
+    cam = tmp_path / "Cam_01"
+    (cam / "render").mkdir(parents=True)
+    (cam / "render" / "000000.jpg").write_bytes(b"render")
+    resolved = ResolvedTask(
+        task_id="task", episode_name="episode", source_task_file="task.json",
+        repo_root=str(tmp_path), ue_project_root=str(tmp_path), dataset_root=str(tmp_path),
+        trajectory_output=str(tmp_path / "trajectory"), dataset_episode_dir=str(tmp_path),
+    )
+
+    result = apply_cleanup(tmp_path, [cam.name], resolved=resolved)
+
+    assert not result["ok"]
+    assert any("render_summary" in problem for problem in result["gate_problems"])
+    assert any("pose_session" in problem for problem in result["gate_problems"])
+    assert (cam / "render" / "000000.jpg").exists()
+
+
+def test_cleanup_blocks_resolved_task_without_v3_contract(tmp_path):
+    result = apply_cleanup(tmp_path, [], resolved={"task_id": "legacy"})
+
+    assert not result["ok"]
+    assert any("render_summary" in problem for problem in result["gate_problems"])
+    assert any("pose_session" in problem for problem in result["gate_problems"])
+
+
+def test_cleanup_blocks_v3_pose_without_pose_session(tmp_path):
+    cam, resolved = _write_resolved_cleanup_fixture(tmp_path, ["pose"])
+
+    result = apply_cleanup(tmp_path, [cam.name], resolved=resolved)
+
+    assert not result["ok"]
+    assert any("pose_session" in problem for problem in result["gate_problems"])
+    assert (cam / "render" / "000000.jpg").exists()

@@ -107,24 +107,35 @@ class TestV3Resolver:
         task = _write_v3_task(tmp_path)
         data = json.loads(task.read_text(encoding="utf-8"))
         data["simulation"].update({"game_duration": 900, "left_team_difficulty": 0.6,
-                                    "right_team_difficulty": 0.4})
+                                    "right_team_difficulty": 0.4, "trajectory_time_scale": 1.5,
+                                    "number_of_left_players_agent_controls": 1,
+                                    "number_of_right_players_agent_controls": 2,
+                                    "ball_rolling": {"enabled": True, "radius_m": 0.11}})
         task.write_text(json.dumps(data), encoding="utf-8")
         resolved = resolver.resolve_task(task, _write_local_config(tmp_path))
-        assert resolved.export_profile["trajectory_time_scale"] == 1.0
+        assert resolved.export_profile["trajectory_time_scale"] == 1.5
         assert resolved.export_profile["field_length_m"] == 40.0
         assert resolved.export_profile["field_width_m"] == 20.0
         assert resolved.export_profile["game_duration"] == 900
         assert resolved.export_profile["left_team_difficulty"] == 0.6
         assert resolved.export_profile["right_team_difficulty"] == 0.4
+        assert resolved.export_profile["number_of_left_players_agent_controls"] == 1
+        assert resolved.export_profile["number_of_right_players_agent_controls"] == 2
         assert resolved.ue_profile["sequence_package_path"] == "/Game/FutsalMOT/Sequences"
         assert resolved.ue_profile["replace_existing"] is True
-        assert resolved.ue_profile["ball_rolling"] == {}
+        assert resolved.ue_profile["ball_rolling"] == {"enabled": True, "radius_m": 0.11}
 
     @pytest.mark.parametrize("fps", [0, 25, 31])
     def test_v3_rejects_unsupported_fps_before_resolution(self, tmp_path, fps):
         task = _write_v3_task(tmp_path, fps=fps)
         with pytest.raises(ValueError, match="fps"):
             resolver.resolve_task(task, _write_local_config(tmp_path))
+
+    @pytest.mark.parametrize("fps", [25, 31])
+    def test_v3_validate_rejects_unsupported_fps(self, tmp_path, fps):
+        task = _write_v3_task(tmp_path, fps=fps)
+        local = _write_local_config(tmp_path)
+        assert any("fps" in problem for problem in resolver.validate_task(task, local))
 
     @pytest.mark.parametrize("field", ["dataset_root", "ue_project_root"])
     def test_v3_rejects_blank_local_paths(self, tmp_path, field):

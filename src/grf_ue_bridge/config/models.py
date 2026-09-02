@@ -24,8 +24,12 @@ class V3SimulationConfig(BaseModel):
     seed: int = 42
     steps: int = Field(..., gt=0)
     game_duration: Optional[int] = Field(None, gt=0)
+    trajectory_time_scale: float = Field(1.0, ge=0.1)
     left_team_difficulty: Optional[float] = Field(None, ge=0.0, le=1.0)
     right_team_difficulty: Optional[float] = Field(None, ge=0.0, le=1.0)
+    number_of_left_players_agent_controls: int = Field(0, ge=0)
+    number_of_right_players_agent_controls: int = Field(0, ge=0)
+    ball_rolling: Dict = Field(default_factory=dict)
 
     model_config = {"extra": "forbid"}
 

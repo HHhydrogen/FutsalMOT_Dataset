@@ -25,6 +25,11 @@ from grf_ue_bridge.config.paths import (
 
 # ── 校验（只读，不写文件）───────────────────────────────────────────────
 
+def validate_supported_fps(fps: int) -> None:
+    """校验现有导出管线支持的目标帧率。"""
+    if fps < 10 or fps % 10:
+        raise ValueError("output.fps 必须为正的 10 的倍数且至少为 10")
+
 def resolve_local_config(cli_path: Optional[Path], env: Mapping[str, str]) -> Path:
     """按 CLI、环境变量顺序选择 local config，不自动搜索。"""
     selected = cli_path or (Path(env["FUTSALMOT_LOCAL_CONFIG"]) if env.get("FUTSALMOT_LOCAL_CONFIG") else None)
@@ -57,6 +62,7 @@ def validate_task(task_file: Path, local_config: Optional[Path] = None) -> List[
     try:
         task = loader.load_task_config(task_file)
         if isinstance(task, m.TaskConfigV3):
+            validate_supported_fps(task.output.fps)
             _local_paths(resolve_local_config(local_config, os.environ))
             return []
     except Exception as e:  # noqa: BLE001
@@ -118,8 +124,7 @@ def resolve_task(task_file: Path, local_config: Optional[Path] = None) -> m.Reso
         dataset_root, ue_project_root = _local_paths(resolve_local_config(local_config, os.environ))
         episode_name = task.episode_id
         fps = task.output.fps
-        if fps <= 0 or fps % 10:
-            raise ValueError("output.fps 必须为正的 10 的倍数")
+        validate_supported_fps(fps)
         expected_frames = task.simulation.steps * max(1, fps // 10)
         sequences = [{"name": f"FutsalMOT_{episode_name}_{key}", "camera_actor": actor}
                      for key, actor in task.cameras.items()]
@@ -140,11 +145,17 @@ def resolve_task(task_file: Path, local_config: Optional[Path] = None) -> m.Reso
         export_profile = m.ExportConfig(
             scenario=task.simulation.scenario, seed=task.simulation.seed,
             num_steps=task.simulation.steps, target_fps=fps, playback_fps=fps,
+            trajectory_time_scale=task.simulation.trajectory_time_scale,
             game_duration=task.simulation.game_duration,
             left_team_difficulty=task.simulation.left_team_difficulty,
             right_team_difficulty=task.simulation.right_team_difficulty,
+            number_of_left_players_agent_controls=task.simulation.number_of_left_players_agent_controls,
+            number_of_right_players_agent_controls=task.simulation.number_of_right_players_agent_controls,
         ).model_dump()
-        ue_profile = m.UeProfile(sequences=sequences, annotation_export=ann_export).model_dump()
+        ue_profile = m.UeProfile(
+            sequences=sequences, annotation_export=ann_export,
+            ball_rolling=task.simulation.ball_rolling,
+        ).model_dump()
         postprocess = m.PostprocessTaskConfig(
             include_ball=include_ball,
             formats=[a for a in ("mot", "mots") if a in annotations],

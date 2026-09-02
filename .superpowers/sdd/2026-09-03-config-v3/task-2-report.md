@@ -150,3 +150,87 @@ tests\test_validator.py .............                                    [100%]
 提交信息：`修复Config v3解析审查问题`
 
 未推送。
+
+## Task 2 剩余问题修复
+
+- `V3SimulationConfig` 现在允许并保留 `trajectory_time_scale`、左右队 agent 控制数和 `ball_rolling`。
+- v3 使用现有 `ExportConfig`、`UeProfile` 默认值，并仅覆盖 v3 明确派生或指定的字段。
+- 新增共享 `validate_supported_fps()`，由 `validate_task()` 和 `resolve_task()` 同时调用；v2 校验行为保持不变。
+- 新增 advanced simulation 到 resolved task 的传播测试，以及 validate 阶段非法 FPS 测试。
+
+## 剩余问题修复测试
+
+命令：
+
+```text
+uv run pytest tests/test_task_resolver.py -q
+```
+
+精确输出：
+
+```text
+..................................                                       [100%]
+34 passed in 0.29s
+```
+
+命令：
+
+```text
+uv run pytest
+```
+
+精确输出：
+
+```text
+============================= test session starts =============================
+platform win32 -- Python 3.9.25, pytest-8.4.2, pluggy-1.6.0
+rootdir: C:\Users\20113\AppData\Local\Temp\opencode\futsalmot-single-episode-public-output
+configfile: pyproject.toml
+collected 687 items / 7 deselected / 680 selected
+tests\test_annotation_utils.py ................                          [  2%]
+tests\test_annotation_validator.py ........                              [  3%]
+tests\test_audit_fixes.py ....................                           [  6%]
+tests\test_camera_projection.py .......................                  [  9%]
+tests\test_coordinate_transform.py .................                     [ 12%]
+tests\test_cryptomatte.py ....                                           [ 12%]
+tests\test_dataset_export.py ..........                                  [ 14%]
+tests\test_dataset_manifest.py ....................                      [ 17%]
+tests\test_dataset_regression.py .........                               [ 18%]
+tests\test_debug.py .........                                            [ 20%]
+tests\test_entity_roles.py .........                                     [ 21%]
+tests\test_golden_fixture.py ......                                      [ 22%]
+tests\test_import_grf_episode.py .....                                   [ 22%]
+tests\test_instance_mask.py ............................................ [ 29%]
+..................                                                       [ 32%]
+tests\test_interpolate.py .....................                          [ 35%]
+tests\test_jpeg_contract.py ........                                     [ 36%]
+tests\test_mask_annotator.py ...........................                 [ 40%]
+tests\test_motion_quality.py ....                                        [ 40%]
+tests\test_perf_optimizations.py ...................................     [ 46%]
+tests\test_player_motion.py ............................................ [ 52%]
+.............................                                            [ 56%]
+tests\test_pose_annotator.py .....................                       [ 59%]
+tests\test_pose_bones.py ...............                                 [ 62%]
+tests\test_pose_validator.py ...........                                 [ 63%]
+tests\test_public_episode.py ...................                         [ 66%]
+tests\test_public_validator.py ..............                            [ 68%]
+tests\test_render_export.py ...........................                  [ 72%]
+tests\test_render_preset.py ..................................           [ 77%]
+tests\test_repository_hygiene.py .........                               [ 78%]
+tests\test_schema.py ...........                                         [ 80%]
+tests\test_seeds.py ................                                     [ 82%]
+tests\test_task_cli.py ...........                                       [ 84%]
+tests\test_task_config.py .............................................. [ 91%]
+........                                                                 [ 92%]
+tests\test_task_resolver.py ..................................           [ 97%]
+tests\test_ue_resolved_task.py .....                                     [ 98%]
+tests\test_validator.py .............                                    [100%]
+
+===================== 680 passed, 7 deselected in 11.74s =====================
+```
+
+## 剩余问题修复提交
+
+提交信息：`补充Config v3高级参数校验`
+
+未推送。

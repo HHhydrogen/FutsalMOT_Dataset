@@ -56,6 +56,17 @@ def _json(path: Path, errors: List[str]) -> Any:
         return None
 
 
+def _manifest_string_list(value: Any, allowed: Set[str], label: str, errors: List[str], fallback: List[str]) -> List[str]:
+    if not isinstance(value, list) or not value or any(not isinstance(item, str) for item in value):
+        errors.append(f"manifest {label} 非法")
+        return fallback
+    if len(value) != len(set(value)):
+        errors.append(f"manifest {label} 含重复项")
+    if set(value) - allowed:
+        errors.append(f"manifest {label} 非法")
+    return value
+
+
 def _read_rle(counts: Any, height: int, width: int) -> int:
     if not isinstance(counts, str):
         raise ValueError("RLE counts 不是字符串")
@@ -130,9 +141,14 @@ def _validate_sequence(cam: Path, manifest_seq: dict, public_classes: list[str],
     if manifest_seq.get("relative_path") != name:
         errors.append(f"{name}: relative_path 必须等于 sequence_name")
     modalities = manifest_seq.get("modalities")
-    if not isinstance(modalities, list) or not modalities or set(modalities) - {"mot", "pose_tracking", "mots"}:
+    if not isinstance(modalities, list) or not modalities or any(not isinstance(item, str) for item in modalities):
         errors.append(f"{name}: modalities 不匹配")
         modalities = []
+    else:
+        if len(modalities) != len(set(modalities)):
+            errors.append(f"{name}: modalities 含重复项")
+        if set(modalities) - {"mot", "pose_tracking", "mots"}:
+            errors.append(f"{name}: modalities 不匹配")
     seqinfo_path = cam / "seqinfo.ini"
     if not seqinfo_path.exists():
         errors.append(f"{name}: 缺少 seqinfo.ini")
@@ -337,9 +353,9 @@ def validate_public_episode(episode_dir: Path) -> ValidationResult:
     if not isinstance(manifest.get("episode_id"), str) or not isinstance(manifest.get("trajectory_id"), str) or manifest.get("episode_id") != manifest.get("trajectory_id"):
         errors.append("manifest episode_id 与 trajectory_id 不一致")
     public_classes = manifest.get("public_classes")
-    if not isinstance(public_classes, list) or not public_classes or set(public_classes) - {"player", "ball"}:
-        errors.append("manifest public_classes 非法")
-        public_classes = ["player", "ball"]
+    public_classes = _manifest_string_list(
+        public_classes, {"player", "ball"}, "public_classes", errors, ["player", "ball"]
+    )
     expected_policy = {"players": "L0..L4=1..5,R0..R4=6..10", "ball": 100}
     if manifest.get("track_id_policy") != expected_policy:
         errors.append("manifest track_id_policy 不匹配")

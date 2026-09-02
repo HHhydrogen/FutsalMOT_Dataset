@@ -1,9 +1,10 @@
 import json
 from pathlib import Path
 
+import pytest
 from PIL import Image
 
-from grf_ue_bridge.public_validator import validate_public_episode
+from grf_ue_bridge.public_validator import ValidationResult, validate_public_episode
 from grf_ue_bridge.public_episode import encode_coco_rle
 from grf_ue_bridge.workflows.task_audit import main as audit_main
 
@@ -102,6 +103,55 @@ def test_public_validator_rejects_invalid_modalities_without_crashing(tmp_path):
 
     assert not result.ok
     assert any("modalities" in error for error in result.errors)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("modalities", [{"mot": True}]),
+        ("modalities", [["mot"]]),
+        ("public_classes", [{"player": True}]),
+        ("public_classes", [["player"]]),
+    ],
+)
+def test_public_validator_returns_result_for_unhashable_manifest_list_elements(tmp_path, field, value):
+    _make_public_episode(tmp_path)
+    manifest_path = tmp_path / "episode_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if field == "modalities":
+        manifest["sequences"][0][field] = value
+    else:
+        manifest[field] = value
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    result = validate_public_episode(tmp_path)
+
+    assert isinstance(result, ValidationResult)
+    assert not result.ok
+    assert any(field in error for error in result.errors)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("modalities", ["mot", "mot"]),
+        ("public_classes", ["player", "player"]),
+    ],
+)
+def test_public_validator_rejects_duplicate_manifest_entries(tmp_path, field, value):
+    _make_public_episode(tmp_path)
+    manifest_path = tmp_path / "episode_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if field == "modalities":
+        manifest["sequences"][0][field] = value
+    else:
+        manifest[field] = value
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    result = validate_public_episode(tmp_path)
+
+    assert not result.ok
+    assert any("重复" in error and field in error for error in result.errors)
 
 
 def test_public_validator_accepts_minimal_approved_manifest_without_root_counts(tmp_path):

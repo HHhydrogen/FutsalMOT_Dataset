@@ -50,6 +50,13 @@ class V3OutputConfig(BaseModel):
             raise ValueError("output.resolution 须为正的 [width, height]")
         return self
 
+    @field_validator("annotations", "classes")
+    @classmethod
+    def reject_duplicate_entries(cls, value):
+        if len(value) != len(set(value)):
+            raise ValueError("output 列表不允许重复项")
+        return value
+
 
 class TaskConfigV3(BaseModel):
     """Config v3 单回合任务。"""

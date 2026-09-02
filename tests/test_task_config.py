@@ -249,6 +249,20 @@ class TestTaskConfigV3:
         with pytest.raises(ValidationError):
             TaskConfigV3(**data)
 
+    @pytest.mark.parametrize(
+        "field, value",
+        [
+            ("annotations", ["mot", "mot"]),
+            ("classes", ["player", "player"]),
+        ],
+    )
+    def test_v3_rejects_duplicate_output_entries(self, field, value):
+        data = _v3_task()
+        data["output"][field] = value
+
+        with pytest.raises(ValidationError, match=field):
+            TaskConfigV3(**data)
+
 
 class TestLocalMachineConfig:
     def test_accepts_machine_fields_only(self):

@@ -32,6 +32,16 @@ def _make_resolved(tmp_path: Path, pin_repo_root: Path):
 
 
 class TestResolvedTaskContract:
+    def test_v2_resolved_json_keeps_ue_and_downstream_fields(self, tmp_path, pin_repo_root):
+        rt, _ = _make_resolved(tmp_path, pin_repo_root)
+        data = rt.model_dump(by_alias=True)
+        assert all(field in data for field in (
+            "export_profile", "ue_profile", "actor_mapping", "postprocess",
+            "audit", "artifact_policy",
+        ))
+        assert data["ue_profile"]["annotation_export"]["playback_fps"] == 30
+        assert resolver.validate_resolved_task(rt) == []
+
     def test_contains_ue_required_fields(self, tmp_path, pin_repo_root):
         rt, repo = _make_resolved(tmp_path, pin_repo_root)
         d = rt.model_dump(by_alias=True)

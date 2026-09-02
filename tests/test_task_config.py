@@ -53,6 +53,11 @@ def _write_task(path: Path, **over):
 
 
 class TestTaskSchema:
+    def test_v2_load_emits_config_v2_deprecation_warning(self, tmp_path):
+        tf = _write_task(tmp_path)
+        with pytest.warns(DeprecationWarning, match="Config v2"):
+            loader.load_task_config(tf)
+
     def test_valid_task(self, tmp_path):
         tf = _write_task(tmp_path)
         t = loader.load_task_config(tf)

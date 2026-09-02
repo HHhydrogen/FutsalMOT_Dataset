@@ -181,6 +181,12 @@ class TestV3Resolver:
         with pytest.raises(ValueError, match="local config"):
             resolver.resolve_task(task)
 
+    def test_v3_resolved_task_preserves_runtime_shape_and_validates(self, tmp_path):
+        resolved = resolver.resolve_task(_write_v3_task(tmp_path), _write_local_config(tmp_path))
+        for field in ("export_profile", "ue_profile", "actor_mapping", "postprocess", "audit", "artifact_policy"):
+            assert getattr(resolved, field) is not None
+        assert resolver.validate_resolved_task(resolved) == []
+
     def test_cli_local_config_wins_over_environment(self, tmp_path):
         cli_path = _write_local_config(tmp_path, dataset_root=tmp_path / "cli-ds")
         env_path = _write_local_config(tmp_path, dataset_root=tmp_path / "env-ds")
@@ -215,6 +221,13 @@ class TestV3Resolver:
 
 
 class TestResolvePaths:
+    def test_v2_resolves_without_local_config(self, tmp_path, pin_repo_root):
+        resolved = resolver.resolve_task(_make_task_dir(tmp_path))
+        assert resolved.export_profile["scenario"] == "5_vs_5"
+        assert resolved.ue_profile["sequences"]
+        assert Path(resolved.actor_mapping).is_absolute()
+        assert resolver.validate_resolved_task(resolved) == []
+
     def test_resolve_task_absolute_paths(self, tmp_path, pin_repo_root):
         tf = _make_task_dir(tmp_path)
         rt = resolver.resolve_task(tf)

@@ -6,8 +6,9 @@ resolved task 是 P1↔UE 共享的运行时契约。
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
-from typing import Dict, List, Literal, Optional
+from typing import Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -49,8 +50,8 @@ class V3OutputConfig(BaseModel):
 class TaskConfigV3(BaseModel):
     """Config v3 单回合任务。"""
 
-    schema_: Literal["futsalmot_task"] = Field(TASK_V3_SCHEMA, alias="schema")
-    version: Literal[3] = 3
+    schema_: Literal["futsalmot_task"] = Field(..., alias="schema")
+    version: Literal[3] = Field(...)
     episode_id: str = Field(..., pattern=r"^[A-Za-z0-9_-]+$")
     simulation: V3SimulationConfig
     cameras: Dict[str, str]
@@ -62,7 +63,7 @@ class TaskConfigV3(BaseModel):
     @model_validator(mode="after")
     def validate_cameras(self):
         for key, actor_name in self.cameras.items():
-            if not __import__("re").fullmatch(r"C\d{2}", key) or not actor_name.strip():
+            if not re.fullmatch(r"C\d{2}", key) or not actor_name.strip():
                 raise ValueError("cameras 须使用 C## 键且 UE actor 名不能为空")
         return self
 
@@ -76,6 +77,9 @@ class LocalMachineConfig(BaseModel):
     unreal_editor: Optional[str] = None
 
     model_config = {"extra": "forbid"}
+
+
+TaskConfig = Union["DatasetTaskConfig", TaskConfigV3]
 
 
 # ── YOLO Pose（人体关键点）后处理配置 ────────────────────────────────────

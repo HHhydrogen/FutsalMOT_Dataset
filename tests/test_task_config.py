@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from grf_ue_bridge.config import loader
 from grf_ue_bridge.config.models import (
@@ -175,14 +176,41 @@ class TestTaskConfigV3:
         task = loader.load_task_config(tf)
         assert isinstance(task, TaskConfigV3)
 
+    @pytest.mark.parametrize(
+        "changes",
+        [{"schema": None}, {"schema": "other"}, {"version": None}, {"version": 2}],
+    )
+    def test_v3_requires_exact_schema_and_version(self, changes):
+        data = _v3_task()
+        data.update(changes)
+        with pytest.raises(ValidationError) as error:
+            TaskConfigV3(**data)
+        assert any(item["loc"][-1] == next(iter(changes)) for item in error.value.errors())
+
+    @pytest.mark.parametrize("field", ["schema", "version"])
+    def test_v3_requires_schema_and_version_fields(self, field):
+        data = _v3_task()
+        del data[field]
+        with pytest.raises(ValidationError) as error:
+            TaskConfigV3(**data)
+        assert error.value.errors()[0]["loc"][-1] == field
+
+    @pytest.mark.parametrize("version", [None, 2, 4])
+    def test_loader_rejects_invalid_v3_version(self, tmp_path, version):
+        data = _v3_task(version=version)
+        tf = tmp_path / "task.json"
+        tf.write_text(json.dumps(data), encoding="utf-8")
+        with pytest.raises(ValueError, match="version"):
+            loader.load_task_config(tf)
+
     @pytest.mark.parametrize("field", ["dataset_root", "ue_project_root", "export", "ue", "postprocess", "audit", "artifact_policy", "task_id", "episode_name"])
     def test_v3_rejects_legacy_top_level_fields(self, field):
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError, match=field):
             TaskConfigV3(**_v3_task(**{field: "legacy"}))
 
     @pytest.mark.parametrize("episode_id", ["../bad", "has/slash", "", "a b"])
     def test_v3_rejects_unsafe_episode_id(self, episode_id):
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError, match="episode_id"):
             TaskConfigV3(**_v3_task(episode_id=episode_id))
 
     @pytest.mark.parametrize(
@@ -202,7 +230,7 @@ class TestTaskConfigV3:
         data = _v3_task()
         for key, value in changes.items():
             data[key] = value
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             TaskConfigV3(**data)
 
 
@@ -215,7 +243,7 @@ class TestLocalMachineConfig:
 
     @pytest.mark.parametrize("field", ["episode_id", "cameras", "fps", "annotations", "classes", "debug"])
     def test_rejects_task_fields(self, field):
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError, match=field):
             LocalMachineConfig(dataset_root="D:/dataset", ue_project_root="D:/ue", **{field: False})
 
     def test_example_is_placeholder_only(self):

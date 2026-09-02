@@ -155,6 +155,19 @@ def test_partial_v3_capabilities_use_ue_class_fallback(tmp_path):
     assert manifest["class_id_policy"] == {"player": 1}
 
 
+def test_missing_v3_class_values_use_safe_legacy_ball_fallback(tmp_path):
+    from grf_ue_bridge.dataset_manifest import _resolved_capabilities
+    from grf_ue_bridge.workflows.artifact_cleanup import public_capabilities
+
+    resolved = {
+        "config_v3": {"annotations": ["mot"]},
+        "ue_profile": {"annotation_export": {}},
+    }
+
+    assert public_capabilities(resolved)["classes"] == ["player", "ball"]
+    assert _resolved_capabilities(resolved)["classes"] == ["player", "ball"]
+
+
 def test_player_only_manifest_omits_ball_policies_and_preserves_cleanup_status(tmp_path):
     cam = _camera(tmp_path)
     (cam / "gt").mkdir()

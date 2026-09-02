@@ -232,12 +232,13 @@ def _resolved_capabilities(resolved) -> dict:
     annotations = list(contract.get("annotations") or ["mot", "pose", "mots"])
     ue_profile = ((resolved.get("ue_profile") if isinstance(resolved, dict) else
                   getattr(resolved, "ue_profile", None)) or {})
-    if contract.get("classes"):
+    if "classes" in contract and contract["classes"] is not None:
         classes = list(contract["classes"])
     elif contract.get("annotations"):
-        include_ball = (ue_profile.get("annotation_export") or {}).get("include_ball")
-        classes = ["player"] + (["ball"] if include_ball else [])
-        if not classes:
+        annotation_export = ue_profile.get("annotation_export") or {}
+        if "include_ball" in annotation_export:
+            classes = ["player"] + (["ball"] if annotation_export["include_ball"] else [])
+        else:
             classes = ["player", "ball"]
     else:
         classes = ["player", "ball"]

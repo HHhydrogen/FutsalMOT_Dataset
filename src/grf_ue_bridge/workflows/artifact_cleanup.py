@@ -51,12 +51,13 @@ def public_capabilities(resolved=None):
     is_v3 = bool(contract.get("annotations"))
     if is_v3:
         annotations = list(contract["annotations"])
-        if contract.get("classes"):
+        if "classes" in contract and contract["classes"] is not None:
             classes = list(contract["classes"])
         else:
-            include_ball = (ue_profile.get("annotation_export") or {}).get("include_ball")
-            classes = ["player"] + (["ball"] if include_ball else [])
-            if not classes:
+            annotation_export = ue_profile.get("annotation_export") or {}
+            if "include_ball" in annotation_export:
+                classes = ["player"] + (["ball"] if annotation_export["include_ball"] else [])
+            else:
                 classes = ["player", "ball"]
     else:
         annotations = ["mot", "pose", "mots"]

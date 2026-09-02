@@ -59,3 +59,21 @@
 结果：`746 passed, 7 deselected, 62 warnings in 12.58s`。
 
 `git diff --check`：通过。
+
+## Task 4 Review 最终修复
+
+- 区分 v3 `classes` 键缺失与显式类别选择；显式 `classes=["player"]` 保持 player-only。
+- 当 v3 annotations 存在但 `classes` 和 `include_ball` 均缺失时，两套 capability derivation 均回退到 `['player', 'ball']`，并保留 ball policy。
+- 新增 missing-value partial-v3 regression，覆盖 `artifact_cleanup.public_capabilities` 与 dataset manifest capability derivation。
+
+验证：
+
+`uv run pytest tests/test_jpeg_contract.py::test_missing_v3_class_values_use_safe_legacy_ball_fallback tests/test_jpeg_contract.py::test_partial_v3_capabilities_use_ue_class_fallback tests/test_jpeg_contract.py::test_player_only_manifest_omits_ball_policies_and_preserves_cleanup_status tests/test_dataset_manifest.py::TestChecksumProfiles -q`
+
+结果：`10 passed in 0.87s`。
+
+`uv run pytest`
+
+结果：`747 passed, 7 deselected, 62 warnings in 12.85s`。
+
+`git diff --check`：通过。

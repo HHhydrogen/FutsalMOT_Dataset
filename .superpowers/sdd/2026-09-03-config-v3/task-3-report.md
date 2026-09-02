@@ -44,3 +44,18 @@ warning 均为预期的 Config v2 弃用提示。
 ## 提交
 
 提交：`110b65e`（后续报告修正提交见 git log）
+
+## Task 3 Findings 修复
+
+- 保留 Config v2 原有 `Task ID`、轨迹输出、数据集输出、Export、UE、期望帧数和后处理格式信息。
+- v2 摘要补充从现有 resolved 字段可推导的 episode、seed/steps、FPS、分辨率、相机、annotations、classes 和公开 sequence 名称；v2 不要求 local config。
+- 强化显式 local config 优先于环境变量的测试，区分 dataset/UE 根目录并校验 resolved runtime 内容。
+
+精确命令结果：
+
+```text
+$ uv run pytest tests/test_task_cli.py -q
+18 passed, 9 warnings in 0.47s
+$ uv run pytest
+=============== 687 passed, 7 deselected, 59 warnings in 11.88s ===============
+```

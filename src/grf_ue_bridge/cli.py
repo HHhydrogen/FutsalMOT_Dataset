@@ -722,26 +722,43 @@ def task_resolve(
     runtime_file = _resolver.save_resolved_task(
         resolved, Path(resolved.repo_root)
     )
-    typer.echo(f"Task ID: {resolved.task_id}")
-    typer.echo(f"Episode: {summary.get('episode', resolved.episode_name)}")
-    typer.echo(f"Seed/steps: {summary.get('seed', resolved.export_profile.get('seed'))}/"
-               f"{summary.get('steps', resolved.export_profile.get('num_steps'))}")
-    typer.echo(f"FPS: {summary.get('fps', resolved.export_profile.get('playback_fps'))}")
-    resolution = summary.get("resolution")
-    if resolution:
-        typer.echo(f"Resolution: {resolution[0]}x{resolution[1]}")
+    ann_export = resolved.ue_profile.get("annotation_export") or {}
+    sequences = resolved.ue_profile.get("sequences") or []
+    export = resolved.export_profile
+    postprocess = resolved.postprocess
     cameras = summary.get("cameras") or {
         f"C{i + 1:02d}": actor for i, actor in enumerate(
-            (resolved.ue_profile.get("annotation_export") or {}).get("camera_actors") or []
+            ann_export.get("camera_actors") or ann_export.get("cameras") or []
         )
     }
+    resolution = summary.get("resolution") or [
+        ann_export.get("image_width"), ann_export.get("image_height")
+    ]
+    annotations = summary.get("annotations") or postprocess.get("formats") or []
+    classes = summary.get("classes") or ["player"] + (["ball"] if postprocess.get("include_ball", ann_export.get("include_ball", False)) else [])
+    public_sequence_names = summary.get("public_sequence_names") or [
+        item.get("name") for item in sequences if item.get("name")
+    ]
+    typer.echo(f"Task ID: {resolved.task_id}")
+    typer.echo(f"Trajectory output: {resolved.trajectory_output}")
+    typer.echo(f"Dataset output: {resolved.dataset_episode_dir}")
+    typer.echo(f"Export: scenario={export.get('scenario')} steps={export.get('num_steps')} seed={export.get('seed')}")
+    typer.echo(f"UE: {len(cameras)} cameras")
+    typer.echo(f"Episode: {summary.get('episode', resolved.episode_name)}")
+    typer.echo(f"Seed/steps: {summary.get('seed', export.get('seed'))}/"
+               f"{summary.get('steps', export.get('num_steps'))}")
+    typer.echo(f"FPS: {summary.get('fps', export.get('playback_fps'))}")
+    if resolution[0] is not None and resolution[1] is not None:
+        typer.echo(f"Resolution: {resolution[0]}x{resolution[1]}")
     typer.echo("Cameras:")
     for camera_id, actor in cameras.items():
         typer.echo(f"  {camera_id} -> {actor}")
+    typer.echo(f"Expected frame count: {resolved.audit.get('expected_frames_per_camera')}")
     typer.echo(f"Expected frames: {summary.get('expected_frames', resolved.audit.get('expected_frames_per_camera'))}")
-    typer.echo(f"Annotations: {', '.join(summary.get('annotations') or [])}")
-    typer.echo(f"Classes: {', '.join(summary.get('classes') or [])}")
-    typer.echo(f"Public sequence names: {', '.join(summary.get('public_sequence_names') or [])}")
+    typer.echo(f"Annotations: {', '.join(annotations)}")
+    typer.echo(f"Classes: {', '.join(classes)}")
+    typer.echo(f"Public sequence names: {', '.join(public_sequence_names)}")
+    typer.echo(f"Postprocess formats: {postprocess.get('formats')}")
     typer.echo(f"Resolved task saved: {runtime_file}")
 
 

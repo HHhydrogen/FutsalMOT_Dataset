@@ -145,6 +145,12 @@ class TestTaskValidateCLI:
         monkeypatch.setenv("FUTSALMOT_LOCAL_CONFIG", str(environment))
         r = runner.invoke(app, ["task", "validate", str(task), "--local-config", str(explicit)])
         assert r.exit_code == 0, r.output
+        resolved = runner.invoke(app, ["task", "resolve", str(task), "--local-config", str(explicit)])
+        assert resolved.exit_code == 0, resolved.output
+        runtime = json.loads((pin_repo_root / ".futsalmot" / "runtime" / "ep_cli_v3" / "resolved-task.json").read_text(encoding="utf-8"))
+        assert runtime["dataset_root"] == str((tmp_path / "explicit.json-dataset").resolve())
+        assert runtime["ue_project_root"] == str((tmp_path / "explicit.json-ue").resolve())
+        assert str(tmp_path / "environment.json") not in json.dumps(runtime)
 
     def test_v3_validate_missing_local_config_fails(self, tmp_path, pin_repo_root, monkeypatch):
         task = _make_v3_task(tmp_path)
@@ -204,6 +210,14 @@ class TestTaskResolveCLI:
         assert r.exit_code == 0, r.output
         assert "deprecated" in r.output.lower()
         assert any(item.category is DeprecationWarning for item in caught)
+        for expected in (
+            "Trajectory output:", "Dataset output:", "Export: scenario=5_vs_5 steps=1 seed=42",
+            "UE: 1 cameras", "Postprocess formats:",
+            "Episode: episode_cli_t1", "Seed/steps: 42/1", "FPS: 30",
+            "Resolution: 64x64", "CineCam_01", "Expected frames: 1",
+            "Annotations:", "Classes: player, ball", "Public sequence names: LS_CineCam_01",
+        ):
+            assert expected in r.output
 
 
 class TestTaskStatusAudit:

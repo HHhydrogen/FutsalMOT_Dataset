@@ -35,6 +35,8 @@ def resolve_local_config(cli_path: Optional[Path], env: Mapping[str, str]) -> Pa
 
 def _local_paths(path: Path) -> tuple[Path, Path]:
     local = loader.load_local_machine_config(path)
+    if not local.dataset_root.strip() or not local.ue_project_root.strip():
+        raise ValueError("local config 路径为空")
     dataset_root = Path(local.dataset_root).expanduser().resolve()
     ue_root = Path(local.ue_project_root).expanduser().resolve()
     if not dataset_root.is_dir():
@@ -116,6 +118,8 @@ def resolve_task(task_file: Path, local_config: Optional[Path] = None) -> m.Reso
         dataset_root, ue_project_root = _local_paths(resolve_local_config(local_config, os.environ))
         episode_name = task.episode_id
         fps = task.output.fps
+        if fps <= 0 or fps % 10:
+            raise ValueError("output.fps 必须为正的 10 的倍数")
         expected_frames = task.simulation.steps * max(1, fps // 10)
         sequences = [{"name": f"FutsalMOT_{episode_name}_{key}", "camera_actor": actor}
                      for key, actor in task.cameras.items()]
@@ -129,17 +133,23 @@ def resolve_task(task_file: Path, local_config: Optional[Path] = None) -> m.Reso
             "camera_actors": list(task.cameras.values()), "camera_count": len(sequences),
             "public_sequence_names": [s["name"] for s in sequences],
             "include_ball": include_ball,
+            "instance_mask": {"enabled": True, "mask_source": "object_id_pass"},
             "render_rgb": {"enabled": True, "output_resolution_x": task.output.resolution[0],
                            "output_resolution_y": task.output.resolution[1], "frame_rate": fps},
         }
-        export_profile = {"scenario": task.simulation.scenario, "seed": task.simulation.seed,
-                          "num_steps": task.simulation.steps, "target_fps": fps,
-                          "playback_fps": fps, "game_duration": task.simulation.game_duration,
-                          "left_team_difficulty": task.simulation.left_team_difficulty,
-                          "right_team_difficulty": task.simulation.right_team_difficulty}
-        ue_profile = {"sequences": sequences, "annotation_export": ann_export}
-        postprocess = {"include_ball": include_ball,
-                       "formats": [a for a in ("mot", "mots", "json") if a in annotations]}
+        export_profile = m.ExportConfig(
+            scenario=task.simulation.scenario, seed=task.simulation.seed,
+            num_steps=task.simulation.steps, target_fps=fps, playback_fps=fps,
+            game_duration=task.simulation.game_duration,
+            left_team_difficulty=task.simulation.left_team_difficulty,
+            right_team_difficulty=task.simulation.right_team_difficulty,
+        ).model_dump()
+        ue_profile = m.UeProfile(sequences=sequences, annotation_export=ann_export).model_dump()
+        postprocess = m.PostprocessTaskConfig(
+            include_ball=include_ball,
+            formats=[a for a in ("mot", "mots") if a in annotations],
+            yolo_pose={"enabled": "pose" in annotations},
+        ).model_dump()
         audit = {"expected_cameras": len(sequences), "expected_frames_per_camera": expected_frames}
         config_v3 = {"episode": episode_name, "seed": task.simulation.seed,
                      "steps": task.simulation.steps, "fps": fps,

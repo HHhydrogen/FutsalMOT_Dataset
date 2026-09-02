@@ -7,8 +7,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Mapping
-
 from grf_ue_bridge.config import models as m
 from grf_ue_bridge.config.models import TaskConfig
 from grf_ue_bridge.config import paths as _paths

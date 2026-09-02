@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
-from typing import Mapping
 
 import pytest
 
@@ -93,6 +91,78 @@ class TestV3Resolver:
         assert ann["include_ball"] is False
         assert resolved.postprocess["include_ball"] is False
         assert resolved.postprocess["formats"] == ["mot"]
+
+    @pytest.mark.parametrize("annotation", ["pose", "mot", "mots"])
+    def test_each_annotation_enables_required_downstream_dependencies(self, tmp_path, annotation):
+        task = _write_v3_task(tmp_path, annotations=[annotation])
+        resolved = resolver.resolve_task(task, _write_local_config(tmp_path))
+        ann = resolved.ue_profile["annotation_export"]
+        assert ann[f"export_{annotation}"] is True
+        assert ann["instance_mask"]["enabled"] is True
+        assert ann["instance_mask"]["mask_source"] == "object_id_pass"
+        assert resolved.postprocess["formats"] == ([] if annotation == "pose" else [annotation])
+        assert resolved.postprocess["yolo_pose"]["enabled"] == (annotation == "pose")
+
+    def test_v3_propagates_advanced_simulation_and_legacy_defaults(self, tmp_path):
+        task = _write_v3_task(tmp_path)
+        data = json.loads(task.read_text(encoding="utf-8"))
+        data["simulation"].update({"game_duration": 900, "left_team_difficulty": 0.6,
+                                    "right_team_difficulty": 0.4})
+        task.write_text(json.dumps(data), encoding="utf-8")
+        resolved = resolver.resolve_task(task, _write_local_config(tmp_path))
+        assert resolved.export_profile["trajectory_time_scale"] == 1.0
+        assert resolved.export_profile["field_length_m"] == 40.0
+        assert resolved.export_profile["field_width_m"] == 20.0
+        assert resolved.export_profile["game_duration"] == 900
+        assert resolved.export_profile["left_team_difficulty"] == 0.6
+        assert resolved.export_profile["right_team_difficulty"] == 0.4
+        assert resolved.ue_profile["sequence_package_path"] == "/Game/FutsalMOT/Sequences"
+        assert resolved.ue_profile["replace_existing"] is True
+        assert resolved.ue_profile["ball_rolling"] == {}
+
+    @pytest.mark.parametrize("fps", [0, 25, 31])
+    def test_v3_rejects_unsupported_fps_before_resolution(self, tmp_path, fps):
+        task = _write_v3_task(tmp_path, fps=fps)
+        with pytest.raises(ValueError, match="fps"):
+            resolver.resolve_task(task, _write_local_config(tmp_path))
+
+    @pytest.mark.parametrize("field", ["dataset_root", "ue_project_root"])
+    def test_v3_rejects_blank_local_paths(self, tmp_path, field):
+        task = _write_v3_task(tmp_path)
+        local = _write_local_config(tmp_path)
+        data = json.loads(local.read_text(encoding="utf-8"))
+        data[field] = "  "
+        local.write_text(json.dumps(data), encoding="utf-8")
+        with pytest.raises(ValueError, match="路径为空"):
+            resolver.resolve_task(task, local)
+
+    def test_v3_uses_environment_local_config(self, tmp_path, monkeypatch):
+        task = _write_v3_task(tmp_path)
+        local = _write_local_config(tmp_path)
+        monkeypatch.setenv("FUTSALMOT_LOCAL_CONFIG", str(local))
+        assert resolver.resolve_task(task).dataset_root == str((tmp_path / "v3-ds").resolve())
+
+    def test_v3_rejects_project_without_uproject(self, tmp_path):
+        task = _write_v3_task(tmp_path)
+        local = _write_local_config(tmp_path)
+        (tmp_path / "v3-ue" / "sample.uproject").unlink()
+        with pytest.raises(ValueError, match="uproject"):
+            resolver.resolve_task(task, local)
+
+    def test_v3_preserves_old_resolved_fields(self, tmp_path):
+        task = _write_v3_task(tmp_path)
+        resolved = resolver.resolve_task(task, _write_local_config(tmp_path))
+        assert set(resolved.export_profile) >= {
+            "scenario", "seed", "num_steps", "target_fps", "trajectory_time_scale",
+            "playback_fps", "field_length_m", "field_width_m", "render", "write_video",
+            "dump_full_raw_observation", "number_of_left_players_agent_controls",
+            "number_of_right_players_agent_controls", "game_duration",
+            "left_team_difficulty", "right_team_difficulty",
+        }
+        assert set(resolved.ue_profile) >= {
+            "actor_mapping", "sequence_package_path", "sequences", "replace_existing",
+            "ball_rolling", "annotation_export",
+        }
 
     def test_v3_requires_local_config_without_neighbor_search(self, tmp_path):
         task = _write_v3_task(tmp_path)

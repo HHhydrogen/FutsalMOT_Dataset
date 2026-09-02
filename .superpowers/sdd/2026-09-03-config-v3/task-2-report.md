@@ -64,3 +64,89 @@ collected 673 items / 7 deselected / 666 selected
 
 - Task 3 仍需接入 CLI 的 `--local-config` 参数和 v3 summary 输出；本任务仅提供 resolver/loader 接口。
 - v3 没有用户层 actor mapping 字段，因此当前保留旧默认路径 `ue/actor_mapping.example.json`，由后续运行时流程继续解析。
+
+## Task 2 Review 修复
+
+- 为 `mot`、`mots`、`pose` 分别测试并启用 Object-ID/instance-mask 依赖；pose 同时启用 `yolo_pose`，不新增 pose public format。
+- 使用现有 `ExportConfig` 和 `UeProfile` 默认值构造 v3 legacy profile，保留 `trajectory_time_scale`、场地尺寸、渲染开关、球滚动等字段。
+- v3 FPS 在解析前要求为正的 10 的倍数。
+- local config 的空白路径在 `Path.resolve()` 前拒绝。
+- 增加环境变量 fallback、缺少 `.uproject`、advanced simulation 和已有 legacy 字段保留测试。
+- 删除未使用的 loader import。
+
+## Review 修复测试
+
+命令：
+
+```text
+uv run pytest tests/test_task_resolver.py -q
+```
+
+精确输出：
+
+```text
+................................                                         [100%]
+32 passed in 0.33s
+```
+
+命令：
+
+```text
+uv run pytest
+```
+
+精确输出：
+
+```text
+============================= test session starts =============================
+platform win32 -- Python 3.9.25, pytest-8.4.2, pluggy-1.6.0
+rootdir: C:\Users\20113\AppData\Local\Temp\opencode\futsalmot-single-episode-public-output
+configfile: pyproject.toml
+collected 685 items / 7 deselected / 678 selected
+tests\test_annotation_utils.py ................                          [  2%]
+tests\test_annotation_validator.py ........                              [  3%]
+tests\test_audit_fixes.py ....................                           [  6%]
+tests\test_camera_projection.py .......................                  [  9%]
+tests\test_coordinate_transform.py .................                     [ 12%]
+tests\test_cryptomatte.py ....                                           [ 12%]
+tests\test_dataset_export.py ..........                                  [ 14%]
+tests\test_dataset_manifest.py ....................                      [ 17%]
+tests\test_dataset_regression.py .........                               [ 18%]
+tests\test_debug.py .........                                            [ 20%]
+tests\test_entity_roles.py .........                                     [ 21%]
+tests\test_golden_fixture.py ......                                      [ 22%]
+tests\test_import_grf_episode.py .....                                   [ 23%]
+tests\test_instance_mask.py ............................................ [ 29%]
+..................                                                       [ 32%]
+tests\test_interpolate.py .....................                          [ 35%]
+tests\test_jpeg_contract.py ........                                     [ 36%]
+tests\test_mask_annotator.py ...........................                 [ 40%]
+tests\test_motion_quality.py ....                                        [ 41%]
+tests\test_perf_optimizations.py ...................................     [ 46%]
+tests\test_player_motion.py ............................................ [ 52%]
+.............................                                            [ 56%]
+tests\test_pose_annotator.py .....................                       [ 60%]
+tests\test_pose_bones.py ...............                                 [ 62%]
+tests\test_pose_validator.py ...........                                 [ 63%]
+tests\test_public_episode.py ...................                         [ 66%]
+tests\test_public_validator.py ..............                            [ 68%]
+tests\test_render_export.py ...........................                  [ 72%]
+tests\test_render_preset.py ..................................           [ 77%]
+tests\test_repository_hygiene.py .........                               [ 79%]
+tests\test_schema.py ...........                                         [ 80%]
+tests\test_seeds.py ................                                     [ 83%]
+tests\test_task_cli.py ...........                                       [ 84%]
+tests\test_task_config.py .............................................. [ 91%]
+........                                                                 [ 92%]
+tests\test_task_resolver.py ................................             [ 97%]
+tests\test_ue_resolved_task.py .....                                     [ 98%]
+tests\test_validator.py .............                                    [100%]
+
+===================== 678 passed, 7 deselected in 12.07s =====================
+```
+
+## Review 修复提交
+
+提交信息：`修复Config v3解析审查问题`
+
+未推送。

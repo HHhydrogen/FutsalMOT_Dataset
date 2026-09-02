@@ -5,6 +5,7 @@ from PIL import Image
 
 from grf_ue_bridge.public_validator import validate_public_episode
 from grf_ue_bridge.public_episode import encode_coco_rle
+from grf_ue_bridge.workflows.task_audit import main as audit_main
 
 
 def _rle(height, width, start=0, length=1):
@@ -118,3 +119,72 @@ def test_public_validator_rejects_manifest_sequence_mismatch(tmp_path):
 
     assert not result.ok
     assert any("目录不存在" in error for error in result.errors)
+
+
+def test_public_validator_returns_result_for_unreadable_annotation_files(tmp_path):
+    _make_public_episode(tmp_path)
+    for name in ("gt.txt", "gt_mots.txt"):
+        (tmp_path / "Cam_01" / "gt" / name).write_bytes(b"\xff\xfe")
+
+    result = validate_public_episode(tmp_path)
+
+    assert not result.ok
+    assert isinstance(result.errors, list)
+
+
+def test_public_validator_rejects_invalid_manifest_types_and_counts(tmp_path):
+    _make_public_episode(tmp_path)
+    manifest_path = tmp_path / "episode_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["frame_count"] = True
+    manifest["dimensions"] = {"width": 0, "height": 3}
+    manifest["sequences"][0]["frame_count"] = 3
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    result = validate_public_episode(tmp_path)
+
+    assert not result.ok
+    assert any("frame_count" in error or "尺寸" in error for error in result.errors)
+
+
+def test_public_validator_rejects_fractional_and_out_of_range_ids(tmp_path):
+    _make_public_episode(tmp_path)
+    mot = tmp_path / "Cam_01" / "gt" / "gt.txt"
+    mot.write_text("1.5,1,0,0,2,2,1,1,1\n3,1,0,0,2,2,1,1,1\n", encoding="utf-8")
+    pose_path = tmp_path / "Cam_01" / "gt" / "gt_pose.json"
+    pose = json.loads(pose_path.read_text(encoding="utf-8"))
+    pose[0]["frame_id"] = 3
+    pose[0]["track_id"] = True
+    pose_path.write_text(json.dumps(pose), encoding="utf-8")
+
+    result = validate_public_episode(tmp_path)
+
+    assert not result.ok
+    assert any("非法" in error or "MOT" in error for error in result.errors)
+
+
+def test_public_validator_rejects_noncanonical_img1_files_and_mots_dimensions(tmp_path):
+    _make_public_episode(tmp_path)
+    img1 = tmp_path / "Cam_01" / "img1"
+    (img1 / "1.jpg").write_bytes((img1 / "000001.jpg").read_bytes())
+    (img1 / "000003.png").write_bytes(b"stale")
+    mots = tmp_path / "Cam_01" / "gt" / "gt_mots.txt"
+    line = mots.read_text(encoding="utf-8").splitlines()[0]
+    mots.write_text(line.replace(" 3 4 ", " 9 4 ") + "\n", encoding="utf-8")
+
+    result = validate_public_episode(tmp_path)
+
+    assert not result.ok
+    assert any("文件名" in error or "非 JPG" in error or "MOTS" in error for error in result.errors)
+
+
+def test_public_task_audit_reports_validated_camera_count(tmp_path):
+    _make_public_episode(tmp_path)
+
+    assert audit_main([
+        "--input", str(tmp_path), "--expected-cameras", "4",
+        "--expected-frames-per-camera", "2", "--validation-level", "none",
+    ]) == 0
+    report = json.loads((tmp_path / "audit" / "soak_audit_report.json").read_text(encoding="utf-8"))
+
+    assert list(report["cameras"]) == ["Cam_01"]

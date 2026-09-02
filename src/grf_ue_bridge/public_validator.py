@@ -39,10 +39,16 @@ def _number(value: str) -> bool:
         return False
 
 
+def _strict_int(value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, str) or not value or value[0] in "+-" and not value[1:].isdigit() or not value.lstrip("-").isdigit():
+        raise ValueError("不是严格整数")
+    return int(value)
+
+
 def _json(path: Path, errors: List[str]) -> Any:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
         errors.append(f"无法读取 JSON {path}: {exc}")
         return None
 
@@ -81,7 +87,7 @@ def _seqinfo(path: Path, errors: List[str]) -> Dict[str, str]:
     parser.optionxform = str
     try:
         parser.read(path, encoding="utf-8")
-    except (OSError, configparser.Error) as exc:
+    except (OSError, UnicodeDecodeError, configparser.Error, ValueError) as exc:
         errors.append(f"seqinfo.ini 无法读取: {path}: {exc}")
         return {}
     if not parser.has_section("Sequence"):
@@ -93,6 +99,8 @@ def _seqinfo(path: Path, errors: List[str]) -> Dict[str, str]:
 def _validate_sequence(cam: Path, manifest_seq: dict, manifest_dims: Tuple[int, int], errors: List[str]) -> Set[Tuple[int, int]]:
     name = cam.name
     width, height = manifest_dims
+    if width <= 0 or height <= 0:
+        errors.append(f"{name}: episode dimensions 必须为正整数")
     for key, expected in (("width", width), ("height", height)):
         if manifest_seq.get(key) != expected:
             errors.append(f"{name}: manifest sequence {key} 与 episode dimensions 不一致")
@@ -114,7 +122,7 @@ def _validate_sequence(cam: Path, manifest_seq: dict, manifest_dims: Tuple[int, 
     for key, expected in (("seqlength", manifest_seq.get("frame_count")), ("imwidth", width), ("imheight", height)):
         if key in seq:
             try:
-                if int(seq[key]) != int(expected):
+                if _strict_int(seq[key]) != expected:
                     errors.append(f"{name}: seqinfo.{key} 与 manifest 不一致")
             except (TypeError, ValueError):
                 errors.append(f"{name}: seqinfo.{key} 不是整数")
@@ -125,10 +133,13 @@ def _validate_sequence(cam: Path, manifest_seq: dict, manifest_dims: Tuple[int, 
         errors.append(f"{name}: 缺少 img1/")
     else:
         for path in sorted(img_dir.iterdir()):
-            if path.suffix.lower() != ".jpg" or not path.is_file():
+            if not path.is_file():
+                continue
+            if path.suffix != ".jpg" or len(path.stem) != 6 or not path.stem.isdigit():
+                errors.append(f"{name}: img1 中存在非规范 JPG 文件: {path.name}")
                 continue
             try:
-                frame = int(path.stem)
+                frame = _strict_int(path.stem)
             except ValueError:
                 errors.append(f"{name}: JPG 文件名不是帧号: {path.name}")
                 continue
@@ -142,36 +153,44 @@ def _validate_sequence(cam: Path, manifest_seq: dict, manifest_dims: Tuple[int, 
                         errors.append(f"{name}: {path.name} 尺寸 {image.size} 不匹配")
             except (OSError, ValueError) as exc:
                 errors.append(f"{name}: JPG 不可读 {path.name}: {exc}")
-        expected_frames = set(range(1, int(manifest_seq.get("frame_count", 0)) + 1))
+        expected_frames = set(range(1, manifest_seq.get("frame_count", 0) + 1))
         if frames != expected_frames:
             errors.append(f"{name}: JPG 帧不连续或缺失（实际 {sorted(frames)}，期望 {sorted(expected_frames)}）")
 
-    mot_set = _validate_mot(cam / "gt" / "gt.txt", name, width, height, errors)
-    mots_set = _validate_mots(cam / "gt" / "gt_mots.txt", name, errors)
-    pose_set = _validate_pose(cam / "gt" / "gt_pose.json", name, width, height, errors)
+    frame_count = manifest_seq.get("frame_count", 0)
+    if not isinstance(frame_count, int) or isinstance(frame_count, bool) or frame_count <= 0:
+        frame_count = 0
+    mot_set = _validate_mot(cam / "gt" / "gt.txt", name, width, height, frame_count, errors)
+    mots_set = _validate_mots(cam / "gt" / "gt_mots.txt", name, width, height, frame_count, errors)
+    pose_set = _validate_pose(cam / "gt" / "gt_pose.json", name, width, height, frame_count, errors)
     if not (mot_set == mots_set == pose_set):
         errors.append(f"{name}: MOT、MOTS、Pose 的 (frame_id, track_id) 集合不一致")
     return mot_set
 
 
-def _validate_mot(path: Path, name: str, width: int, height: int, errors: List[str]) -> Set[Tuple[int, int]]:
+def _validate_mot(path: Path, name: str, width: int, height: int, frame_count: int, errors: List[str]) -> Set[Tuple[int, int]]:
     result: Set[Tuple[int, int]] = set()
     if not path.exists():
         errors.append(f"{name}: 缺少 gt/gt.txt")
         return result
-    for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        errors.append(f"{name}: MOT 无法读取: {exc}")
+        return result
+    for line_no, line in enumerate(lines, 1):
         fields = line.split(",")
         if len(fields) != 9:
             errors.append(f"{name}: MOT 第 {line_no} 行字段数不是 9")
             continue
-        if not all(_number(value.strip()) for value in fields):
+        if not all(_number(value.strip()) for value in fields[2:]) or any(not value.strip().lstrip("-").isdigit() for value in fields[:2] + [fields[7].strip()]):
             errors.append(f"{name}: MOT 第 {line_no} 行含非有限数字")
             continue
-        frame, track = int(float(fields[0])), int(float(fields[1]))
+        frame, track = _strict_int(fields[0].strip()), _strict_int(fields[1].strip())
         x, y, w, h = map(float, fields[2:6])
-        cls = int(float(fields[7]))
+        cls = _strict_int(fields[7].strip())
         expected_cls = 100 if track == 100 else 1
-        if frame < 1 or track not in set(range(1, 11)) | {100} or cls != expected_cls or w <= 0 or h <= 0 or x < 0 or y < 0 or x + w > width or y + h > height:
+        if frame < 1 or frame > frame_count or track not in set(range(1, 11)) | {100} or cls != expected_cls or w <= 0 or h <= 0 or x < 0 or y < 0 or x + w > width or y + h > height:
             errors.append(f"{name}: MOT 第 {line_no} 行 ID/class/bbox 非法")
         if (frame, track) in result:
             errors.append(f"{name}: MOT 第 {line_no} 行 frame/track 重复")
@@ -179,18 +198,25 @@ def _validate_mot(path: Path, name: str, width: int, height: int, errors: List[s
     return result
 
 
-def _validate_mots(path: Path, name: str, errors: List[str]) -> Set[Tuple[int, int]]:
+def _validate_mots(path: Path, name: str, width_limit: int, height_limit: int, frame_count: int, errors: List[str]) -> Set[Tuple[int, int]]:
     result: Set[Tuple[int, int]] = set()
     if not path.exists():
         errors.append(f"{name}: 缺少 gt/gt_mots.txt")
         return result
-    for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        errors.append(f"{name}: MOTS 无法读取: {exc}")
+        return result
+    for line_no, line in enumerate(lines, 1):
         fields = line.split()
         if len(fields) != 6:
             errors.append(f"{name}: MOTS 第 {line_no} 行字段数不是 6")
             continue
         try:
-            frame, track, cls, height, width = map(int, fields[:5])
+            frame, track, cls, height, width = (_strict_int(value) for value in fields[:5])
+            if frame < 1 or frame > frame_count or height != height_limit or width != width_limit or height <= 0 or width <= 0:
+                raise ValueError("帧号或尺寸非法")
             rle = json.loads(fields[5])
             area = _read_rle(rle, height, width)
             if frame < 1 or track not in set(range(1, 11)) | {100} or cls != (100 if track == 100 else 1) or area < 0:
@@ -204,7 +230,7 @@ def _validate_mots(path: Path, name: str, errors: List[str]) -> Set[Tuple[int, i
     return result
 
 
-def _validate_pose(path: Path, name: str, width: int, height: int, errors: List[str]) -> Set[Tuple[int, int]]:
+def _validate_pose(path: Path, name: str, width: int, height: int, frame_count: int, errors: List[str]) -> Set[Tuple[int, int]]:
     result: Set[Tuple[int, int]] = set()
     if not path.exists():
         errors.append(f"{name}: 缺少 gt/gt_pose.json")
@@ -218,7 +244,7 @@ def _validate_pose(path: Path, name: str, width: int, height: int, errors: List[
             errors.append(f"{name}: Pose 第 {index} 条不是对象")
             continue
         frame, track = record.get("frame_id"), record.get("track_id")
-        valid_identity = isinstance(frame, int) and frame >= 1 and isinstance(track, int) and track in set(range(1, 11)) | {100}
+        valid_identity = isinstance(frame, int) and not isinstance(frame, bool) and 1 <= frame <= frame_count and isinstance(track, int) and not isinstance(track, bool) and track in set(range(1, 11)) | {100}
         if not valid_identity:
             errors.append(f"{name}: Pose 第 {index} 条 frame_id/track_id 非法")
         if valid_identity and (frame, track) in result:
@@ -237,7 +263,7 @@ def _validate_pose(path: Path, name: str, width: int, height: int, errors: List[
             errors.append(f"{name}: Pose 第 {index} 条必须有 17 个关键点")
             continue
         for point in points:
-            if not isinstance(point, list) or len(point) != 3 or not all(_finite(value) for value in point) or point[2] not in (0, 1, 2):
+            if not isinstance(point, list) or len(point) != 3 or not _finite(point[0]) or not _finite(point[1]) or isinstance(point[2], bool) or not isinstance(point[2], int) or point[2] not in (0, 1, 2):
                 errors.append(f"{name}: Pose 第 {index} 条含非法关键点")
                 break
             if not (0 <= point[0] <= width and 0 <= point[1] <= height):
@@ -263,10 +289,16 @@ def validate_public_episode(episode_dir: Path) -> ValidationResult:
         errors.append("manifest public_classes 必须为 player=1、ball=100")
     dimensions = manifest.get("dimensions") or {}
     try:
-        dims = (int(dimensions["width"]), int(dimensions["height"]))
+        if any(isinstance(dimensions[key], bool) or not isinstance(dimensions[key], int) for key in ("width", "height")):
+            raise ValueError("dimensions 必须为整数")
+        dims = (dimensions["width"], dimensions["height"])
     except (KeyError, TypeError, ValueError):
         dims = (0, 0)
         errors.append("manifest dimensions 非法")
+    root_frame_count = manifest.get("frame_count")
+    if isinstance(root_frame_count, bool) or not isinstance(root_frame_count, int) or root_frame_count <= 0:
+        errors.append("manifest frame_count 必须为正整数")
+        root_frame_count = 0
     sequences = manifest.get("sequences")
     if not isinstance(sequences, list) or not sequences:
         errors.append("manifest sequences 为空或非法")
@@ -278,6 +310,11 @@ def validate_public_episode(episode_dir: Path) -> ValidationResult:
             errors.append("manifest sequence 缺少 name")
             continue
         names.append(sequence["name"])
+        seq_count = sequence.get("frame_count")
+        if isinstance(seq_count, bool) or not isinstance(seq_count, int) or seq_count <= 0:
+            errors.append(f"{sequence['name']}: sequence frame_count 必须为正整数")
+        elif seq_count != root_frame_count:
+            errors.append(f"{sequence['name']}: sequence frame_count 与 manifest frame_count 不一致")
         cam = episode_dir / sequence["name"]
         if not cam.is_dir():
             errors.append(f"manifest sequence 目录不存在: {cam}")

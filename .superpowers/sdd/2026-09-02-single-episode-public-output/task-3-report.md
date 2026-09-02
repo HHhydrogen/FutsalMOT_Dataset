@@ -26,3 +26,22 @@
 
 - 公共校验器依赖现有 Pillow；不读取 EXR、render/、mask/、YOLO 或内部 JSONL，它们按要求作为可选诊断产物。
 - 未执行提交后的再次测试；提交前的全量测试已通过。
+
+## Task 3 Review 修复
+
+- 所有 manifest、文本标注、seqinfo 和 RLE 边界均转换为错误结果，不向调用方泄漏 OSError、UnicodeDecodeError、ValueError 或类型异常。
+- 强制 root/sequence frame_count、canonical 尺寸、MOTS 尺寸和公开帧号约束；MOT 使用严格整数 token；Pose 整数字段和 visibility 拒绝布尔值及非法类型。
+- 强制 `img1/` 下六位数字 `.jpg` 文件名，并报告 stale/non-JPG 文件；公开审计报告使用实际 manifest sequence/camera 名称。
+- 新增不可读 UTF-8、manifest 类型/count、分数/越界帧号、非规范图片、MOTS 尺寸和公开 audit 集成测试。
+
+修复后指定命令：
+
+`uv run pytest tests/test_public_validator.py tests/test_audit_fixes.py tests/test_annotation_validator.py -q`
+
+结果：`38 passed in 4.57s`
+
+修复后全量命令：
+
+`uv run pytest`
+
+结果：`600 passed, 7 deselected in 15.69s`

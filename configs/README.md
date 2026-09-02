@@ -37,8 +37,8 @@ Config v3 的用户层只允许任务字段：`schema`/`version`、`episode_id`�
 
 ```json
 {
-  "dataset_root": "G:/FutsalMOT_Dataset",
-  "ue_project_root": "G:/FutsalMOT_UE"
+  "dataset_root": "<DATASET_ROOT>",
+  "ue_project_root": "<UE_PROJECT_ROOT>"
 }
 ```
 

@@ -73,9 +73,12 @@ provenance/external_sources.lock.json  # 外部仓库锁定提交号
 ### 4. 如何复现
 
 ```powershell
-# 单一 task 配置：seed 与 dataset_root 都在 task 文件里，产出落 <dataset_root>/<episode_name>/
-uv run grf-ue task export configs/my_dataset.json
+# Config v3：seed 在 task，机器路径在 local config
+uv run grf-ue task export configs/episode_0001.json --local-config configs/local.machine.json
 ```
+
+Config v2 legacy 仍支持将 seed、`dataset_root` 和其他路径内联在 task 文件中；该模式仅用于
+历史配置兼容，不是当前推荐工作流。
 
 CLI `--seed` 优先级：**CLI > 配置文件 > 默认值**。运行时打印 root / GRF engine / policy。
 相同 seed 两次导出，`frames.jsonl` 的 SHA-256 完全一致（见集成测试）。
@@ -117,8 +120,8 @@ Config v3 的用户层配置只描述单 episode 的期望数据，不包含机�
 
 ```json
 {
-  "dataset_root": "G:/FutsalMOT_Dataset",
-  "ue_project_root": "G:/FutsalMOT_UE"
+  "dataset_root": "<DATASET_ROOT>",
+  "ue_project_root": "<UE_PROJECT_ROOT>"
 }
 ```
 
@@ -216,8 +219,8 @@ debug 图集/视频或重复的内部标签。这里的“不生成”不表示�
 清理必须显式作为独立步骤执行，默认命令是 dry-run：
 
 ```powershell
-uv run grf-ue task cleanup configs/my_dataset.json --dry-run
-uv run grf-ue task cleanup configs/my_dataset.json --apply
+uv run grf-ue task cleanup configs/episode_0001.json --local-config configs/local.machine.json --dry-run
+uv run grf-ue task cleanup configs/episode_0001.json --local-config configs/local.machine.json --apply
 ```
 
 public validation gate 仅在 `episode_manifest.json` 存在时应用。无论是否存在 manifest，缺少
@@ -333,8 +336,8 @@ manifest 与 checksum 文件全部使用 **POSIX 相对路径**，无盘符/反�
 
 ```powershell
 # 1) 可复现导出（seed 覆盖）
-# 单一 task 配置：seed 与 dataset_root 都在 task 文件里，产出落 <dataset_root>/<episode_name>/
-uv run grf-ue task export configs/my_dataset.json
+# Config v3：seed 在 task，机器路径在 local config
+uv run grf-ue task export configs/episode_0001.json --local-config configs/local.machine.json
 
 # 2) 构建 manifest
 uv run grf-ue build-manifest G:/FutsalMOT_Dataset --episode ep_s1001 --episode ep_s1002 --dataset-id futsalmot_v001 --checksum-profile final

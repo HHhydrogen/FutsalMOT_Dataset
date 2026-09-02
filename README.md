@@ -45,8 +45,8 @@ Config v3 task 只提交任务意图；本机路径使用未入库的 `configs/l
 
 ```json
 {
-  "dataset_root": "G:/FutsalMOT_Dataset",
-  "ue_project_root": "G:/FutsalMOT_UE"
+  "dataset_root": "<DATASET_ROOT>",
+  "ue_project_root": "<UE_PROJECT_ROOT>"
 }
 ```
 
@@ -92,7 +92,7 @@ $env:FUTSALMOT_LOCAL_CONFIG = "configs/local.machine.json"
 uv run grf-ue task export configs/episode_0001.json
 ```
 
-产出：`<dataset_root>/<episode_name>/{meta.json, frames.jsonl, provenance/}`。
+产出：`<dataset_root>/<episode_id>/{meta.json, frames.jsonl, provenance/}`。
 
 ### 4. UE 运行
 
@@ -104,7 +104,7 @@ uv run grf-ue task ue-command configs/episode_0001.json
 `task ue-command` 输出给 Unreal Editor 的 `run_task.py` 命令。配置了 Unreal MCP 时，
 应通过 `FutsalMOTTools` 在真实 Unreal Python 环境执行该命令；没有该工具时才需要在
 Unreal Editor Python Console 中执行（`py ".../ue/run_task.py" --resolved-task ...`）。
-MRQ 渲染异步，完成后写 `render_summary.json`；相机数据写入同一 `<dataset_root>/<episode_name>/`。
+MRQ 渲染异步，完成后写 `render_summary.json`；相机数据写入同一 `<dataset_root>/<episode_id>/`。
 
 ### 5. 后处理 + 审计
 
@@ -123,7 +123,7 @@ MOTS、Pose 和 `episode_manifest.json`，不会生成重复的 PNG mask、YOLO�
 ### 输出布局（自包含，全在 dataset_root）
 
 ```text
-<dataset_root>/<episode_name>/
+<dataset_root>/<episode_id>/
 ├── meta.json / frames.jsonl / provenance/     # 轨迹（task export）
 ├── render_summary.json
 ├── episode_manifest.json                      # 公开单 episode 清单
@@ -190,26 +190,29 @@ canonical public outputs，cleanup 负责在验证之后移除 allowlist 内的 
 ### 可选：active task
 
 ```powershell
-uv run grf-ue task activate configs/my_dataset.json
+uv run grf-ue task activate configs/episode_0001.json --local-config configs/local.machine.json
 uv run grf-ue task status            # 之后可省 task 参数
 uv run grf-ue task deactivate
 ```
 
 每次使用 active task 都会打印其来源，避免隐藏状态；显式 task 参数始终优先。
 
-## 单 config 结构
+## Config v2 legacy 结构
+
+以下内容只适用于 Config v2 legacy 兼容模式。Config v3 的当前工作流使用不含机器路径的
+task，加上未入库的 `configs/local.machine.json`；请以上文“快速开始”中的 v3 示例和命令为准。
 
 ```text
-configs/     # 每个数据集任务一个自包含 JSON（导出 + UE + 机器路径，入库）
+configs/     # v2 legacy task：导出 + UE + 机器路径内联
 ├── example.json                  # 完整参数模板（占位符路径）
 ├── README.md                     # 参数详解与填写指南
 └── pose_smoke_3frames_1cam.json  # 冒烟/demo：3 步 × 1 相机 = 3 帧，yolo_pose 已启用
 ```
 
-- 导出参数在 `export` 块（scenario / seed / num_steps / fps / 场地尺寸）。
-- UE 参数在 `ue` 块（actor_mapping / sequences / ball_rolling / annotation_export）。
-- 机器路径 `dataset_root` / `ue_project_root` 必填且直接入库；`repo_root` 自动探测。
-- 所有产出统一落 `<dataset_root>/<episode_name>/`（轨迹 + 相机数据自包含）。
+- v2 legacy 导出参数在 `export` 块（scenario / seed / num_steps / fps / 场地尺寸）。
+- v2 legacy UE 参数在 `ue` 块（actor_mapping / sequences / ball_rolling / annotation_export）。
+- v2 legacy 才要求机器路径 `dataset_root` / `ue_project_root` 内联；这不是当前 v3 工作流的要求。
+- v2 legacy 产出落 `<dataset_root>/<episode_name>/`；v3 产出落 `<dataset_root>/<episode_id>/`。
 - **每个字段的含义、默认值与一致性规则见 [`configs/README.md`](configs/README.md)**。
 
 ## CLI 总览
@@ -258,7 +261,7 @@ grf-ue
 
 ### 数据契约（与 P2 共享）
 
-`<dataset_root>/<episode_name>/` 含 `meta.json`（schema、时序、场地、实体、`randomness` 种子体系）与
+`<dataset_root>/<episode_id>/` 含 `meta.json`（schema、时序、场地、实体、`randomness` 种子体系）与
 `frames.jsonl`（每帧 `step/time_seconds/score/ball/players`），坐标为米 `[x,y,z]`。
 
 ## CV 标注链路（mask-primary）
@@ -278,7 +281,8 @@ grf-ue
 
 ### 开启
 
-在 task 配置的 `postprocess.yolo_pose` 块开启（默认关闭，不影响原 pipeline）：
+在 Config v2 legacy task 的 `postprocess.yolo_pose` 块开启（默认关闭，不影响原 pipeline）。
+Config v3 使用 `output.annotations` 控制 Pose：
 
 ```json
 "postprocess": {
@@ -315,16 +319,16 @@ bbox 复用 mask-primary bbox（与 YOLO det 完全一致）。
 ### 常用命令
 
 ```powershell
-uv run grf-ue task postprocess configs/my_dataset.json      # 含 annotate-pose + validate-pose
-uv run grf-ue validate-pose <dataset_root>/<episode_name>   # 单独校验
-uv run grf-ue pose-overlay <dataset_root>/<episode_name>/<camera> --frames 1,2,3  # 可视化验证
-uv run grf-ue annotate-pose <dataset_root>/<episode_name>   # 单独重跑 pose 标签
+uv run grf-ue task postprocess configs/episode_0001.json --local-config configs/local.machine.json  # v3
+uv run grf-ue validate-pose <dataset_root>/<episode_id>   # 单独校验
+uv run grf-ue pose-overlay <dataset_root>/<episode_id>/<camera> --frames 1,2,3  # 可视化验证
+uv run grf-ue annotate-pose <dataset_root>/<episode_id>   # 单独重跑 pose 标签
 ```
 
 ### 用 Ultralytics 训练
 
 ```bash
-yolo pose train model=yolo11n-pose.pt data=<dataset_root>/<episode_name>/futsal_pose.yaml
+yolo pose train model=yolo11n-pose.pt data=<dataset_root>/<episode_id>/futsal_pose.yaml
 ```
 
 > `futsal_pose.yaml` 的 `train`/`val` 指向 episode 内 `yolo_pose/` 的 `images/` 目录，
@@ -351,7 +355,7 @@ yolo pose train model=yolo11n-pose.pt data=<dataset_root>/<episode_name>/futsal_
 ```
 
 - pose 关节点颜色：绿=可见(v=2)、橙=遮挡(v=1)、红=无效(v=0)；连线为 COCO 骨架（16 条边）。
-- 也可手动全量执行：`uv run grf-ue debug <dataset_root>/<episode_name>`；
+- 也可手动全量执行：`uv run grf-ue debug <dataset_root>/<episode_id>`；
   单 camera 局部执行：`annotate-overlay`（bbox/彩色 mask）、`pose-overlay`（关节点）、
   `make-video`（img1 原图/bbox 视频）。
 - 参数说明见 [`configs/README.md`](configs/README.md) 的 `debug` 块。

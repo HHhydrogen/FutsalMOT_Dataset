@@ -26,24 +26,35 @@
 **推荐以 dataset task 为入口**。Config v3 task 不含机器路径；通过显式 local config
 解析后生成运行时文件。现有 v2 task 仍保留旧的内联机器路径兼容模式：
 
-```powershell
-uv sync                                   # 安装依赖（含 dev 组的 pytest）
-uv run grf-ue task validate configs/pose_smoke_3frames_1cam.json
-uv run grf-ue task resolve configs/pose_smoke_3frames_1cam.json
-uv run grf-ue task export configs/pose_smoke_3frames_1cam.json      # GRF 导出
-uv run grf-ue task postprocess configs/pose_smoke_3frames_1cam.json # 默认公开 JPG/MOT/MOTS/Pose
-uv run grf-ue task audit configs/pose_smoke_3frames_1cam.json
-uv run grf-ue task cleanup configs/pose_smoke_3frames_1cam.json --dry-run # 默认，不删除
-# 通过 public validation + render/pose/audit gates 后才可显式加 --apply
-uv run pytest                             # 运行全部测试
-uv run pytest -m grf_integration -q       # 真实 GRF seed 复现集成测试
-```
-
 Config v3 使用方式：
 
 ```powershell
 uv run grf-ue task validate configs/episode_0001.json --local-config configs/local.machine.json
 uv run grf-ue task resolve configs/episode_0001.json --local-config configs/local.machine.json
+uv run grf-ue task export configs/episode_0001.json --local-config configs/local.machine.json
+uv run grf-ue task postprocess configs/episode_0001.json --local-config configs/local.machine.json
+uv run grf-ue task audit configs/episode_0001.json --local-config configs/local.machine.json
+uv run grf-ue task cleanup configs/episode_0001.json --local-config configs/local.machine.json --dry-run
+```
+
+Config v2 legacy 兼容命令（现有 v2 task 可继续使用；不代表当前 v3 主工作流）：
+
+```powershell
+uv run grf-ue task validate configs/pose_smoke_3frames_1cam.json
+uv run grf-ue task resolve configs/pose_smoke_3frames_1cam.json
+uv run grf-ue task export configs/pose_smoke_3frames_1cam.json
+uv run grf-ue task postprocess configs/pose_smoke_3frames_1cam.json
+uv run grf-ue task audit configs/pose_smoke_3frames_1cam.json
+uv run grf-ue task cleanup configs/pose_smoke_3frames_1cam.json --dry-run
+# 通过 public validation + render/pose/audit gates 后才可显式加 --apply
+```
+
+其他常用命令：
+
+```powershell
+uv sync                                   # 安装依赖（含 dev 组的 pytest）
+uv run pytest                             # 运行全部测试
+uv run pytest -m grf_integration -q       # 真实 GRF seed 复现集成测试
 ```
 
 local config 模板为 `configs/local.machine.example.json`，真实文件

@@ -20,7 +20,8 @@
 
 ## Commit
 
-前序提交：`86d4095`、`ba1b2c0`。本次修正已提交：`b19f20a 修正Config v3文档入口`。
+前序提交：`86d4095`、`ba1b2c0`、`b19f20a`、`a6a2245`。
+本次修正提交：待提交，提交信息为 `修正Config v3文档兼容说明`。
 
 ## 测试与检查
 
@@ -36,5 +37,28 @@
 当前工作树在任务开始时已有未跟踪的 `.superpowers/sdd/` 资料和 `docs/superpowers/`
 目录，本任务未修改或清理这些既有内容。
 
-本次修正仅更新 `configs/README.md`、根目录 `README.md` 和本报告；未修改代码、
-`CLAUDE.md` 或公开 GT 文档。
+本次修正更新 `README.md`、`CLAUDE.md`、`configs/README.md`、
+`docs/REPRODUCIBILITY_AND_MANIFEST.md` 和本报告；未修改代码或公开 GT 契约。
+
+## 本轮验证原始输出
+
+`uv run pytest`
+
+```text
+============================= test session starts =============================
+platform win32 -- Python 3.9.25, pytest-8.4.2, pluggy-1.6.0
+collected 698 items / 7 deselected / 691 selected
+======================= 691 passed, 7 deselected, 61 warnings in 11.91s =======================
+```
+
+`git diff --check`
+
+```text
+warning: in the working copy of '.superpowers/sdd/2026-09-03-config-v3/task-5-report.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'CLAUDE.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'configs/README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'docs/REPRODUCIBILITY_AND_MANIFEST.md', LF will be replaced by CRLF the next time Git touches it
+```
+
+`git diff --check` 无空白错误；以上仅为 Git 的换行符提示。

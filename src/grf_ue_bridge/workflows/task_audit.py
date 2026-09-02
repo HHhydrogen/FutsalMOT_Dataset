@@ -655,7 +655,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
         result = validate_public_episode(dataset_dir)
         report.update({
-            "cameras": {name: {} for name in result.stats.get("sequence_names", [])}, "sync": {}, "mapping": {}, "calibration": {},
+            "cameras": result.stats.get("cameras", {}), "sync": {}, "mapping": {}, "calibration": {},
             "render_summary": {}, "pose_coco17": {}, "cross_camera_identity": {},
             "validation": {"level": "public", "exit_code": result.exit_code},
             "public_validation": result.stats,

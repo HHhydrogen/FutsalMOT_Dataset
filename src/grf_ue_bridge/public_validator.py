@@ -83,22 +83,32 @@ def _read_rle(value: Any, height: int, width: int) -> int:
 
 
 def _seqinfo(path: Path, errors: List[str]) -> Dict[str, str]:
-    parser = configparser.ConfigParser()
-    parser.optionxform = str
     try:
+        parser = configparser.ConfigParser()
+        parser.optionxform = str
         parser.read(path, encoding="utf-8")
+        if not parser.has_section("Sequence"):
+            errors.append(f"seqinfo.ini 缺少 [Sequence]: {path}")
+            return {}
+        return {key.lower(): value for key, value in parser.items("Sequence")}
     except (OSError, UnicodeDecodeError, configparser.Error, ValueError) as exc:
-        errors.append(f"seqinfo.ini 无法读取: {path}: {exc}")
+        errors.append(f"seqinfo.ini 读取失败: {path}: {exc}")
         return {}
-    if not parser.has_section("Sequence"):
-        errors.append(f"seqinfo.ini 缺少 [Sequence]: {path}")
-        return {}
-    return {key.lower(): value for key, value in parser.items("Sequence")}
 
 
-def _validate_sequence(cam: Path, manifest_seq: dict, manifest_dims: Tuple[int, int], errors: List[str]) -> Set[Tuple[int, int]]:
+def _validate_sequence(cam: Path, manifest_seq: dict, manifest_dims: Tuple[int, int], errors: List[str]) -> Tuple[Set[Tuple[int, int]], Dict[str, Any]]:
     name = cam.name
     width, height = manifest_dims
+    stats: Dict[str, Any] = {"camera_id": name, "ok": True, "render_rgb": 0,
+                             "render_mask_exr": 0, "img1_rgb": 0, "mask_png": 0,
+                             "annotations_frames": 0, "det_txt": 0, "seg_txt": 0,
+                             "gt_txt_lines": 0, "gt_mots_lines": 0, "gt_pose_records": 0,
+                             "img1_missing": [], "img1_dup": [], "zero_byte": 0}
+    frame_count = manifest_seq.get("frame_count")
+    valid_frame_count = isinstance(frame_count, int) and not isinstance(frame_count, bool) and frame_count > 0
+    if not valid_frame_count:
+        errors.append(f"{name}: sequence frame_count 必须为正整数")
+        frame_count = 0
     if width <= 0 or height <= 0:
         errors.append(f"{name}: episode dimensions 必须为正整数")
     for key, expected in (("width", width), ("height", height)):
@@ -144,8 +154,10 @@ def _validate_sequence(cam: Path, manifest_seq: dict, manifest_dims: Tuple[int, 
                 errors.append(f"{name}: JPG 文件名不是帧号: {path.name}")
                 continue
             frames.add(frame)
+            stats["img1_rgb"] += 1
             if path.stat().st_size == 0:
                 errors.append(f"{name}: 零字节 JPG: {path.name}")
+                stats["zero_byte"] += 1
             try:
                 with Image.open(path) as image:
                     image.verify()
@@ -153,19 +165,26 @@ def _validate_sequence(cam: Path, manifest_seq: dict, manifest_dims: Tuple[int, 
                         errors.append(f"{name}: {path.name} 尺寸 {image.size} 不匹配")
             except (OSError, ValueError) as exc:
                 errors.append(f"{name}: JPG 不可读 {path.name}: {exc}")
-        expected_frames = set(range(1, manifest_seq.get("frame_count", 0) + 1))
+        expected_frames = set(range(1, frame_count + 1))
         if frames != expected_frames:
             errors.append(f"{name}: JPG 帧不连续或缺失（实际 {sorted(frames)}，期望 {sorted(expected_frames)}）")
 
-    frame_count = manifest_seq.get("frame_count", 0)
-    if not isinstance(frame_count, int) or isinstance(frame_count, bool) or frame_count <= 0:
-        frame_count = 0
-    mot_set = _validate_mot(cam / "gt" / "gt.txt", name, width, height, frame_count, errors)
-    mots_set = _validate_mots(cam / "gt" / "gt_mots.txt", name, width, height, frame_count, errors)
-    pose_set = _validate_pose(cam / "gt" / "gt_pose.json", name, width, height, frame_count, errors)
+    mot_path, mots_path, pose_path = cam / "gt" / "gt.txt", cam / "gt" / "gt_mots.txt", cam / "gt" / "gt_pose.json"
+    mot_set = _validate_mot(mot_path, name, width, height, frame_count, errors)
+    mots_set = _validate_mots(mots_path, name, width, height, frame_count, errors)
+    pose_set = _validate_pose(pose_path, name, width, height, frame_count, errors)
+    stats["gt_txt_lines"] = len(mot_set)
+    stats["gt_mots_lines"] = len(mots_set)
+    if pose_path.exists():
+        try:
+            records = json.loads(pose_path.read_text(encoding="utf-8"))
+            stats["gt_pose_records"] = len(records) if isinstance(records, list) else 0
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+            pass
+    stats["annotations_frames"] = max((frame for frame, _ in mot_set), default=0)
     if not (mot_set == mots_set == pose_set):
         errors.append(f"{name}: MOT、MOTS、Pose 的 (frame_id, track_id) 集合不一致")
-    return mot_set
+    return mot_set, stats
 
 
 def _validate_mot(path: Path, name: str, width: int, height: int, frame_count: int, errors: List[str]) -> Set[Tuple[int, int]]:
@@ -292,9 +311,11 @@ def validate_public_episode(episode_dir: Path) -> ValidationResult:
         if any(isinstance(dimensions[key], bool) or not isinstance(dimensions[key], int) for key in ("width", "height")):
             raise ValueError("dimensions 必须为整数")
         dims = (dimensions["width"], dimensions["height"])
+        if dims[0] <= 0 or dims[1] <= 0:
+            raise ValueError("dimensions 必须为正整数")
     except (KeyError, TypeError, ValueError):
         dims = (0, 0)
-        errors.append("manifest dimensions 非法")
+        errors.append("manifest 尺寸 dimensions 非法")
     root_frame_count = manifest.get("frame_count")
     if isinstance(root_frame_count, bool) or not isinstance(root_frame_count, int) or root_frame_count <= 0:
         errors.append("manifest frame_count 必须为正整数")
@@ -319,8 +340,10 @@ def validate_public_episode(episode_dir: Path) -> ValidationResult:
         if not cam.is_dir():
             errors.append(f"manifest sequence 目录不存在: {cam}")
             continue
-        all_sets.append(_validate_sequence(cam, sequence, dims, errors))
+        _, sequence_stats = _validate_sequence(cam, sequence, dims, errors)
+        all_sets.append(sequence_stats)
     if len(names) != len(set(names)):
         errors.append("manifest sequences 含重复 name")
-    stats = {"sequences": len(sequences), "frames": sum(len(values) for values in all_sets), "sequence_names": names}
+    stats = {"sequences": len(sequences), "frames": sum(value.get("annotations_frames", 0) for value in all_sets),
+             "sequence_names": names, "cameras": {value["camera_id"]: value for value in all_sets}}
     return ValidationResult(not errors, errors, stats)

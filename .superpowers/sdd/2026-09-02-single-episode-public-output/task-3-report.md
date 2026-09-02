@@ -45,3 +45,31 @@
 `uv run pytest`
 
 结果：`600 passed, 7 deselected in 15.69s`
+
+## Task 3 Review 第二轮修复
+
+- 在使用前校验 root/sequence `frame_count` 与 root `dimensions` 的类型和正值；无有效 sequence 时也报告尺寸错误。
+- 将 seqinfo 读取、插值和字段展开统一包在异常处理内，保证损坏 manifest、seqinfo、MOT/MOTS 文本始终返回 `ValidationResult`。
+- 公共 audit 现在把每个 sequence 的 JPG、MOT、MOTS、Pose 等实际统计传入报告，Markdown 显示非零 canonical 数量。
+- 新增 malformed count/dimensions、seqinfo 插值异常和 public audit 实际统计测试。
+
+修复后 focused 命令：
+
+`uv run pytest tests/test_public_validator.py tests/test_audit_fixes.py tests/test_annotation_validator.py -q`
+
+结果：
+
+```text
+.........................................                                [100%]
+41 passed in 4.16s
+```
+
+修复后 full 命令：
+
+`uv run pytest`
+
+结果：
+
+```text
+============================= 603 passed, 7 deselected in 15.26s =============================
+```

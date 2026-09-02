@@ -188,3 +188,45 @@ def test_public_task_audit_reports_validated_camera_count(tmp_path):
     report = json.loads((tmp_path / "audit" / "soak_audit_report.json").read_text(encoding="utf-8"))
 
     assert list(report["cameras"]) == ["Cam_01"]
+
+
+def test_public_validator_handles_malformed_counts_without_type_error(tmp_path):
+    _make_public_episode(tmp_path)
+    manifest_path = tmp_path / "episode_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["frame_count"] = "two"
+    manifest["sequences"][0]["frame_count"] = "two"
+    manifest["dimensions"] = {"width": 0, "height": -1}
+    manifest["sequences"] = []
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    result = validate_public_episode(tmp_path)
+
+    assert not result.ok
+    assert any("frame_count" in error for error in result.errors)
+    assert any("尺寸" in error for error in result.errors)
+
+
+def test_public_validator_handles_seqinfo_interpolation_error(tmp_path):
+    _make_public_episode(tmp_path)
+    (tmp_path / "Cam_01" / "seqinfo.ini").write_text(
+        "[Sequence]\nname=%(missing)s\nimDir=img1\nframeRate=30\nseqLength=2\nimWidth=4\nimHeight=3\nimExt=.jpg\n",
+        encoding="utf-8",
+    )
+
+    result = validate_public_episode(tmp_path)
+
+    assert not result.ok
+    assert any("seqinfo" in error for error in result.errors)
+
+
+def test_public_audit_report_contains_actual_public_stats(tmp_path):
+    _make_public_episode(tmp_path)
+
+    assert audit_main([
+        "--input", str(tmp_path), "--expected-cameras", "1",
+        "--expected-frames-per-camera", "2", "--validation-level", "none",
+    ]) == 0
+    report_text = (tmp_path / "audit" / "soak_audit_report.md").read_text(encoding="utf-8")
+
+    assert "| Cam_01 | 0 | 0 | 2 | 0 | 2 | 0 | 0 | 4 |" in report_text

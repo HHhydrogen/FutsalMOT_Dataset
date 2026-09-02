@@ -168,6 +168,64 @@ tests\test_validator.py .............                                    [100%]
 
 本次修复将 `TaskConfig` union 放到两个模型均已定义之后，并在 loader 中直接导入该 alias，使 `typing.get_type_hints(loader.load_task_config)` 在 Python 3.9 运行时可解析。
 
+## Strict Version 修复验证
+
+```text
+uv run pytest tests/test_task_config.py -q
+......................................................                   [100%]
+54 passed in 0.18s
+```
+
+```text
+uv run pytest
+============================= test session starts =============================
+platform win32 -- Python 3.9.25, pytest-8.4.2, pluggy-1.6.0
+rootdir: C:\Users\20113\AppData\Local\Temp\opencode\futsalmot-single-episode-public-output
+configfile: pyproject.toml
+collected 666 items / 7 deselected / 659 selected
+tests\test_annotation_utils.py ................                          [  2%]
+tests\test_annotation_validator.py ........                              [  3%]
+tests\test_audit_fixes.py ....................                           [  6%]
+tests\test_camera_projection.py .......................                  [ 10%]
+tests\test_coordinate_transform.py .................                     [ 12%]
+tests\test_cryptomatte.py ....                                           [ 13%]
+tests\test_dataset_export.py ..........                                  [ 14%]
+tests\test_dataset_manifest.py ....................                      [ 17%]
+tests\test_dataset_regression.py .........                               [ 19%]
+tests\test_debug.py .........                                            [ 20%]
+tests\test_entity_roles.py .........                                     [ 22%]
+tests\test_golden_fixture.py ......                                      [ 22%]
+tests\test_import_grf_episode.py .....                                   [ 23%]
+tests\test_instance_mask.py ............................................ [ 30%]
+..................                                                       [ 33%]
+tests\test_interpolate.py .....................                          [ 36%]
+tests\test_jpeg_contract.py ........                                     [ 37%]
+tests\test_mask_annotator.py ...........................                 [ 41%]
+tests\test_motion_quality.py ....                                        [ 42%]
+tests\test_perf_optimizations.py ...................................     [ 47%]
+tests\test_player_motion.py ............................................ [ 54%]
+.............................                                            [ 58%]
+tests\test_pose_annotator.py .....................                       [ 61%]
+tests\test_pose_bones.py ...............                                 [ 64%]
+tests\test_pose_validator.py ...........                                 [ 65%]
+tests\test_public_episode.py ...................                         [ 68%]
+tests\test_public_validator.py ..............                            [ 70%]
+tests\test_render_export.py ...........................                  [ 74%]
+tests\test_render_preset.py ..................................           [ 79%]
+tests\test_repository_hygiene.py .........                               [ 81%]
+tests\test_schema.py ...........                                         [ 83%]
+tests\test_seeds.py ................                                     [ 85%]
+tests\test_task_cli.py ...........                                       [ 87%]
+tests\test_task_config.py .............................................. [ 94%]
+........                                                                 [ 95%]
+tests\test_task_resolver.py .............                                [ 97%]
+tests\test_ue_resolved_task.py .....                                     [ 98%]
+tests\test_validator.py .............                                    [100%]
+===================== 659 passed, 7 deselected in 11.49s =====================
+```
+
+本次修复使用 `StrictInt` 和字段校验，拒绝 JSON 中的 `3.0` 及其他非严格整数值，同时保留有效整数 `3` 和 v2 配置兼容性。
+
 ## 关注事项
 
 - v3 loader 已支持 schema 分派，但 resolver/CLI 尚未扩展，这是后续任务范围。

@@ -181,6 +181,12 @@ class TestTaskConfigV3:
         task = loader.load_task_config(tf)
         assert isinstance(task, TaskConfigV3)
 
+    def test_v3_rejects_float_version(self):
+        data = _v3_task(version=3.0)
+        with pytest.raises(ValidationError) as error:
+            TaskConfigV3(**data)
+        assert error.value.errors()[0]["loc"] == ("version",)
+
     @pytest.mark.parametrize(
         "changes",
         [{"schema": None}, {"schema": "other"}, {"version": None}, {"version": 2}],

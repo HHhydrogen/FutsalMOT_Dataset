@@ -10,7 +10,7 @@ import re
 from pathlib import Path
 from typing import Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, StrictInt, field_validator, model_validator
 
 from .paths import RESOLVED_TASK_SCHEMA, TASK_SCHEMA, TASK_V3_SCHEMA
 
@@ -51,7 +51,7 @@ class TaskConfigV3(BaseModel):
     """Config v3 单回合任务。"""
 
     schema_: Literal["futsalmot_task"] = Field(..., alias="schema")
-    version: Literal[3] = Field(...)
+    version: StrictInt = Field(...)
     episode_id: str = Field(..., pattern=r"^[A-Za-z0-9_-]+$")
     simulation: V3SimulationConfig
     cameras: Dict[str, str]
@@ -59,6 +59,13 @@ class TaskConfigV3(BaseModel):
     debug: bool = False
 
     model_config = {"populate_by_name": True, "extra": "forbid"}
+
+    @field_validator("version")
+    @classmethod
+    def validate_version(cls, value: int) -> int:
+        if value != 3:
+            raise ValueError("version 必须为 3")
+        return value
 
     @model_validator(mode="after")
     def validate_cameras(self):

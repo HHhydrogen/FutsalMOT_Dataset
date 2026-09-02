@@ -21,7 +21,8 @@ def _public_sequence_configs(resolved: m.ResolvedTask, dataset: Path) -> list[di
             camera_name = item.get("camera_actor") or item.get("camera") or item.get("name")
             camera = dataset / str(camera_name)
         configs.append({
-            "sequence_name": item.get("sequence_name") or item.get("name") or Path(camera).name,
+            # 公开 validator 按 manifest name 定位相机目录，必须使用实际目录名。
+            "sequence_name": Path(camera).name,
             "camera_dir": Path(camera),
             "frame_rate": item.get("frame_rate") or item.get("fps") or resolved.export_profile.get("playback_fps", 30),
         })

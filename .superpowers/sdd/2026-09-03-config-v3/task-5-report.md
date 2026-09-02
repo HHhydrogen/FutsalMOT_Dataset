@@ -2,8 +2,8 @@
 
 ## 状态
 
-已完成 Config v3 文档和最终验证。仅修改了根目录 `README.md`、`CLAUDE.md`、
-`docs/REPRODUCIBILITY_AND_MANIFEST.md`，并生成本报告；未修改代码或公开 GT 契约。
+已完成 Config v3 文档修正和最终验证。更新了 `configs/README.md`、根目录 `README.md`，
+并更新本报告；未修改代码或公开 GT 契约。
 
 文档已覆盖：
 
@@ -16,10 +16,11 @@
 - resolver 派生的旧运行时字段和完整 `task resolve` 摘要；
 - v2 deprecated warning 与兼容行为；
 - unchanged public GT contract，以及当前不提供 batch/split/assembler。
+- Config v3 为 `configs/` 推荐工作流；`configs/example.json` 和 inline-path 说明明确标为 v2 legacy。
 
 ## Commit
 
-已提交：`86d4095 补充Config v3配置文档与验证报告`。
+前序提交：`86d4095`、`ba1b2c0`。本次修正待提交，拟使用简体中文提交信息。
 
 ## 测试与检查
 
@@ -34,3 +35,6 @@
 
 当前工作树在任务开始时已有未跟踪的 `.superpowers/sdd/` 资料和 `docs/superpowers/`
 目录，本任务未修改或清理这些既有内容。
+
+本次修正仅更新 `configs/README.md`、根目录 `README.md` 和本报告；未修改代码、
+`CLAUDE.md` 或公开 GT 文档。

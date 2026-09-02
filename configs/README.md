@@ -1,28 +1,80 @@
 # configs/ — 数据集任务配置（单 config）参数参考
 
-`configs/` 下每个 `.json` 文件描述**一次完整的数据集（单集）输出任务**：导出参数、
-UE 相机/渲染参数、机器路径全部内联在一个文件里，直接入库。解析器（resolver）
-据此生成 resolved task（`.futsalmot/runtime/`，git 忽略）供 P1 与 UE 共用。
+`configs/` 下的 Config v3 task 文件描述**一次单 episode 输出任务**，只包含任务意图，
+不包含机器路径。机器路径由未入库的 local config 提供，解析器（resolver）据此生成
+resolved task（`.futsalmot/runtime/`，git 忽略）供 P1 与 UE 共用。
 
-- 完整模板：`configs/example.json`
-- 现有配置：`configs/pose_smoke_3frames_1cam.json`（冒烟/demo：3 步 × 1 相机，yolo_pose 已启用，含 anti-teleport 参数）
+- Config v3 示例：见下方完整示例（可保存为 `configs/episode_0001.json`）
+- 本机配置模板：`configs/local.machine.example.json`
+- 现有 v2 配置：`configs/pose_smoke_3frames_1cam.json`（兼容测试/demo，机器路径内联）
+
+## Config v3（推荐）
+
+Config v3 的用户层只允许任务字段：`schema`/`version`、`episode_id`、`simulation`、
+`cameras`、`output` 和 `debug`。其中 FPS、分辨率、相机映射、annotations、classes 各只有
+一个来源，不要再复制到旧版 `export`、`ue`、`postprocess` 或 `audit` 字段。
+
+完整示例：
+
+```json
+{
+  "schema": "futsalmot_task",
+  "version": 3,
+  "episode_id": "0001",
+  "simulation": {"scenario": "5_vs_5", "seed": 42, "steps": 300},
+  "cameras": {"C01": "CineCam_01", "C02": "CineCam_02"},
+  "output": {
+    "fps": 30,
+    "resolution": [1920, 1080],
+    "annotations": ["mot", "pose", "mots"],
+    "classes": ["player", "ball"]
+  },
+  "debug": false
+}
+```
+
+本机配置模板 `configs/local.machine.example.json`：
+
+```json
+{
+  "dataset_root": "G:/FutsalMOT_Dataset",
+  "ue_project_root": "G:/FutsalMOT_UE"
+}
+```
+
+将模板复制为 `configs/local.machine.json` 后替换真实路径。真实文件已被 `.gitignore`
+忽略，不得提交；不会自动搜索 task 同目录或其他目录的 local config。local config 只能包含
+`dataset_root`、`ue_project_root` 以及可选环境元数据，不能包含 episode、camera、FPS、
+分辨率、annotations、classes、debug 或其他任务字段。
 
 ## 快速上手（新建一个数据集任务）
 
-1. 复制模板：`Copy-Item configs/example.json configs/<task_id>.json`
-2. 编辑 `configs/<task_id>.json`：替换 `<DATASET_ROOT>` / `<UE_PROJECT_ROOT>` 为真实机器路径，
-   修改 `task_id` / `episode_name`，再按需调导出、UE、后处理参数。
+1. 创建 `configs/episode_0001.json`：按上方 Config v3 示例填写任务字段，不写机器路径。
+2. 创建本机配置：`Copy-Item configs/local.machine.example.json configs/local.machine.json`，
+   再替换其中的真实 `dataset_root` / `ue_project_root`。
 3. 校验并解析：
 
 ```powershell
-uv run grf-ue task validate configs/<task_id>.json
-uv run grf-ue task resolve configs/<task_id>.json
+uv run grf-ue task validate configs/episode_0001.json --local-config configs/local.machine.json
+uv run grf-ue task resolve configs/episode_0001.json --local-config configs/local.machine.json
 ```
+
+也可以省略 `--local-config`，改用 `FUTSALMOT_LOCAL_CONFIG` 环境变量。固定优先级为
+`--local-config` > `FUTSALMOT_LOCAL_CONFIG` > 缺少配置时报错。
 
 4. 后续：`grf-ue task export` → `grf-ue task ue-command`（UE Console 运行）→
    `grf-ue task postprocess` / `audit`（见根 README）。
 
-## 顶层字段
+## Config v2（legacy 兼容）
+
+`configs/example.json` 和已有 `futsalmot_dataset_task` version 2 文件仅用于 Config v2
+legacy 兼容，不是推荐的 Config v3 工作流。v2 task 把 `dataset_root`、`ue_project_root`、
+`export`、`ue`、`postprocess`、`audit` 等字段（包括机器路径）内联在同一文件中；复制
+`configs/example.json`、替换 `<DATASET_ROOT>` / `<UE_PROJECT_ROOT>` 的做法只适用于 v2。
+v2 仍可直接使用，不强制 local config，但会输出 deprecated warning，建议迁移到 Config v3
+并通过 `--local-config` 或 `FUTSALMOT_LOCAL_CONFIG` 提供本机路径。
+
+## Config v2 顶层字段（legacy 兼容）
 
 | 字段 | 类型 | 必填 | 默认 | 说明 |
 |------|------|------|------|------|
@@ -37,9 +89,10 @@ uv run grf-ue task resolve configs/<task_id>.json
 | `postprocess` | object | 否 | 默认值 | 后处理参数（见下） |
 | `audit` | object | 否 | 默认值 | 审计预期（见下） |
 
-> `repo_root` 无需配置：自动按 `pyproject.toml` 向上探测。
+> 本节只描述 Config v2 legacy 字段，不是 Config v3 推荐工作流。`repo_root` 无需配置：自动按
+> `pyproject.toml` 向上探测。
 
-## `export` 块（GRF 导出）
+## Config v2 `export` 块（legacy 兼容）
 
 | 字段 | 类型 | 默认 | 说明 |
 |------|------|------|------|
@@ -74,7 +127,7 @@ uv run grf-ue task resolve configs/<task_id>.json
 
 > 两参数都在 `export` 块，写入单 config 入库；`null` = 沿用场景默认。
 
-## `ue` 块（UE 相机 / Sequence / 渲染）
+## Config v2 `ue` 块（legacy 兼容）
 
 | 字段 | 类型 | 默认 | 说明 |
 |------|------|------|------|
@@ -145,7 +198,7 @@ uv run grf-ue task resolve configs/<task_id>.json
 | `max_polygon_points` | int | `64` | 单多边形最大点数 |
 | `post_process_material` | null | `null` | stencil→颜色材质（本 UE 5.8 实测不可用，保持 `null`） |
 
-## `postprocess` 块（后处理：cryptomatte → annotate → validate）
+## Config v2 `postprocess` 块（legacy 兼容）
 
 | 字段 | 类型 | 默认 | 说明 |
 |------|------|------|------|
@@ -197,16 +250,16 @@ uv run grf-ue task resolve configs/<task_id>.json
 也可手动：`grf-ue debug <annotation_dir>`（对全部 camera）；单 camera 用
 `grf-ue annotate-overlay` / `grf-ue pose-overlay` / `grf-ue make-video`。
 
-## `audit` 块（完整性审计预期）
+## Config v2 `audit` 块（legacy 兼容）
 
 | 字段 | 类型 | 默认 | 说明 |
 |------|------|------|------|
 | `expected_cameras` | int | `4` | 期望相机数（须等于 `ue.annotation_export.cameras` 数量） |
 | `expected_frames_per_camera` | int | `300` | 每相机期望标注帧数（须等于「导出帧数」） |
 
-## 一致性校验（`grf-ue task validate`）
+## Config v2 一致性校验（`grf-ue task validate`）
 
 - `ue.annotation_export.cameras` 数量 == `audit.expected_cameras`
 - 导出帧数（`num_steps × max(1, target_fps/10)`）== `audit.expected_frames_per_camera`
-- `dataset_root` / `ue_project_root` 必填（绝对路径）
+- `dataset_root` / `ue_project_root` 必填（绝对路径，v2 legacy inline-path 规则）
 - 产出目录 `<dataset_root>/<episode_name>/` 由 `episode_name` 决定（UE 端按 episode_id 定位）

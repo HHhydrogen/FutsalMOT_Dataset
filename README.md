@@ -15,9 +15,9 @@ GRF 轨迹（P1, .venv）──→ JSONL ──→ UE Level Sequence + 渲染（
 
 ## 快速开始（task 工作流）
 
-> **单 config（唯一用法）**：一个 task 文件包含全部参数与机器路径（真实路径入库），
-> 所有产出（轨迹 + 相机数据）都落到 `<dataset_root>/<episode_name>/` 下**自包含**，
-> 代码根 `outputs/` 不再产生新数据。
+> **Config v3（推荐）**：task 文件只包含任务参数，不包含机器路径；本机路径由
+> `configs/local.machine.json` 提供。所有产出（轨迹 + 相机数据）都落到
+> `<dataset_root>/<episode_id>/` 下**自包含**，代码根 `outputs/` 不再产生新数据。
 
 ### 1. 使用或新建单 config
 
@@ -53,9 +53,10 @@ Config v3 task 只提交任务意图；本机路径使用未入库的 `configs/l
 将其复制为 `configs/local.machine.json` 并替换为真实路径。真实 local config 已被
 `.gitignore` 忽略，不得提交；它只能包含本机路径和可选环境元数据，不能加入任务字段。
 
-新 episode：复制 `configs/example.json` 到新文件名，替换占位符并改参数。
-**每个参数的说明与填写指南见 [`configs/README.md`](configs/README.md)**（含 `example.json`
-完整模板、各字段默认值与一致性校验规则）。
+新 episode：按上面的 Config v3 示例创建 task 文件，并使用
+`configs/local.machine.example.json` 创建未入库的 `configs/local.machine.json`。
+**每个参数的说明与填写指南见 [`configs/README.md`](configs/README.md)**。
+`configs/example.json` 是 Config v2 legacy 兼容模板，不是推荐的 v3 工作流。
 
 ### 2. 验证并解析
 
@@ -87,7 +88,8 @@ classes 决定 `include_ball`；audit 期望值由 camera 数和帧数派生。v
 ### 3. 导出轨迹（产出到 dataset_root）
 
 ```powershell
-uv run grf-ue task export configs/my_dataset.json
+$env:FUTSALMOT_LOCAL_CONFIG = "configs/local.machine.json"
+uv run grf-ue task export configs/episode_0001.json
 ```
 
 产出：`<dataset_root>/<episode_name>/{meta.json, frames.jsonl, provenance/}`。
@@ -95,7 +97,8 @@ uv run grf-ue task export configs/my_dataset.json
 ### 4. UE 运行
 
 ```powershell
-uv run grf-ue task ue-command configs/my_dataset.json
+$env:FUTSALMOT_LOCAL_CONFIG = "configs/local.machine.json"
+uv run grf-ue task ue-command configs/episode_0001.json
 ```
 
 `task ue-command` 输出给 Unreal Editor 的 `run_task.py` 命令。配置了 Unreal MCP 时，
@@ -106,9 +109,10 @@ MRQ 渲染异步，完成后写 `render_summary.json`；相机数据写入同一
 ### 5. 后处理 + 审计
 
 ```powershell
-uv run grf-ue task postprocess configs/my_dataset.json
-uv run grf-ue task audit configs/my_dataset.json
-uv run grf-ue task status configs/my_dataset.json
+$env:FUTSALMOT_LOCAL_CONFIG = "configs/local.machine.json"
+uv run grf-ue task postprocess configs/episode_0001.json
+uv run grf-ue task audit configs/episode_0001.json
+uv run grf-ue task status configs/episode_0001.json
 ```
 
 `task postprocess` 的默认模式是公开输出模式：在一次干净运行中只写规范的 JPG、MOT、
@@ -163,8 +167,9 @@ debug / internal 层，不应混入公开目录契约。当前实现面向单 ep
 公开后处理和清理是两个独立步骤。清理命令默认只做 dry-run：
 
 ```powershell
-uv run grf-ue task cleanup configs/my_dataset.json --dry-run
-uv run grf-ue task cleanup configs/my_dataset.json --apply
+$env:FUTSALMOT_LOCAL_CONFIG = "configs/local.machine.json"
+uv run grf-ue task cleanup configs/episode_0001.json --dry-run
+uv run grf-ue task cleanup configs/episode_0001.json --apply
 ```
 
 `--apply` 的 public validation 仅在 `episode_manifest.json` 存在时应用。无论是否存在

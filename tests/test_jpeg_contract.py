@@ -2,6 +2,7 @@ import json
 from types import SimpleNamespace
 from pathlib import Path
 
+import pytest
 from PIL import Image
 
 from grf_ue_bridge.config.models import ResolvedTask
@@ -246,5 +247,72 @@ def test_cleanup_blocks_v3_pose_without_pose_session(tmp_path):
     result = apply_cleanup(tmp_path, [cam.name], resolved=resolved)
 
     assert not result["ok"]
+    assert any("pose_session" in problem for problem in result["gate_problems"])
+    assert (cam / "render" / "000000.jpg").exists()
+
+
+def _write_real_v3_cleanup_fixture(root: Path, annotations):
+    cam = _write_real_public_fixture(root)
+    manifest_path = root / "episode_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["sequences"][0]["modalities"] = annotations
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    if "mots" not in annotations:
+        (cam / "gt" / "gt_mots.txt").unlink()
+    if "pose" not in annotations:
+        (cam / "gt" / "gt_pose.json").unlink()
+        (root / "pose_session.json").unlink()
+    (cam / "render").mkdir()
+    (cam / "render" / "000000.jpg").write_bytes(b"render")
+    resolved = ResolvedTask(
+        task_id="task", episode_name="episode_01", source_task_file="task.json",
+        repo_root=str(root), ue_project_root=str(root), dataset_root=str(root),
+        trajectory_output=str(root / "trajectory"), dataset_episode_dir=str(root),
+        config_v3={"annotations": annotations, "classes": ["player", "ball"]},
+    )
+    return cam, resolved
+
+
+@pytest.mark.parametrize("annotations", [["mot"], ["mot", "mots"]])
+def test_cleanup_real_v3_public_outputs_passes_without_pose_session(
+    tmp_path, monkeypatch, annotations
+):
+    cam, resolved = _write_real_v3_cleanup_fixture(tmp_path, annotations)
+    from grf_ue_bridge import public_validator
+
+    calls = []
+    real_validator = public_validator.validate_public_episode
+
+    def validate_with_record(episode_dir, resolved_task=None):
+        calls.append(resolved_task)
+        return real_validator(episode_dir, resolved_task=resolved_task)
+
+    monkeypatch.setattr(public_validator, "validate_public_episode", validate_with_record)
+    result = apply_cleanup(tmp_path, [cam.name], resolved=resolved)
+
+    assert result["ok"]
+    assert calls == [resolved]
+    assert not (cam / "render").exists()
+    assert not (tmp_path / "pose_session.json").exists()
+
+
+def test_cleanup_real_v3_pose_public_output_blocks_without_pose_session(tmp_path, monkeypatch):
+    cam, resolved = _write_real_v3_cleanup_fixture(tmp_path, ["pose"])
+    (tmp_path / "pose_session.json").unlink()
+    from grf_ue_bridge import public_validator
+
+    calls = []
+    real_validator = public_validator.validate_public_episode
+
+    def validate_with_record(episode_dir, resolved_task=None):
+        calls.append(resolved_task)
+        return real_validator(episode_dir, resolved_task=resolved_task)
+
+    # Public GT validation also sees the requested Pose modality and fails first.
+    monkeypatch.setattr(public_validator, "validate_public_episode", validate_with_record)
+    result = apply_cleanup(tmp_path, [cam.name], resolved=resolved)
+
+    assert not result["ok"]
+    assert calls == [resolved]
     assert any("pose_session" in problem for problem in result["gate_problems"])
     assert (cam / "render" / "000000.jpg").exists()

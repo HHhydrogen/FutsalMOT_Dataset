@@ -4,15 +4,23 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
+import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
 
 import numpy as np
 
-from annotation_utils import entity_id_to_mask_id
-from camera_projection import CameraExtrinsics, CameraIntrinsics, project_world_to_image
-from dataset_export import write_json_atomic, write_text_atomic
+_UE_DIR = Path(__file__).resolve().parents[2] / "ue"
+if str(_UE_DIR) not in sys.path:
+    sys.path.insert(0, str(_UE_DIR))
+
+from annotation_utils import entity_id_to_mask_id  # noqa: E402
+from camera_projection import CameraExtrinsics, CameraIntrinsics, project_world_to_image  # noqa: E402
+from dataset_export import write_json_atomic, write_text_atomic  # noqa: E402
+
+PUBLIC_ENTITY_IDS = {"L{}".format(i) for i in range(5)} | {"R{}".format(i) for i in range(5)} | {"BALL"}
 
 
 def encode_coco_rle(mask: np.ndarray) -> dict:
@@ -57,8 +65,14 @@ def decode_coco_rle(rle: dict, height: int, width: int) -> np.ndarray:
         raise ValueError("RLE counts 必须是压缩字符串")
     runs: List[int] = []
     value = shift = 0
-    for char in counts.encode("ascii"):
+    try:
+        encoded_counts = counts.encode("ascii")
+    except UnicodeEncodeError as exc:
+        raise ValueError("RLE counts 必须是 ASCII 压缩字符串") from exc
+    for char in encoded_counts:
         byte = char - 48
+        if byte < 0 or byte > 63:
+            raise ValueError("RLE counts 含非法字符")
         value |= (byte & 0x1F) << shift
         if byte & 0x20:
             shift += 5
@@ -118,13 +132,27 @@ def _load_camera(camera_dir: Path) -> Tuple[int, int, Optional[CameraIntrinsics]
     return width, height, camera, extrinsics
 
 
-def _load_mask_for_frame(camera_dir: Path, frame_id: int, mapping: dict) -> np.ndarray:
+def _load_mask_for_frame(camera_dir: Path, frame_id: int, mapping: dict,
+                         annotation: Optional[dict] = None,
+                         timing: Optional[dict] = None) -> np.ndarray:
     """从 Cryptomatte EXR 解出公开 mask；测试可替换此函数。"""
     from .cryptomatte import build_mask, load_cryptomatte
-    candidates = sorted((camera_dir / "render_mask").glob("*.exr"))
-    if not candidates:
+    rendered = {}
+    for path in (camera_dir / "render_mask").glob("*.exr"):
+        digits = "".join(ch for ch in path.stem if ch.isdigit())
+        if digits:
+            rendered[int(digits)] = path
+    if not rendered:
         raise FileNotFoundError("缺少 render_mask Cryptomatte EXR")
-    chosen = candidates[min(frame_id - 1, len(candidates) - 1)]
+    annotation = annotation or {}
+    timing = timing or {}
+    source_step = int(annotation.get("source_step", frame_id - 1))
+    source_seconds = float(timing.get("source_step_seconds", annotation.get("source_step_seconds", 0.1)))
+    playback_fps = int(timing.get("playback_fps", annotation.get("playback_fps", 30)))
+    render_number = int(round(source_step * source_seconds * playback_fps))
+    chosen = rendered.get(render_number)
+    if chosen is None:
+        raise FileNotFoundError("缺少 annotation frame {} 对应的 render_mask 帧 {}".format(frame_id, render_number))
     manifest, ids = load_cryptomatte(chosen)
     return build_mask(manifest, ids, mapping)[0]
 
@@ -151,7 +179,8 @@ def _pose_keypoints(obj: Optional[dict], camera, extrinsics) -> Optional[List[fl
                 uv = project_world_to_image(tuple(float(v) for v in point), camera, extrinsics)
             except (TypeError, ValueError, ZeroDivisionError):
                 uv = None
-        if uv is None or not all(math.isfinite(float(v)) for v in uv):
+        if (uv is None or not all(math.isfinite(float(v)) for v in uv) or
+                not (0.0 <= float(uv[0]) < camera.width and 0.0 <= float(uv[1]) < camera.height)):
             result.extend([0.0, 0.0, 0])
         else:
             visibility = 1 if index < len(occluded) and occluded[index] else 2
@@ -182,17 +211,33 @@ def _write_jpegs(camera_dir: Path, quality: int) -> None:
             continue
         target = source.with_suffix(".jpg")
         if source.suffix.lower() != ".jpg":
-            Image.open(source).convert("RGB").save(target, quality=int(quality), optimize=False)
+            temporary = target.with_name(target.name + ".tmp")
+            try:
+                Image.open(source).convert("RGB").save(
+                    temporary, format="JPEG", quality=int(quality), optimize=False
+                )
+                os.replace(temporary, target)
+            finally:
+                if temporary.exists():
+                    temporary.unlink()
 
 
 def write_public_episode(episode_dir: Path, *, mapping: dict, sequence_configs: list[dict],
                          jpeg_quality: int = 95) -> dict:
     """从内部标注写出所有规范化公开文件。"""
+    if set(mapping) != PUBLIC_ENTITY_IDS:
+        raise ValueError("mapping 必须正好包含 L0..L4、R0..R4、BALL")
     manifest_sequences = []
     episode_id = None
     max_frames = 0
     out_width = out_height = 0
-    for config in sequence_configs:
+    def config_sort_key(item):
+        camera_path = str(item.get("camera_dir", item.get("path", item.get("directory", ""))))
+        camera_name = Path(camera_path).name
+        return (str(item.get("sequence_name", item.get("name", camera_name))), camera_path)
+
+    configs = sorted(sequence_configs, key=config_sort_key)
+    for config in configs:
         camera_dir = Path(config.get("camera_dir", config.get("path", config.get("directory"))))
         name = str(config.get("sequence_name", config.get("name", camera_dir.name)))
         width, height, camera, extrinsics = _load_camera(camera_dir)
@@ -206,7 +251,7 @@ def write_public_episode(episode_dir: Path, *, mapping: dict, sequence_configs: 
         out_width, out_height = width, height
         mot_rows, mots_rows, pose_records = [], [], []
         for frame_id in frame_ids:
-            mask = _load_mask_for_frame(camera_dir, frame_id, mapping)
+            mask = _load_mask_for_frame(camera_dir, frame_id, mapping, annotations[frame_id], config)
             if np.asarray(mask).shape != (height, width):
                 raise ValueError("mask 尺寸与 camera.json 不一致")
             pose_objects = {o.get("entity_id"): o for o in pose_by_frame.get(frame_id, {}).get("objects", [])}

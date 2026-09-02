@@ -257,6 +257,50 @@ class TestChecksumProfiles:
         assert not any("render" in p.parts or "debug" in p.parts for p in files)
         assert not any("mask" in p.parts or "labels" in p.parts for p in files)
 
+    def test_v3_profile_uses_resolved_modalities_without_public_manifest(self, tmp_path):
+        ep = _make_episode(tmp_path, "epA", 1001)
+        resolved = {
+            "config_v3": {
+                "annotations": ["mot"],
+                "classes": ["player"],
+            }
+        }
+
+        files = profile_file_paths(ep, "final", resolved=resolved)
+
+        assert any(p.name == "gt.txt" for p in files)
+        assert not any(p.name == "gt_mots.txt" for p in files)
+        assert not any(p.name == "gt_pose.json" for p in files)
+        assert not any("mask" in p.parts or "labels" in p.parts for p in files)
+
+    def test_v3_build_manifest_uses_resolved_profile_contract(self, tmp_path):
+        ep = _make_episode(tmp_path, "epA", 1001)
+        (ep / "Cam_01" / "gt" / "gt_mots.txt").write_text("", encoding="utf-8")
+        resolved = {
+            "config_v3": {
+                "annotations": ["mot", "mots"],
+                "classes": ["player", "ball"],
+                "cameras": {"C03": "Camera_A"},
+                "public_sequence_names": ["FutsalMOT_epA_C03"],
+            }
+        }
+
+        manifest = build_manifest(
+            tmp_path, ["epA"], dataset_id="d", resolved=resolved
+        )
+        checksum_paths = {
+            json.loads(line)["path"]
+            for line in _checksum_lines(tmp_path, "epA")
+        }
+
+        assert "epA/Cam_01/gt/gt.txt" in checksum_paths
+        assert "epA/Cam_01/gt/gt_mots.txt" in checksum_paths
+        assert "epA/Cam_01/gt/gt_pose.json" not in checksum_paths
+        assert manifest.episodes[0].annotations == ["mot", "mots"]
+        assert manifest.episodes[0].classes == ["player", "ball"]
+        assert manifest.episodes[0].camera_mapping == {"C03": "Camera_A"}
+        assert manifest.episodes[0].public_sequence_names == ["FutsalMOT_epA_C03"]
+
 
 class TestHashUtil:
     def test_sha256_file_streaming_matches_bytes(self, tmp_path):

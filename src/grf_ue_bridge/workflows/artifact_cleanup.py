@@ -46,23 +46,30 @@ def public_capabilities(resolved=None):
         contract = resolved.config_v3 or {}
     elif isinstance(resolved, dict):
         contract = resolved.get("config_v3") or {}
-    if contract.get("annotations"):
+    ue_profile = ((resolved.get("ue_profile") if isinstance(resolved, dict) else
+                   getattr(resolved, "ue_profile", None)) or {})
+    is_v3 = bool(contract.get("annotations"))
+    if is_v3:
         annotations = list(contract["annotations"])
-        classes = list(contract.get("classes") or ["player", "ball"])
-        cameras = dict(contract.get("cameras") or {})
-        sequence_names = list(contract.get("public_sequence_names") or [])
+        if contract.get("classes"):
+            classes = list(contract["classes"])
+        else:
+            include_ball = (ue_profile.get("annotation_export") or {}).get("include_ball")
+            classes = ["player"] + (["ball"] if include_ball else [])
+            if not classes:
+                classes = ["player", "ball"]
     else:
         annotations = ["mot", "pose", "mots"]
         classes = ["player", "ball"]
-        cameras = {}
-        sequences = ((resolved.get("ue_profile") if isinstance(resolved, dict) else
-                      getattr(resolved, "ue_profile", None)) or {}).get("sequences", [])
-        for sequence in sequences:
-            camera_id = sequence.get("camera_id")
-            actor = sequence.get("camera_actor")
-            if camera_id is not None and actor is not None:
-                cameras[camera_id] = actor
-        sequence_names = [sequence.get("name") for sequence in sequences if sequence.get("name")]
+    sequences = ue_profile.get("sequences", [])
+    fallback_cameras = {
+        sequence.get("camera_id"): sequence.get("camera_actor")
+        for sequence in sequences
+        if sequence.get("camera_id") is not None and sequence.get("camera_actor") is not None
+    }
+    fallback_names = [sequence.get("name") for sequence in sequences if sequence.get("name")]
+    cameras = dict(contract.get("cameras") or fallback_cameras)
+    sequence_names = list(contract.get("public_sequence_names") or fallback_names)
     modalities = ["pose_tracking" if value == "pose" else value for value in annotations]
     return {
         "annotations": annotations,
@@ -272,8 +279,13 @@ def build_manifest(dataset_episode_dir, resolved, cams) -> dict:
         "annotations": capabilities["annotations"],
         "modalities": capabilities["modalities"],
         "classes": capabilities["classes"],
-        "global_track_id_policy": "L0=1..L4=5,R0=6..R4=10,BALL=100",
-        "mot_ball_policy": "include_ball=true (BALL track_id=100)",
+        "global_track_id_policy": ("L0=1..L4=5,R0=6..R4=10" if "player" in capabilities["classes"] else "") +
+        ((", " if "player" in capabilities["classes"] else "") + "BALL=100"
+         if "ball" in capabilities["classes"] else ""),
+        "class_id_policy": {
+            **({"player": 1} if "player" in capabilities["classes"] else {}),
+            **({"ball": 2} if "ball" in capabilities["classes"] else {}),
+        },
         "pose_schema": "coco17_3d/2d (17 keypoints, meters/pixels)" if "pose" in capabilities["annotations"] else None,
         "artifact_profile": (resolved.get("artifact_policy") or {}).get("profile", "research_minimal"),
         "rgb_count_per_camera": sum(
@@ -286,6 +298,8 @@ def build_manifest(dataset_episode_dir, resolved, cams) -> dict:
         "cleanup_status": cleanup_status,
         "source_commit": "see provenance/task.json",
     }
+    if "ball" in capabilities["classes"]:
+        manifest["mot_ball_policy"] = "include_ball=true (BALL track_id=100)"
     # 计算最终数据集大小（不含 pending cleanup）
     total = sum(f.stat().st_size for f in dataset_episode_dir.rglob("*") if f.is_file())
     manifest["final_dataset_bytes"] = total

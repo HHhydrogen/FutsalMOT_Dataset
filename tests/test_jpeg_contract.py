@@ -118,6 +118,73 @@ def test_manifest_and_status_keep_legacy_capability_defaults(tmp_path):
     assert status["classes"] == ["player", "ball"]
 
 
+def test_partial_v3_capabilities_use_ue_sequence_fallback(tmp_path):
+    cam = _camera(tmp_path)
+    resolved = {
+        "episode_name": "episode",
+        "export_profile": {},
+        "ue_profile": {"sequences": [{
+            "name": "FutsalMOT_episode_C03",
+            "camera_id": "C03",
+            "camera_actor": "Camera_A",
+        }]},
+        "config_v3": {"annotations": ["mot"], "classes": ["player"]},
+    }
+
+    manifest = build_manifest(tmp_path, resolved, [cam.name])
+
+    assert manifest["public_sequence_names"] == ["FutsalMOT_episode_C03"]
+    assert manifest["camera_mapping"] == {"C03": "Camera_A"}
+
+
+def test_partial_v3_capabilities_use_ue_class_fallback(tmp_path):
+    cam = _camera(tmp_path)
+    resolved = {
+        "episode_name": "episode",
+        "export_profile": {},
+        "ue_profile": {
+            "annotation_export": {"include_ball": False},
+            "sequences": [],
+        },
+        "config_v3": {"annotations": ["mot"]},
+    }
+
+    manifest = build_manifest(tmp_path, resolved, [cam.name])
+
+    assert manifest["classes"] == ["player"]
+    assert manifest["class_id_policy"] == {"player": 1}
+
+
+def test_player_only_manifest_omits_ball_policies_and_preserves_cleanup_status(tmp_path):
+    cam = _camera(tmp_path)
+    (cam / "gt").mkdir()
+    (cam / "gt" / "gt_pose.json").write_text("[]", encoding="utf-8")
+    (tmp_path / "dataset_manifest.json").write_text(
+        json.dumps({"cleanup_status": "applied"}), encoding="utf-8"
+    )
+    resolved = {
+        "episode_name": "episode",
+        "export_profile": {},
+        "config_v3": {"annotations": ["mot"], "classes": ["player"]},
+    }
+
+    manifest = build_manifest(tmp_path, resolved, [cam.name])
+    status = collect_status(ResolvedTask(
+        task_id="task", episode_name="episode", source_task_file="task.json",
+        repo_root=str(tmp_path), ue_project_root=str(tmp_path), dataset_root=str(tmp_path),
+        trajectory_output=str(tmp_path / "trajectory"), dataset_episode_dir=str(tmp_path),
+        config_v3=resolved["config_v3"],
+    ))
+
+    assert manifest["classes"] == ["player"]
+    assert manifest["class_id_policy"] == {"player": 1}
+    assert "mot_ball_policy" not in manifest
+    assert manifest["global_track_id_policy"] == "L0=1..L4=5,R0=6..R4=10"
+    assert manifest["cleanup_status"] == "applied"
+    assert status["public_sequence_names"] == []
+    assert status["cleanup_status"] == "applied"
+
+
 def test_task_audit_counts_public_jpeg_and_transient_rgb(tmp_path):
     cam = _camera(tmp_path)
     errors = []

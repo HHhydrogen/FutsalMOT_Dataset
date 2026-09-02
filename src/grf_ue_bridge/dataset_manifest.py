@@ -108,6 +108,11 @@ class EpisodeManifestEntry(BaseModel):
     frames_per_camera: Optional[int] = None
     camera_count: int = 0
     camera_ids: List[str] = Field(default_factory=list)
+    annotations: List[str] = Field(default_factory=list)
+    modalities: List[str] = Field(default_factory=list)
+    classes: List[str] = Field(default_factory=list)
+    camera_mapping: Dict[str, str] = Field(default_factory=dict)
+    public_sequence_names: List[str] = Field(default_factory=list)
 
     artifact_counts: ArtifactCounts = Field(default_factory=ArtifactCounts)
     artifact_bytes: ArtifactBytes = Field(default_factory=ArtifactBytes)
@@ -210,9 +215,53 @@ _CAMERA_METADATA = ("camera.json", "annotations.jsonl", "mask_config.json", "seq
 _PROVENANCE_FILES = ("provenance/export_config.json", "provenance/external_sources.lock.json")
 
 
+def _resolved_contract(resolved) -> Optional[dict]:
+    """读取 resolved task 的 Config v3 公开摘要。"""
+    if resolved is None:
+        return None
+    if isinstance(resolved, dict):
+        contract = resolved.get("config_v3")
+    else:
+        contract = getattr(resolved, "config_v3", None)
+    return contract if isinstance(contract, dict) and contract.get("annotations") else None
+
+
+def _resolved_capabilities(resolved) -> dict:
+    """读取 resolved task 的公开能力，兼容部分 Config v3 摘要。"""
+    contract = _resolved_contract(resolved) or {}
+    annotations = list(contract.get("annotations") or ["mot", "pose", "mots"])
+    ue_profile = ((resolved.get("ue_profile") if isinstance(resolved, dict) else
+                  getattr(resolved, "ue_profile", None)) or {})
+    if contract.get("classes"):
+        classes = list(contract["classes"])
+    elif contract.get("annotations"):
+        include_ball = (ue_profile.get("annotation_export") or {}).get("include_ball")
+        classes = ["player"] + (["ball"] if include_ball else [])
+        if not classes:
+            classes = ["player", "ball"]
+    else:
+        classes = ["player", "ball"]
+    sequences = ue_profile.get("sequences", [])
+    camera_mapping = dict(contract.get("cameras") or {
+        item.get("camera_id"): item.get("camera_actor") for item in sequences
+        if item.get("camera_id") is not None and item.get("camera_actor") is not None
+    })
+    sequence_names = list(contract.get("public_sequence_names") or [
+        item.get("name") for item in sequences if item.get("name")
+    ])
+    return {
+        "annotations": annotations,
+        "modalities": ["pose_tracking" if value == "pose" else value for value in annotations],
+        "classes": classes,
+        "camera_mapping": camera_mapping,
+        "public_sequence_names": sequence_names,
+    }
+
+
 def profile_file_paths(
     episode_dir: Path,
     profile: str,
+    resolved=None,
 ) -> List[Path]:
     """按 checksum profile 列出 episode 内应校验的文件（相对 episode_dir 的相对 Path）。
 
@@ -234,12 +283,19 @@ def profile_file_paths(
             out.append(p)
 
     cameras = sorted(d for d in episode_dir.iterdir() if d.is_dir() and (d / "camera.json").is_file())
+    contract = _resolved_contract(resolved)
+    requested_annotations = set(contract["annotations"]) if contract else None
     for cam in cameras:
         for name in _CAMERA_METADATA:
             p = cam / name
             if p.is_file():
                 out.append(p)
-        for name in ("gt.txt", "gt_pose.json", "gt_mots.txt"):
+        gt_names = ("gt.txt", "gt_pose.json", "gt_mots.txt") if requested_annotations is None else tuple(
+            name for name, annotation in (
+                ("gt.txt", "mot"), ("gt_pose.json", "pose"), ("gt_mots.txt", "mots")
+            ) if annotation in requested_annotations
+        )
+        for name in gt_names:
             gt = cam / "gt" / name
             if gt.is_file():
                 out.append(gt)
@@ -255,11 +311,11 @@ def profile_file_paths(
                     out.extend(sorted(
                         p for p in d.iterdir() if p.is_file() and p.suffix == suffix
                     ))
-            for name in ("gt.txt", "gt_pose.json", "gt_mots.txt"):
+            for name in gt_names:
                 p = cam / "gt" / name
                 if p.is_file():
                     out.append(p)
-            if not public_manifest.is_file():
+            if not public_manifest.is_file() and contract is None:
                 for sub, suffix in (
                     ("mask", ".png"), ("labels/det", ".txt"),
                     ("labels/seg", ".txt"), ("labels_pose", ".txt"),
@@ -458,6 +514,7 @@ def collect_episode(
     profile: str,
     workers: int,
     chunk_mb: int,
+    resolved=None,
 ) -> EpisodeManifestEntry:
     """收集一个 episode 的统计、校验和与哈希，生成 EpisodeManifestEntry。"""
     episode_id = episode_dir.name
@@ -506,13 +563,14 @@ def collect_episode(
     frames_per_camera = per_cam_frames[0] if per_cam_frames else None
     frame_count_inconsistent = len(set(per_cam_frames)) > 1 if per_cam_frames else False
 
-    files = profile_file_paths(episode_dir, profile)
+    files = profile_file_paths(episode_dir, profile, resolved=resolved)
     checksums_path, checksums_sha = _write_checksums_file(
         dataset_root, episode_dir, files, workers, chunk_mb
     )
 
     content_hashes = _frames_jsonl_hashes(episode_dir)
     config_hashes = _config_hashes_from_provenance(episode_dir)
+    capabilities = _resolved_capabilities(resolved)
 
     trajectory_fps = None
     step_sec = timing.get("source_step_seconds")
@@ -539,6 +597,7 @@ def collect_episode(
         frames_per_camera=frames_per_camera,
         camera_count=len(cameras),
         camera_ids=[c.name for c in cameras],
+        **capabilities,
         artifact_counts=counts,
         artifact_bytes=bytes_,
         frame_count_inconsistent=frame_count_inconsistent,
@@ -682,6 +741,7 @@ def build_manifest(
     checksum_profile: str = "final",
     workers: int = 4,
     chunk_mb: int = _DEFAULT_CHUNK_MB,
+    resolved=None,
 ) -> DatasetManifest:
     """构建 dataset manifest（原子写入 dataset_manifest.json）。
 
@@ -707,7 +767,7 @@ def build_manifest(
     entries: List[EpisodeManifestEntry] = []
     for ep in candidate_dirs:
         entries.append(collect_episode(
-            dataset_root, ep, checksum_profile, workers, chunk_mb
+            dataset_root, ep, checksum_profile, workers, chunk_mb, resolved=resolved
         ))
     entries.sort(key=lambda e: (e.episode_id, e.relative_path))
 

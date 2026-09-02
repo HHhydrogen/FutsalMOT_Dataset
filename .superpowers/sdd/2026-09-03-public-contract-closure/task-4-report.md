@@ -40,3 +40,22 @@
 - `src/grf_ue_bridge/workflows/task_status.py`
 - `tests/test_jpeg_contract.py`
 - `.superpowers/sdd/2026-09-03-public-contract-closure/task-4-report.md`
+
+## Task 4 Review 修复
+
+- `dataset_manifest.profile_file_paths`、`collect_episode` 和 `build_manifest` 现在接受 resolved task，并按 `config_v3.annotations` 选择公开 GT/checksum 内容；没有 v3 摘要时保留 v2 fallback。
+- dataset manifest episode 条目新增 annotations、modalities、classes、camera mapping 和 public sequence names，来源支持部分 resolved 对象及 `ue_profile` 序列 fallback。
+- player-only 配置不再声明 football 的 MOT/global/class policy；保留 player policy。包含 ball 时才声明 ball policy。
+- 新增 dataset manifest 真实 API、部分 resolved fallback、sequence metadata、cleanup status 和 player-only policy 测试。
+
+验证：
+
+`uv run pytest tests/test_dataset_manifest.py tests/test_jpeg_contract.py tests/test_task_resolver.py -q`
+
+结果：`82 passed, 8 warnings in 3.83s`。
+
+`uv run pytest`
+
+结果：`746 passed, 7 deselected, 62 warnings in 12.58s`。
+
+`git diff --check`：通过。

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import warnings
 from pathlib import Path
 
 from PIL import Image
@@ -41,6 +42,35 @@ def _make_task_dir(tmp_path: Path, cam_count: int = 1, frames: int = 1) -> Path:
     }
     (repo / "task.json").write_text(json.dumps(task), encoding="utf-8")
     return repo / "task.json"
+
+
+def _write_local_config(tmp_path: Path, name: str = "local.json") -> Path:
+    dataset_root = tmp_path / f"{name}-dataset"
+    dataset_root.mkdir(parents=True)
+    ue_root = tmp_path / f"{name}-ue"
+    ue_root.mkdir()
+    (ue_root / "project.uproject").write_text("{}", encoding="utf-8")
+    path = tmp_path / name
+    path.write_text(json.dumps({
+        "dataset_root": str(dataset_root),
+        "ue_project_root": str(ue_root),
+    }), encoding="utf-8")
+    return path
+
+
+def _make_v3_task(tmp_path: Path) -> Path:
+    path = tmp_path / "task-v3.json"
+    path.write_text(json.dumps({
+        "schema": "futsalmot_task", "version": 3, "episode_id": "ep_cli_v3",
+        "simulation": {"scenario": "5_vs_5", "seed": 17, "steps": 3},
+        "cameras": {"C01": "Camera_A", "C02": "Camera_B"},
+        "output": {
+            "fps": 30, "resolution": [1280, 720],
+            "annotations": ["mot", "pose", "mots"],
+            "classes": ["player", "ball"],
+        },
+    }), encoding="utf-8")
+    return path
 
 
 def _make_minimal_dataset(ds_root: Path, ep: str, cam_count: int = 1) -> Path:
@@ -94,6 +124,35 @@ class TestTaskValidateCLI:
         assert r.exit_code == 1
         assert "FAIL" in r.output
 
+    def test_v3_validate_accepts_explicit_local_config(self, tmp_path, pin_repo_root):
+        task = _make_v3_task(tmp_path)
+        local = _write_local_config(tmp_path)
+        r = runner.invoke(app, ["task", "validate", str(task), "--local-config", str(local)])
+        assert r.exit_code == 0, r.output
+        assert "PASS" in r.output
+
+    def test_v3_validate_uses_environment_local_config(self, tmp_path, pin_repo_root, monkeypatch):
+        task = _make_v3_task(tmp_path)
+        local = _write_local_config(tmp_path)
+        monkeypatch.setenv("FUTSALMOT_LOCAL_CONFIG", str(local))
+        r = runner.invoke(app, ["task", "validate", str(task)])
+        assert r.exit_code == 0, r.output
+
+    def test_v3_explicit_local_config_wins_over_environment(self, tmp_path, pin_repo_root, monkeypatch):
+        task = _make_v3_task(tmp_path)
+        explicit = _write_local_config(tmp_path, "explicit.json")
+        environment = _write_local_config(tmp_path, "environment.json")
+        monkeypatch.setenv("FUTSALMOT_LOCAL_CONFIG", str(environment))
+        r = runner.invoke(app, ["task", "validate", str(task), "--local-config", str(explicit)])
+        assert r.exit_code == 0, r.output
+
+    def test_v3_validate_missing_local_config_fails(self, tmp_path, pin_repo_root, monkeypatch):
+        task = _make_v3_task(tmp_path)
+        monkeypatch.delenv("FUTSALMOT_LOCAL_CONFIG", raising=False)
+        r = runner.invoke(app, ["task", "validate", str(task)])
+        assert r.exit_code == 1
+        assert "local config" in r.output
+
 
 class TestTaskResolveCLI:
     def test_resolve_writes_runtime(self, tmp_path, pin_repo_root):
@@ -110,6 +169,41 @@ class TestTaskResolveCLI:
         assert r.exit_code == 0, r.output
         assert "run_task.py" in r.output
         assert "--resolved-task" in r.output
+
+    def test_v3_resolve_prints_summary_and_uses_local_config(self, tmp_path, pin_repo_root):
+        task = _make_v3_task(tmp_path)
+        local = _write_local_config(tmp_path)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            r = runner.invoke(app, ["task", "resolve", str(task), "--local-config", str(local)])
+        assert r.exit_code == 0, r.output
+        assert not any(item.category is DeprecationWarning for item in caught)
+        for expected in (
+            "Episode: ep_cli_v3", "Seed/steps: 17/3", "FPS: 30",
+            "Resolution: 1280x720", "C01 -> Camera_A", "C02 -> Camera_B",
+            "Expected frames: 9", "Annotations: mot, pose, mots",
+            "Classes: player, ball", "Public sequence names:",
+            "FutsalMOT_ep_cli_v3_C01", "FutsalMOT_ep_cli_v3_C02",
+        ):
+            assert expected in r.output
+        runtime = pin_repo_root / ".futsalmot" / "runtime" / "ep_cli_v3" / "resolved-task.json"
+        assert runtime.is_file()
+
+    def test_v3_resolve_missing_local_config_does_not_create_runtime(self, tmp_path, pin_repo_root, monkeypatch):
+        task = _make_v3_task(tmp_path)
+        monkeypatch.delenv("FUTSALMOT_LOCAL_CONFIG", raising=False)
+        r = runner.invoke(app, ["task", "resolve", str(task)])
+        assert r.exit_code != 0
+        assert not (pin_repo_root / ".futsalmot" / "runtime" / "ep_cli_v3" / "resolved-task.json").exists()
+
+    def test_v2_resolve_warns_but_still_works_without_local_config(self, tmp_path, pin_repo_root):
+        task = _make_task_dir(tmp_path)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            r = runner.invoke(app, ["task", "resolve", str(task)])
+        assert r.exit_code == 0, r.output
+        assert "deprecated" in r.output.lower()
+        assert any(item.category is DeprecationWarning for item in caught)
 
 
 class TestTaskStatusAudit:

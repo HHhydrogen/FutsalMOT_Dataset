@@ -671,15 +671,32 @@ def _resolve_runtime(task: Optional[Path]):
     return task_file, _resolver.resolve_task(task_file)
 
 
+def _deprecated_v2_warning(task_file: Path) -> None:
+    try:
+        with open(task_file, encoding="utf-8") as f:
+            schema = json.load(f).get("schema")
+    except (OSError, json.JSONDecodeError):
+        return
+    if schema != _cfg_paths.TASK_V3_SCHEMA:
+        typer.echo(
+            "WARNING: Config v2 deprecated; 请迁移到 Config v3，当前命令仍兼容 v2。",
+            err=True,
+        )
+
+
 @task_app.command("validate")
 def task_validate(
     task: Optional[Path] = typer.Argument(
         None, help="task 文件（缺省用 active task）"
     ),
+    local_config: Optional[Path] = typer.Option(
+        None, "--local-config", help="Config v3 本机路径配置文件"
+    ),
 ):
     """只读校验 task（schema/机器路径/相机/帧数）。不生成文件。"""
     task_file = _resolve_task_or_active(task)
-    problems = _resolver.validate_task(task_file)
+    _deprecated_v2_warning(task_file)
+    problems = _resolver.validate_task(task_file, local_config=local_config)
     if problems:
         typer.echo(f"task validate: FAIL ({len(problems)} 项)")
         for p in problems:
@@ -693,21 +710,38 @@ def task_resolve(
     task: Optional[Path] = typer.Argument(
         None, help="task 文件（缺省用 active task）"
     ),
+    local_config: Optional[Path] = typer.Option(
+        None, "--local-config", help="Config v3 本机路径配置文件"
+    ),
 ):
     """解析 task → 保存 resolved task，打印关键字段。"""
-    task_file, resolved = _resolve_runtime(task)
+    task_file = _resolve_task_or_active(task)
+    _deprecated_v2_warning(task_file)
+    resolved = _resolver.resolve_task(task_file, local_config=local_config)
+    summary = _resolver.resolved_task_summary(resolved)
     runtime_file = _resolver.save_resolved_task(
         resolved, Path(resolved.repo_root)
     )
-    cam_count = len((resolved.ue_profile.get("annotation_export") or {}).get("cameras") or [])
     typer.echo(f"Task ID: {resolved.task_id}")
-    typer.echo(f"Trajectory output: {resolved.trajectory_output}")
-    typer.echo(f"Dataset output: {resolved.dataset_episode_dir}")
-    typer.echo(f"Export: scenario={resolved.export_profile.get('scenario')} "
-               f"steps={resolved.export_profile.get('num_steps')} seed={resolved.export_profile.get('seed')}")
-    typer.echo(f"UE: {cam_count} cameras")
-    typer.echo(f"Expected frame count: {resolved.audit.get('expected_frames_per_camera')}")
-    typer.echo(f"Postprocess formats: {resolved.postprocess.get('formats')}")
+    typer.echo(f"Episode: {summary.get('episode', resolved.episode_name)}")
+    typer.echo(f"Seed/steps: {summary.get('seed', resolved.export_profile.get('seed'))}/"
+               f"{summary.get('steps', resolved.export_profile.get('num_steps'))}")
+    typer.echo(f"FPS: {summary.get('fps', resolved.export_profile.get('playback_fps'))}")
+    resolution = summary.get("resolution")
+    if resolution:
+        typer.echo(f"Resolution: {resolution[0]}x{resolution[1]}")
+    cameras = summary.get("cameras") or {
+        f"C{i + 1:02d}": actor for i, actor in enumerate(
+            (resolved.ue_profile.get("annotation_export") or {}).get("camera_actors") or []
+        )
+    }
+    typer.echo("Cameras:")
+    for camera_id, actor in cameras.items():
+        typer.echo(f"  {camera_id} -> {actor}")
+    typer.echo(f"Expected frames: {summary.get('expected_frames', resolved.audit.get('expected_frames_per_camera'))}")
+    typer.echo(f"Annotations: {', '.join(summary.get('annotations') or [])}")
+    typer.echo(f"Classes: {', '.join(summary.get('classes') or [])}")
+    typer.echo(f"Public sequence names: {', '.join(summary.get('public_sequence_names') or [])}")
     typer.echo(f"Resolved task saved: {runtime_file}")
 
 

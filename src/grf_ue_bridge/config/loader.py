@@ -6,6 +6,7 @@ task 文件为自包含 JSON：导出 + UE + 机器路径内联，直接加载�
 from __future__ import annotations
 
 import json
+import warnings
 from pathlib import Path
 from grf_ue_bridge.config import models as m
 from grf_ue_bridge.config.models import TaskConfig
@@ -31,6 +32,11 @@ def load_task_config(path: Path) -> TaskConfig:
         return m.TaskConfigV3(**data)
     if data.get("schema") not in (None, _paths.TASK_SCHEMA):
         raise ValueError(f"task schema 非法: {data.get('schema')!r}")
+    warnings.warn(
+        "Config v2 deprecated：请迁移到 Config v3，并通过 --local-config 或 FUTSALMOT_LOCAL_CONFIG 提供本机配置。",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     task = m.DatasetTaskConfig(**data)
     task.postprocess.validate_formats()
     return task

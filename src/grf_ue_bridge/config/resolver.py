@@ -10,7 +10,7 @@ import json
 import os
 import tempfile
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Mapping, Optional
 
 from grf_ue_bridge.config import loader
 from grf_ue_bridge.config import models as m
@@ -25,13 +25,38 @@ from grf_ue_bridge.config.paths import (
 
 # ── 校验（只读，不写文件）───────────────────────────────────────────────
 
-def validate_task(task_file: Path) -> List[str]:
+def resolve_local_config(cli_path: Optional[Path], env: Mapping[str, str]) -> Path:
+    """按 CLI、环境变量顺序选择 local config，不自动搜索。"""
+    selected = cli_path or (Path(env["FUTSALMOT_LOCAL_CONFIG"]) if env.get("FUTSALMOT_LOCAL_CONFIG") else None)
+    if selected is None:
+        raise ValueError("缺少 local config：请提供 --local-config 或 FUTSALMOT_LOCAL_CONFIG")
+    return selected.expanduser().resolve()
+
+
+def _local_paths(path: Path) -> tuple[Path, Path]:
+    local = loader.load_local_machine_config(path)
+    dataset_root = Path(local.dataset_root).expanduser().resolve()
+    ue_root = Path(local.ue_project_root).expanduser().resolve()
+    if not dataset_root.is_dir():
+        raise ValueError(f"dataset_root 不存在或不是目录: {dataset_root}")
+    if not ue_root.is_dir():
+        raise ValueError(f"ue_project_root 不存在或不是目录: {ue_root}")
+    projects = list(ue_root.glob("*.uproject"))
+    if len(projects) != 1:
+        raise ValueError(f"ue_project_root 必须恰好包含一个 .uproject: {ue_root}")
+    return dataset_root, ue_root
+
+
+def validate_task(task_file: Path, local_config: Optional[Path] = None) -> List[str]:
     """只读校验一个 task，返回问题列表（空 = 通过）。不生成任何文件。"""
     problems: List[str] = []
     task_file = task_file.resolve()
 
     try:
         task = loader.load_task_config(task_file)
+        if isinstance(task, m.TaskConfigV3):
+            _local_paths(resolve_local_config(local_config, os.environ))
+            return []
     except Exception as e:  # noqa: BLE001
         return [f"task 解析失败: {e}"]
 
@@ -80,42 +105,96 @@ def validate_task(task_file: Path) -> List[str]:
 
 # ── 解析为 resolved task ────────────────────────────────────────────────
 
-def resolve_task(task_file: Path) -> m.ResolvedTask:
+def resolve_task(task_file: Path, local_config: Optional[Path] = None) -> m.ResolvedTask:
     """把单 config 解析为运行时 resolved task（含绝对路径）。"""
     task_file = task_file.resolve()
     task = loader.load_task_config(task_file)
 
     repo_root = _paths.default_repo_root()
-    dataset_root = Path(task.dataset_root).expanduser().resolve()
-    ue_project_root = Path(task.ue_project_root).expanduser().resolve()
-    episode_dir = dataset_root / task.episode_name
+    config_v3: Dict = {}
+    if isinstance(task, m.TaskConfigV3):
+        dataset_root, ue_project_root = _local_paths(resolve_local_config(local_config, os.environ))
+        episode_name = task.episode_id
+        fps = task.output.fps
+        expected_frames = task.simulation.steps * max(1, fps // 10)
+        sequences = [{"name": f"FutsalMOT_{episode_name}_{key}", "camera_actor": actor}
+                     for key, actor in task.cameras.items()]
+        annotations = set(task.output.annotations)
+        include_ball = "ball" in task.output.classes
+        ann_export = {
+            "enabled": True, "playback_fps": fps,
+            "image_width": task.output.resolution[0], "image_height": task.output.resolution[1],
+            "cameras": list(task.cameras.values()), "export_mot": "mot" in annotations,
+            "export_mots": "mots" in annotations, "export_pose": "pose" in annotations,
+            "camera_actors": list(task.cameras.values()), "camera_count": len(sequences),
+            "public_sequence_names": [s["name"] for s in sequences],
+            "include_ball": include_ball,
+            "render_rgb": {"enabled": True, "output_resolution_x": task.output.resolution[0],
+                           "output_resolution_y": task.output.resolution[1], "frame_rate": fps},
+        }
+        export_profile = {"scenario": task.simulation.scenario, "seed": task.simulation.seed,
+                          "num_steps": task.simulation.steps, "target_fps": fps,
+                          "playback_fps": fps, "game_duration": task.simulation.game_duration,
+                          "left_team_difficulty": task.simulation.left_team_difficulty,
+                          "right_team_difficulty": task.simulation.right_team_difficulty}
+        ue_profile = {"sequences": sequences, "annotation_export": ann_export}
+        postprocess = {"include_ball": include_ball,
+                       "formats": [a for a in ("mot", "mots", "json") if a in annotations]}
+        audit = {"expected_cameras": len(sequences), "expected_frames_per_camera": expected_frames}
+        config_v3 = {"episode": episode_name, "seed": task.simulation.seed,
+                     "steps": task.simulation.steps, "fps": fps,
+                     "resolution": list(task.output.resolution), "cameras": dict(task.cameras),
+                     "annotations": list(task.output.annotations), "classes": list(task.output.classes),
+                     "expected_frames": expected_frames,
+                     "public_sequence_names": [s["name"] for s in sequences]}
+        episode_name = task.episode_id
+    else:
+        dataset_root = Path(task.dataset_root).expanduser().resolve()
+        ue_project_root = Path(task.ue_project_root).expanduser().resolve()
+        episode_name = task.episode_name
+        export_profile = task.export.model_dump()
+        ue_profile = task.ue.model_dump()
+        postprocess = task.postprocess.model_dump()
+        audit = task.audit.model_dump()
+    episode_dir = dataset_root / episode_name
 
-    actor_mapping = _paths.resolve_task_relative(task.ue.actor_mapping, repo_root)
+    actor_mapping = _paths.resolve_task_relative(
+        task.ue.actor_mapping if not isinstance(task, m.TaskConfigV3) else "ue/actor_mapping.example.json",
+        repo_root,
+    )
 
     # 把 export.playback_fps 注入 annotation_export，让 render_episode 帧映射正确
     # （render_episode 用 annotation_export.playback_fps 做 Sequence display rate 帧映射）
-    ue_profile = task.ue.model_dump()
     ann_export = ue_profile.get("annotation_export") or {}
-    if "playback_fps" not in ann_export:
+    if not isinstance(task, m.TaskConfigV3) and "playback_fps" not in ann_export:
         ann_export["playback_fps"] = task.export.playback_fps
     ue_profile["annotation_export"] = ann_export
 
     return m.ResolvedTask(
-        task_id=task.task_id,
-        episode_name=task.episode_name,
+        task_id=task.task_id if not isinstance(task, m.TaskConfigV3) else task.episode_id,
+        episode_name=episode_name,
         source_task_file=str(task_file),
         repo_root=str(repo_root),
         ue_project_root=str(ue_project_root),
         dataset_root=str(dataset_root),
         trajectory_output=str(episode_dir),
         dataset_episode_dir=str(episode_dir),
-        export_profile=task.export.model_dump(),
+        export_profile=export_profile,
         ue_profile=ue_profile,
         actor_mapping=str(actor_mapping),
-        postprocess=task.postprocess.model_dump(),
-        audit=task.audit.model_dump(),
-        artifact_policy=dict(task.artifact_policy or {"profile": "research_minimal"}),
+        postprocess=postprocess,
+        audit=audit,
+        artifact_policy=dict(getattr(task, "artifact_policy", None) or {"profile": "research_minimal"}),
+        config_v3=config_v3,
     )
+
+
+def resolved_task_summary(resolved: m.ResolvedTask) -> Dict:
+    """返回 CLI 与诊断使用的 resolved task 摘要。"""
+    if resolved.config_v3:
+        return dict(resolved.config_v3)
+    return {"episode": resolved.episode_name, "fps": resolved.export_profile.get("playback_fps"),
+            "expected_frames": resolved.audit.get("expected_frames_per_camera")}
 
 
 def validate_resolved_task(resolved: m.ResolvedTask) -> List[str]:

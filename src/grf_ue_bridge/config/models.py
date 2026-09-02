@@ -310,6 +310,7 @@ class ResolvedTask(BaseModel):
         default_factory=lambda: {"profile": "research_minimal"},
         description="产物策略（cleanup 依据）",
     )
+    config_v3: Dict = Field(default_factory=dict, description="Config v3 派生摘要")
 
     model_config = {"populate_by_name": True}
 

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Mapping
 
 from grf_ue_bridge.config import models as m
 from grf_ue_bridge.config.models import TaskConfig
@@ -35,3 +36,9 @@ def load_task_config(path: Path) -> TaskConfig:
     task = m.DatasetTaskConfig(**data)
     task.postprocess.validate_formats()
     return task
+
+
+def load_local_machine_config(path: Path) -> m.LocalMachineConfig:
+    """加载并校验仅包含本机路径的配置。"""
+    data = _read_json(path, "local config")
+    return m.LocalMachineConfig(**data)

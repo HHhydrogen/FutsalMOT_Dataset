@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+from typing import Mapping
 
 import pytest
 
@@ -37,6 +39,98 @@ def _make_task_dir(tmp_path: Path, *, dataset_root: Path = None) -> Path:
     }
     (base / "task.json").write_text(json.dumps(task), encoding="utf-8")
     return base / "task.json"
+
+
+def _write_local_config(tmp_path: Path, *, dataset_root: Path = None) -> Path:
+    ds = Path(dataset_root) if dataset_root is not None else tmp_path / "v3-ds"
+    ds.mkdir(parents=True, exist_ok=True)
+    ue = tmp_path / "v3-ue"
+    ue.mkdir(parents=True, exist_ok=True)
+    (ue / "sample.uproject").write_text("{}", encoding="utf-8")
+    path = tmp_path / "local.json"
+    path.write_text(json.dumps({"dataset_root": str(ds), "ue_project_root": str(ue)}), encoding="utf-8")
+    return path
+
+
+def _write_v3_task(tmp_path: Path, *, fps: int = 30, annotations=None, classes=None) -> Path:
+    path = tmp_path / "v3-task.json"
+    path.write_text(json.dumps({
+        "schema": "futsalmot_task", "version": 3, "episode_id": "ep_v3",
+        "simulation": {"scenario": "5_vs_5", "seed": 7, "steps": 300},
+        "cameras": {"C01": "Camera_A", "C02": "Camera_B"},
+        "output": {"fps": fps, "resolution": [1280, 720],
+                   "annotations": annotations or ["mot", "pose", "mots"],
+                   "classes": classes or ["player", "ball"]},
+    }), encoding="utf-8")
+    return path
+
+
+class TestV3Resolver:
+    def test_v3_derives_legacy_fields_and_public_names(self, tmp_path):
+        task = _write_v3_task(tmp_path)
+        local = _write_local_config(tmp_path)
+        resolved = resolver.resolve_task(task, local)
+        assert resolved.episode_name == "ep_v3"
+        assert resolved.export_profile["target_fps"] == 30
+        assert resolved.export_profile["playback_fps"] == 30
+        assert resolved.ue_profile["annotation_export"]["playback_fps"] == 30
+        assert resolved.ue_profile["annotation_export"]["image_width"] == 1280
+        assert resolved.ue_profile["annotation_export"]["render_rgb"]["frame_rate"] == 30
+        assert resolved.audit["expected_cameras"] == 2
+        assert resolved.audit["expected_frames_per_camera"] == 900
+        assert resolved.ue_profile["sequences"][0]["name"] == "FutsalMOT_ep_v3_C01"
+        assert resolved.ue_profile["sequences"][1]["camera_actor"] == "Camera_B"
+        assert resolved.postprocess["include_ball"] is True
+        assert resolved.config_v3["public_sequence_names"] == [
+            "FutsalMOT_ep_v3_C01", "FutsalMOT_ep_v3_C02"
+        ]
+
+    def test_v3_annotations_and_classes_enable_canonical_dependencies(self, tmp_path):
+        task = _write_v3_task(tmp_path, annotations=["mot"], classes=["player"])
+        resolved = resolver.resolve_task(task, _write_local_config(tmp_path))
+        ann = resolved.ue_profile["annotation_export"]
+        assert ann["export_mot"] is True
+        assert ann["include_ball"] is False
+        assert resolved.postprocess["include_ball"] is False
+        assert resolved.postprocess["formats"] == ["mot"]
+
+    def test_v3_requires_local_config_without_neighbor_search(self, tmp_path):
+        task = _write_v3_task(tmp_path)
+        _write_local_config(tmp_path)
+        with pytest.raises(ValueError, match="local config"):
+            resolver.resolve_task(task)
+
+    def test_cli_local_config_wins_over_environment(self, tmp_path):
+        cli_path = _write_local_config(tmp_path, dataset_root=tmp_path / "cli-ds")
+        env_path = _write_local_config(tmp_path, dataset_root=tmp_path / "env-ds")
+        assert resolver.resolve_local_config(cli_path, {"FUTSALMOT_LOCAL_CONFIG": str(env_path)}) == cli_path.resolve()
+
+    def test_invalid_local_paths_are_reported_without_creating_output(self, tmp_path):
+        task = _write_v3_task(tmp_path)
+        local = tmp_path / "local.json"
+        local.write_text(json.dumps({"dataset_root": str(tmp_path / "missing"), "ue_project_root": str(tmp_path)}), encoding="utf-8")
+        assert resolver.validate_task(task, local)
+        assert not (tmp_path / "missing" / "ep_v3").exists()
+
+    def test_failed_resolve_preserves_existing_resolved_task(self, tmp_path):
+        task = _write_v3_task(tmp_path)
+        local = _write_local_config(tmp_path)
+        resolved = resolver.resolve_task(task, local)
+        runtime = resolver.save_resolved_task(resolved, Path(resolved.repo_root))
+        original = runtime.read_text(encoding="utf-8")
+        bad_local = tmp_path / "bad-local.json"
+        bad_local.write_text("{}", encoding="utf-8")
+        with pytest.raises(ValueError):
+            resolver.resolve_task(task, bad_local)
+        assert runtime.read_text(encoding="utf-8") == original
+
+    def test_summary_contains_required_v3_fields(self, tmp_path):
+        resolved = resolver.resolve_task(_write_v3_task(tmp_path), _write_local_config(tmp_path))
+        summary = resolver.resolved_task_summary(resolved)
+        assert summary["episode"] == "ep_v3"
+        assert summary["fps"] == 30
+        assert summary["resolution"] == [1280, 720]
+        assert summary["expected_frames"] == 900
 
 
 class TestResolvePaths:

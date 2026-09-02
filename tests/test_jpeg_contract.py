@@ -165,3 +165,40 @@ def test_cleanup_blocks_real_public_fixture_when_audit_report_fails(tmp_path):
     assert not result["ok"]
     assert (cam / "render_mask" / "000000.exr").exists()
     assert any("audit" in problem for problem in result["gate_problems"])
+
+
+def _write_resolved_cleanup_fixture(root: Path, annotations):
+    cam = root / "FutsalMOT_episode_01_C01"
+    (cam / "img1").mkdir(parents=True)
+    Image.new("RGB", (2, 2), "black").save(cam / "img1" / "000001.jpg")
+    (cam / "render").mkdir()
+    (cam / "render" / "000000.jpg").write_bytes(b"render")
+    (root / "render_summary.json").write_text(json.dumps({"status": "success"}), encoding="utf-8")
+    return cam, {
+        "config_v3": {
+            "annotations": annotations,
+            "classes": ["player", "ball"],
+        }
+    }
+
+
+def test_cleanup_allows_resolved_mot_without_pose_files(tmp_path):
+    cam, resolved = _write_resolved_cleanup_fixture(tmp_path, ["mot"])
+
+    report = plan_cleanup(tmp_path, [cam.name], resolved=resolved)
+    result = apply_cleanup(tmp_path, [cam.name], resolved=resolved)
+
+    assert report["gate_ok"]
+    assert result["ok"]
+    assert not (cam / "render").exists()
+
+
+def test_cleanup_allows_resolved_mot_mots_without_pose_files(tmp_path):
+    cam, resolved = _write_resolved_cleanup_fixture(tmp_path, ["mot", "mots"])
+
+    report = plan_cleanup(tmp_path, [cam.name], resolved=resolved)
+    result = apply_cleanup(tmp_path, [cam.name], resolved=resolved)
+
+    assert report["gate_ok"]
+    assert result["ok"]
+    assert not (cam / "render").exists()

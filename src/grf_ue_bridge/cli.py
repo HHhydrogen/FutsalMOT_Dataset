@@ -929,11 +929,11 @@ def task_cleanup(
     profile = (resolved.artifact_policy or {}).get("profile", "research_minimal")
 
     if not apply:
-        rep = plan_cleanup(ep_dir, cams, profile, dry_run=True)
+        rep = plan_cleanup(ep_dir, cams, profile, dry_run=True, resolved=resolved)
         typer.echo(json.dumps(rep, indent=2, ensure_ascii=False))
         typer.echo("\n(DRY-RUN 未删除任何文件；加 --apply 真正执行)")
         return
-    result = apply_cleanup(ep_dir, cams, profile)
+    result = apply_cleanup(ep_dir, cams, profile, resolved=resolved)
     typer.echo(json.dumps(result, indent=2, ensure_ascii=False))
     if result.get("ok"):
         # apply 后写 dataset_manifest（cleanup_status=applied），供 audit 感知已清理

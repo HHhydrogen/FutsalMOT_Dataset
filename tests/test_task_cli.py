@@ -321,6 +321,37 @@ class TestTaskStatusAudit:
         assert seen["annotations"] == ["mot"]
         assert seen["classes"] == ["player"]
 
+    def test_v3_postprocess_forwards_explicit_camera_identity_to_public_writer(self, tmp_path):
+        from grf_ue_bridge.config.models import ResolvedTask
+        from grf_ue_bridge.workflows.task_postprocess import _public_sequence_configs
+
+        dataset = tmp_path / "public_episode"
+        (dataset / "FrontCamera").mkdir(parents=True)
+        (dataset / "GoalCamera").mkdir()
+        resolved = ResolvedTask(
+            task_id="t", episode_name="ep", source_task_file="task.json",
+            repo_root=str(tmp_path), ue_project_root=str(tmp_path), dataset_root=str(tmp_path),
+            trajectory_output=str(tmp_path), dataset_episode_dir=str(dataset), actor_mapping="mapping.json",
+            export_profile={"playback_fps": 30},
+            ue_profile={"sequences": [
+                {"camera_id": "C07", "camera_actor": "GoalCamera",
+                 "public_sequence_name": "FutsalMOT_ep_C07"},
+                {"camera_id": "C03", "camera_actor": "FrontCamera",
+                 "public_sequence_name": "FutsalMOT_ep_C03"},
+            ]},
+        )
+
+        configs = _public_sequence_configs(resolved, dataset)
+
+        assert configs == [
+            {"camera_id": "C07", "camera_actor": "GoalCamera",
+             "public_sequence_name": "FutsalMOT_ep_C07", "sequence_name": "GoalCamera",
+             "camera_dir": dataset / "GoalCamera", "frame_rate": 30},
+            {"camera_id": "C03", "camera_actor": "FrontCamera",
+             "public_sequence_name": "FutsalMOT_ep_C03", "sequence_name": "FrontCamera",
+             "camera_dir": dataset / "FrontCamera", "frame_rate": 30},
+        ]
+
     def test_postprocess_public_output_false_keeps_legacy_skip_behavior(self, tmp_path):
         from grf_ue_bridge.config.models import ResolvedTask
         from grf_ue_bridge.workflows.task_postprocess import run_postprocess

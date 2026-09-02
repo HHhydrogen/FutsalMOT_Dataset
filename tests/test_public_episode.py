@@ -211,7 +211,7 @@ def test_sequence_order_and_bbox_are_deterministic(tmp_path, monkeypatch):
     assert [s["sequence_name"] for s in result["sequences"]] == ["FutsalMOT_ep_C01", "FutsalMOT_ep_C02"]
 
 
-def test_writer_preserves_explicit_camera_identity_and_sequence_name(tmp_path, monkeypatch):
+def test_writer_preserves_explicit_camera_identity_and_public_sequence_name(tmp_path, monkeypatch):
     cams = []
     for name in ("FrontCamera", "GoalCamera"):
         cam = tmp_path / name
@@ -231,16 +231,22 @@ def test_writer_preserves_explicit_camera_identity_and_sequence_name(tmp_path, m
                         lambda *_: np.array([[1, 0], [0, 0]], dtype=np.uint8))
 
     result = write_public_episode(tmp_path, mapping=PUBLIC_MAPPING, sequence_configs=[
-        {"camera_id": "C07", "camera_actor": "GoalCamera", "sequence_name": "FutsalMOT_ep_C07", "camera_dir": cams[1]},
-        {"camera_id": "C03", "camera_actor": "FrontCamera", "sequence_name": "FutsalMOT_ep_C03", "camera_dir": cams[0]},
+        {"camera_id": "C07", "camera_actor": "GoalCamera", "public_sequence_name": "FutsalMOT_ep_C07", "camera_dir": cams[1]},
+        {"camera_id": "C03", "camera_actor": "FrontCamera", "public_sequence_name": "FutsalMOT_ep_C03", "camera_dir": cams[0]},
     ])
 
     assert [item["camera_id"] for item in result["sequences"]] == ["C03", "C07"]
     assert [item["sequence_name"] for item in result["sequences"]] == [
         "FutsalMOT_ep_C03", "FutsalMOT_ep_C07"
     ]
-    assert (tmp_path / "FutsalMOT_ep_C03").is_dir()
-    assert (tmp_path / "FutsalMOT_ep_C07").is_dir()
+    for camera_id in ("C03", "C07"):
+        public_dir = tmp_path / f"FutsalMOT_ep_{camera_id}"
+        assert public_dir.is_dir()
+        assert f"name=FutsalMOT_ep_{camera_id}" in (public_dir / "seqinfo.ini").read_text()
+    manifest = json.loads((tmp_path / "episode_manifest.json").read_text())
+    assert [item["sequence_name"] for item in manifest["sequences"]] == [
+        "FutsalMOT_ep_C03", "FutsalMOT_ep_C07"
+    ]
 
 
 def test_writer_rejects_duplicate_camera_actor_values(tmp_path):

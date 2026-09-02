@@ -632,6 +632,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--mask-enabled", default="true", help="是否启用 instance_mask 校验（true/false，缺省 true）")
     ap.add_argument("--pose-skip", default="false", help="是否跳过 pose 完整性校验（true/false，缺省 false）")
     ap.add_argument("--output", default=None, help="报告输出目录（默认 <input>/audit）")
+    ap.add_argument("--resolved-task", default=None, help="resolved-task.json（用于公开 Config v3 契约审计）")
     args = ap.parse_args(argv)
 
     mask_enabled = str(args.mask_enabled).lower() in ("true", "1", "yes")
@@ -653,7 +654,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if (dataset_dir / "episode_manifest.json").exists():
         from grf_ue_bridge.public_validator import validate_public_episode
 
-        result = validate_public_episode(dataset_dir)
+        result = validate_public_episode(dataset_dir, resolved_task=args.resolved_task)
         report.update({
             "cameras": result.stats.get("cameras", {}), "sync": {}, "mapping": {}, "calibration": {},
             "render_summary": {}, "pose_coco17": {}, "cross_camera_identity": {},

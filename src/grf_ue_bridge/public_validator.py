@@ -107,6 +107,72 @@ def _seqinfo(path: Path, errors: List[str]) -> Dict[str, str]:
         return {}
 
 
+def _resolved_contract(resolved_task: Any) -> Dict[str, Any]:
+    """提取 resolved task 中唯一的 Config v3 公开契约摘要。"""
+    if hasattr(resolved_task, "config_v3"):
+        return dict(resolved_task.config_v3 or {})
+    if isinstance(resolved_task, (str, Path)):
+        data = json.loads(Path(resolved_task).read_text(encoding="utf-8"))
+        return dict(data.get("config_v3") or {})
+    if isinstance(resolved_task, dict):
+        return dict(resolved_task.get("config_v3") or resolved_task)
+    return {}
+
+
+def _check_resolved_contract(manifest: dict, contract: Dict[str, Any], errors: List[str]) -> None:
+    """将公开 manifest 与 resolved Config v3 摘要逐项对照。"""
+    if not contract:
+        return
+    sequences = manifest.get("sequences") if isinstance(manifest.get("sequences"), list) else []
+    actual_cameras = {item.get("camera_id"): item for item in sequences if isinstance(item, dict)}
+    expected_cameras = contract.get("cameras")
+    if isinstance(expected_cameras, dict):
+        expected_camera_ids = set(expected_cameras)
+        if set(actual_cameras) != expected_camera_ids:
+            errors.append(f"resolved contract camera_id 不匹配: 实际 {sorted(actual_cameras)}，期望 {sorted(expected_camera_ids)}")
+    expected_names = contract.get("public_sequence_names")
+    if isinstance(expected_names, list) and sorted(item.get("sequence_name") for item in sequences) != sorted(expected_names):
+        errors.append(f"resolved contract public sequence names 不匹配: 实际 {[item.get('sequence_name') for item in sequences]}，期望 {expected_names}")
+    expected_frames = contract.get("expected_frames")
+    if isinstance(expected_frames, int):
+        for item in sequences:
+            if item.get("frame_count") != expected_frames:
+                errors.append(f"{item.get('sequence_name')}: frame_count {item.get('frame_count')!r} != resolved contract {expected_frames}")
+    expected_annotations = contract.get("annotations")
+    if isinstance(expected_annotations, list):
+        expected_modalities = {"pose_tracking" if value == "pose" else value for value in expected_annotations}
+        for item in sequences:
+            if set(item.get("modalities") or []) != expected_modalities:
+                errors.append(f"{item.get('sequence_name')}: annotations/modalities 不匹配: 实际 {item.get('modalities')}，期望 {expected_annotations}")
+    expected_classes = contract.get("classes")
+    if isinstance(expected_classes, list) and manifest.get("public_classes") != expected_classes:
+        errors.append(f"resolved contract classes 不匹配: 实际 {manifest.get('public_classes')}，期望 {expected_classes}")
+
+
+def _check_resolved_sequence_contract(episode_dir: Path, manifest: dict, contract: Dict[str, Any], errors: List[str]) -> None:
+    """校验需要读取序列文件的 FPS 与分辨率契约。"""
+    if not contract:
+        return
+    expected_fps = contract.get("fps")
+    expected_resolution = contract.get("resolution")
+    if not isinstance(expected_fps, int) and not isinstance(expected_resolution, list):
+        return
+    for item in manifest.get("sequences", []):
+        name = item.get("sequence_name")
+        seq = _seqinfo(episode_dir / item.get("relative_path", "" ) / "seqinfo.ini", [])
+        if isinstance(expected_fps, int):
+            try:
+                actual_fps = _strict_int(seq.get("framerate"))
+            except (TypeError, ValueError):
+                actual_fps = None
+            if actual_fps != expected_fps:
+                errors.append(f"{name}: FPS {actual_fps!r} != resolved contract {expected_fps}")
+        if isinstance(expected_resolution, list) and len(expected_resolution) == 2:
+            actual_resolution = [item.get("image_width"), item.get("image_height")]
+            if actual_resolution != expected_resolution:
+                errors.append(f"{name}: resolution {actual_resolution} != resolved contract {expected_resolution}")
+
+
 def _validate_sequence(cam: Path, manifest_seq: dict, public_classes: list[str], errors: List[str]) -> Tuple[Set[Tuple[int, int, int]], Dict[str, Any]]:
     name = cam.name
     width = manifest_seq.get("image_width")
@@ -335,7 +401,7 @@ def _validate_pose(path: Path, name: str, width: int, height: int, frame_count: 
     return result
 
 
-def validate_public_episode(episode_dir: Path) -> ValidationResult:
+def validate_public_episode(episode_dir: Path, resolved_task: Any = None) -> ValidationResult:
     """验证公开 episode；返回 ok/errors/stats 和 CLI 兼容退出码。"""
     episode_dir = Path(episode_dir)
     errors: List[str] = []
@@ -396,6 +462,13 @@ def validate_public_episode(episode_dir: Path) -> ValidationResult:
     valid_camera_ids = [value for value in sequence_camera_ids if isinstance(value, str)]
     if len(valid_camera_ids) != len(set(valid_camera_ids)):
         errors.append("manifest sequences 含重复 camera_id")
+    if resolved_task is not None:
+        try:
+            contract = _resolved_contract(resolved_task)
+            _check_resolved_contract(manifest, contract, errors)
+            _check_resolved_sequence_contract(episode_dir, manifest, contract, errors)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
+            errors.append(f"resolved task contract 无法读取: {exc}")
     stats = {"sequences": len(sequences), "frames": sum(value.get("annotations_frames", 0) for value in all_sets),
              "sequence_names": names, "cameras": {value["camera_id"]: value for value in all_sets}}
     return ValidationResult(not errors, errors, stats)

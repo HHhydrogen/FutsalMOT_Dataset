@@ -61,6 +61,21 @@ def _make_public_episode(root: Path):
     }), encoding="utf-8")
 
 
+def _v3_contract(**overrides):
+    contract = {
+        "episode": "episode_01",
+        "fps": 30,
+        "resolution": [4, 3],
+        "cameras": {"C01": "Camera_A"},
+        "annotations": ["mot", "pose", "mots"],
+        "classes": ["player", "ball"],
+        "expected_frames": 2,
+        "public_sequence_names": ["FutsalMOT_episode_01_C01"],
+    }
+    contract.update(overrides)
+    return {"config_v3": contract}
+
+
 def test_valid_public_player_ball_episode_passes(tmp_path):
     _make_public_episode(tmp_path)
 
@@ -315,6 +330,34 @@ def test_public_validator_handles_seqinfo_interpolation_error(tmp_path):
 
     assert not result.ok
     assert any("seqinfo" in error for error in result.errors)
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected_error"),
+    [
+        ({"cameras": {"C02": "Camera_B"}, "public_sequence_names": ["FutsalMOT_episode_01_C02"]}, "camera_id"),
+        ({"expected_frames": 3}, "frame"),
+        ({"annotations": ["mot"]}, "annotations"),
+        ({"classes": ["player"]}, "classes"),
+        ({"fps": 60}, "FPS"),
+        ({"resolution": [8, 6]}, "resolution"),
+    ],
+)
+def test_public_validator_rejects_resolved_v3_contract_mismatches(tmp_path, overrides, expected_error):
+    _make_public_episode(tmp_path)
+
+    result = validate_public_episode(tmp_path, resolved_task=_v3_contract(**overrides))
+
+    assert not result.ok
+    assert any(expected_error.lower() in error.lower() for error in result.errors), result.errors
+
+
+def test_public_validator_accepts_matching_resolved_v3_contract(tmp_path):
+    _make_public_episode(tmp_path)
+
+    result = validate_public_episode(tmp_path, resolved_task=_v3_contract())
+
+    assert result.ok, result.errors
 
 
 def test_public_audit_report_contains_actual_public_stats(tmp_path):

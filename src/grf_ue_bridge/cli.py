@@ -867,6 +867,7 @@ def task_audit(
         "--validation-level", validation_level,
         "--mask-enabled", "true" if mask_enabled else "false",
         "--pose-skip", "true" if pose_skip else "false",
+        "--resolved-task", str(_resolver.save_resolved_task(resolved, Path(resolved.repo_root))),
     ])
     if rc != 0:
         raise typer.Exit(rc)

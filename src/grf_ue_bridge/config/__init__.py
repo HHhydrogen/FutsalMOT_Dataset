@@ -8,8 +8,10 @@ from grf_ue_bridge.config.models import (
     AuditTaskConfig,
     DatasetTaskConfig,
     ExportConfig,
+    LocalMachineConfig,
     PostprocessTaskConfig,
     ResolvedTask,
+    TaskConfigV3,
     UeProfile,
 )
 from grf_ue_bridge.config import loader, paths, resolver  # noqa: F401
@@ -18,8 +20,10 @@ __all__ = [
     "AuditTaskConfig",
     "DatasetTaskConfig",
     "ExportConfig",
+    "LocalMachineConfig",
     "PostprocessTaskConfig",
     "ResolvedTask",
+    "TaskConfigV3",
     "UeProfile",
     "loader",
     "paths",

@@ -11,8 +11,11 @@ from grf_ue_bridge.config import loader
 from grf_ue_bridge.config.models import (
     AuditTaskConfig,
     DatasetTaskConfig,
+    LocalMachineConfig,
     PostprocessTaskConfig,
+    TaskConfigV3,
 )
+from grf_ue_bridge.config.paths import LOCAL_CONFIG_ENV, TASK_V3_SCHEMA
 
 
 def _write_task(path: Path, **over):
@@ -137,3 +140,86 @@ class TestTaskSchema:
         au = AuditTaskConfig()
         assert au.expected_cameras == 4
         assert au.expected_frames_per_camera == 300
+
+
+def _v3_task(**over):
+    data = {
+        "schema": "futsalmot_task",
+        "version": 3,
+        "episode_id": "0001",
+        "simulation": {"scenario": "5_vs_5", "seed": 42, "steps": 300},
+        "cameras": {"C01": "CineCam_01"},
+        "output": {
+            "fps": 30,
+            "resolution": [1920, 1080],
+            "annotations": ["mot", "pose", "mots"],
+            "classes": ["player", "ball"],
+        },
+        "debug": False,
+    }
+    data.update(over)
+    return data
+
+
+class TestTaskConfigV3:
+    def test_valid_v3_task(self):
+        task = TaskConfigV3(**_v3_task())
+        assert task.schema_ == TASK_V3_SCHEMA
+        assert task.episode_id == "0001"
+        assert task.simulation.steps == 300
+        assert task.output.resolution == [1920, 1080]
+
+    def test_loader_dispatches_v3(self, tmp_path):
+        tf = tmp_path / "task.json"
+        tf.write_text(json.dumps(_v3_task()), encoding="utf-8")
+        task = loader.load_task_config(tf)
+        assert isinstance(task, TaskConfigV3)
+
+    @pytest.mark.parametrize("field", ["dataset_root", "ue_project_root", "export", "ue", "postprocess", "audit", "artifact_policy", "task_id", "episode_name"])
+    def test_v3_rejects_legacy_top_level_fields(self, field):
+        with pytest.raises(Exception):
+            TaskConfigV3(**_v3_task(**{field: "legacy"}))
+
+    @pytest.mark.parametrize("episode_id", ["../bad", "has/slash", "", "a b"])
+    def test_v3_rejects_unsafe_episode_id(self, episode_id):
+        with pytest.raises(Exception):
+            TaskConfigV3(**_v3_task(episode_id=episode_id))
+
+    @pytest.mark.parametrize(
+        "changes",
+        [
+            {"simulation": {"scenario": "unknown", "steps": 1}},
+            {"simulation": {"scenario": "5_vs_5", "steps": 0}},
+            {"cameras": {"cam1": "CineCam_01"}},
+            {"cameras": {"C01": ""}},
+            {"output": {"fps": 30, "resolution": [0, 1080], "annotations": ["mot"], "classes": ["player"]}},
+            {"output": {"fps": 30, "resolution": [1920, 1080], "annotations": [], "classes": ["player"]}},
+            {"output": {"fps": 30, "resolution": [1920, 1080], "annotations": ["boxes"], "classes": ["player"]}},
+            {"output": {"fps": 30, "resolution": [1920, 1080], "annotations": ["mot"], "classes": ["person"]}},
+        ],
+    )
+    def test_v3_rejects_invalid_nested_values(self, changes):
+        data = _v3_task()
+        for key, value in changes.items():
+            data[key] = value
+        with pytest.raises(Exception):
+            TaskConfigV3(**data)
+
+
+class TestLocalMachineConfig:
+    def test_accepts_machine_fields_only(self):
+        config = LocalMachineConfig(dataset_root="D:/dataset", ue_project_root="D:/ue")
+        assert config.dataset_root == "D:/dataset"
+        assert config.ue_project_root == "D:/ue"
+        assert LOCAL_CONFIG_ENV == "FUTSALMOT_LOCAL_CONFIG"
+
+    @pytest.mark.parametrize("field", ["episode_id", "cameras", "fps", "annotations", "classes", "debug"])
+    def test_rejects_task_fields(self, field):
+        with pytest.raises(Exception):
+            LocalMachineConfig(dataset_root="D:/dataset", ue_project_root="D:/ue", **{field: False})
+
+    def test_example_is_placeholder_only(self):
+        example = Path(__file__).parents[1] / "configs" / "local.machine.example.json"
+        data = json.loads(example.read_text(encoding="utf-8"))
+        assert data == {"dataset_root": "<DATASET_ROOT>", "ue_project_root": "<UE_PROJECT_ROOT>"}
+        assert "configs/local.machine.json" in (Path(__file__).parents[1] / ".gitignore").read_text(encoding="utf-8")

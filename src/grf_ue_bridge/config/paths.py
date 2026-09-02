@@ -11,6 +11,8 @@ from typing import Optional
 
 TASK_SCHEMA = "futsalmot_dataset_task"
 RESOLVED_TASK_SCHEMA = "futsalmot_resolved_task"
+TASK_V3_SCHEMA = "futsalmot_task"
+LOCAL_CONFIG_ENV = "FUTSALMOT_LOCAL_CONFIG"
 
 # 可移植 provenance 占位符
 PLACEHOLDER_REPO_ROOT = "${REPO_ROOT}"

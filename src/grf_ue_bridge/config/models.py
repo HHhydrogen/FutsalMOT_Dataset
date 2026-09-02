@@ -9,11 +9,73 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
-from .paths import RESOLVED_TASK_SCHEMA, TASK_SCHEMA
+from .paths import RESOLVED_TASK_SCHEMA, TASK_SCHEMA, TASK_V3_SCHEMA
 
 VALID_POSTPROCESS_FORMATS = ("json", "mot", "yolo-det", "yolo-seg")
+
+
+class V3SimulationConfig(BaseModel):
+    """Config v3 仿真参数。"""
+
+    scenario: Literal["5_vs_5"]
+    seed: int = 42
+    steps: int = Field(..., gt=0)
+    game_duration: Optional[int] = Field(None, gt=0)
+    left_team_difficulty: Optional[float] = Field(None, ge=0.0, le=1.0)
+    right_team_difficulty: Optional[float] = Field(None, ge=0.0, le=1.0)
+
+    model_config = {"extra": "forbid"}
+
+
+class V3OutputConfig(BaseModel):
+    """Config v3 输出参数。"""
+
+    fps: int = Field(..., gt=0)
+    resolution: List[int] = Field(..., min_length=2, max_length=2)
+    annotations: List[Literal["mot", "pose", "mots"]] = Field(..., min_length=1)
+    classes: List[Literal["player", "ball"]] = Field(..., min_length=1)
+
+    model_config = {"extra": "forbid"}
+
+    @model_validator(mode="after")
+    def validate_resolution(self):
+        if any(value <= 0 for value in self.resolution):
+            raise ValueError("output.resolution 须为正的 [width, height]")
+        return self
+
+
+class TaskConfigV3(BaseModel):
+    """Config v3 单回合任务。"""
+
+    schema_: Literal["futsalmot_task"] = Field(TASK_V3_SCHEMA, alias="schema")
+    version: Literal[3] = 3
+    episode_id: str = Field(..., pattern=r"^[A-Za-z0-9_-]+$")
+    simulation: V3SimulationConfig
+    cameras: Dict[str, str]
+    output: V3OutputConfig
+    debug: bool = False
+
+    model_config = {"populate_by_name": True, "extra": "forbid"}
+
+    @model_validator(mode="after")
+    def validate_cameras(self):
+        for key, actor_name in self.cameras.items():
+            if not __import__("re").fullmatch(r"C\d{2}", key) or not actor_name.strip():
+                raise ValueError("cameras 须使用 C## 键且 UE actor 名不能为空")
+        return self
+
+
+class LocalMachineConfig(BaseModel):
+    """仅包含本机路径与环境变量的配置。"""
+
+    dataset_root: str
+    ue_project_root: str
+    repo_root: Optional[str] = None
+    unreal_editor: Optional[str] = None
+
+    model_config = {"extra": "forbid"}
 
 
 # ── YOLO Pose（人体关键点）后处理配置 ────────────────────────────────────

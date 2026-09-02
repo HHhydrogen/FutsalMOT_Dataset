@@ -22,9 +22,11 @@ def _read_json(path: Path, label: str) -> dict:
         raise ValueError(f"{label} 不是合法 JSON ({path}): {e}")
 
 
-def load_task_config(path: Path) -> m.DatasetTaskConfig:
+def load_task_config(path: Path):
     """加载并校验一个数据集 task 配置（单 config，含内联 export/ue）。"""
     data = _read_json(path, "task 配置")
+    if data.get("schema") == _paths.TASK_V3_SCHEMA:
+        return m.TaskConfigV3(**data)
     if data.get("schema") not in (None, _paths.TASK_SCHEMA):
         raise ValueError(f"task schema 非法: {data.get('schema')!r}")
     task = m.DatasetTaskConfig(**data)

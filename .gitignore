@@ -11,6 +11,7 @@ build/
 
 # Local Python selection
 .python-version.local
+configs/local.machine.json
 
 # External repositories and native builds
 .external/

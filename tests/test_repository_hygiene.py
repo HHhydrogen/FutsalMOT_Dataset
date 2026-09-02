@@ -51,7 +51,7 @@ class TestDatasetConfigs:
     def test_dataset_configs_self_contained(self, repo_root):
         """configs/*.json 必须自包含：无 profile 引用，含绝对机器路径。example.json 为占位符模板，跳过。"""
         for p in repo_root.glob("configs/*.json"):
-            if p.name == "example.json":
+            if p.name in ("example.json", "local.machine.example.json"):
                 continue  # 模板用 <...> 占位符路径
             data = json.loads(p.read_text(encoding="utf-8"))
             assert data.get("schema") == "futsalmot_dataset_task"
@@ -72,6 +72,8 @@ class TestDatasetConfigs:
     def test_dataset_configs_parse(self, repo_root):
         from grf_ue_bridge.config import loader
         for tf in repo_root.glob("configs/*.json"):
+            if tf.name == "local.machine.example.json":
+                continue
             loader.load_task_config(tf)  # 可解析即可
 
 

@@ -263,6 +263,10 @@ class TestTaskConfigV3:
         with pytest.raises(ValidationError, match=field):
             TaskConfigV3(**data)
 
+    def test_v3_rejects_duplicate_camera_actors(self):
+        with pytest.raises(ValidationError, match="actor"):
+            TaskConfigV3(**_v3_task(cameras={"C03": "FrontCamera", "C07": "FrontCamera"}))
+
 
 class TestLocalMachineConfig:
     def test_accepts_machine_fields_only(self):

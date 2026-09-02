@@ -126,14 +126,17 @@ def resolve_task(task_file: Path, local_config: Optional[Path] = None) -> m.Reso
         fps = task.output.fps
         validate_supported_fps(fps)
         expected_frames = task.simulation.steps * max(1, fps // 10)
-        sequences = [{"name": f"FutsalMOT_{episode_name}_{key}", "camera_actor": actor}
-                     for key, actor in task.cameras.items()]
+        sequences = [{"name": f"FutsalMOT_{episode_name}_{camera_id}", "camera_id": camera_id,
+                      "public_sequence_name": f"FutsalMOT_{episode_name}_{camera_id}",
+                      "camera_actor": actor}
+                     for camera_id, actor in task.cameras.items()]
         annotations = set(task.output.annotations)
         include_ball = "ball" in task.output.classes
         ann_export = {
             "enabled": True, "playback_fps": fps,
             "image_width": task.output.resolution[0], "image_height": task.output.resolution[1],
-            "cameras": list(task.cameras.values()), "export_mot": "mot" in annotations,
+            "cameras": list(task.cameras.values()), "camera_mapping": dict(task.cameras),
+            "export_mot": "mot" in annotations,
             "export_mots": "mots" in annotations, "export_pose": "pose" in annotations,
             "camera_actors": list(task.cameras.values()), "camera_count": len(sequences),
             "public_sequence_names": [s["name"] for s in sequences],

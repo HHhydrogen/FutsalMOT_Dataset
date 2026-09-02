@@ -55,7 +55,7 @@ def _write_v3_task(tmp_path: Path, *, fps: int = 30, annotations=None, classes=N
     path.write_text(json.dumps({
         "schema": "futsalmot_task", "version": 3, "episode_id": "ep_v3",
         "simulation": {"scenario": "5_vs_5", "seed": 7, "steps": 300},
-        "cameras": {"C01": "Camera_A", "C02": "Camera_B"},
+        "cameras": {"C03": "Camera_A", "C07": "Camera_B"},
         "output": {"fps": fps, "resolution": [1280, 720],
                    "annotations": annotations or ["mot", "pose", "mots"],
                    "classes": classes or ["player", "ball"]},
@@ -76,12 +76,19 @@ class TestV3Resolver:
         assert resolved.ue_profile["annotation_export"]["render_rgb"]["frame_rate"] == 30
         assert resolved.audit["expected_cameras"] == 2
         assert resolved.audit["expected_frames_per_camera"] == 900
-        assert resolved.ue_profile["sequences"][0]["name"] == "FutsalMOT_ep_v3_C01"
+        assert resolved.ue_profile["sequences"][0] == {
+            "name": "FutsalMOT_ep_v3_C03", "camera_id": "C03",
+            "public_sequence_name": "FutsalMOT_ep_v3_C03", "camera_actor": "Camera_A"
+        }
         assert resolved.ue_profile["sequences"][1]["camera_actor"] == "Camera_B"
         assert resolved.postprocess["include_ball"] is True
         assert resolved.config_v3["public_sequence_names"] == [
-            "FutsalMOT_ep_v3_C01", "FutsalMOT_ep_v3_C02"
+            "FutsalMOT_ep_v3_C03", "FutsalMOT_ep_v3_C07"
         ]
+        assert resolved.config_v3["cameras"] == {"C03": "Camera_A", "C07": "Camera_B"}
+        assert resolved.ue_profile["annotation_export"]["camera_mapping"] == {
+            "C03": "Camera_A", "C07": "Camera_B"
+        }
 
     def test_v3_annotations_and_classes_enable_canonical_dependencies(self, tmp_path):
         task = _write_v3_task(tmp_path, annotations=["mot"], classes=["player"])

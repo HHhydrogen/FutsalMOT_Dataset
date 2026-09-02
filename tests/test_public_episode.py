@@ -211,6 +211,46 @@ def test_sequence_order_and_bbox_are_deterministic(tmp_path, monkeypatch):
     assert [s["sequence_name"] for s in result["sequences"]] == ["FutsalMOT_ep_C01", "FutsalMOT_ep_C02"]
 
 
+def test_writer_preserves_explicit_camera_identity_and_sequence_name(tmp_path, monkeypatch):
+    cams = []
+    for name in ("FrontCamera", "GoalCamera"):
+        cam = tmp_path / name
+        cam.mkdir()
+        (cam / "img1").mkdir()
+        (cam / "camera.json").write_text(json.dumps({
+            "image_width": 2, "image_height": 2,
+            "intrinsics": {"width": 2, "height": 2, "fx": 1, "fy": 1, "cx": 1, "cy": 1},
+            "extrinsics": {},
+        }), encoding="utf-8")
+        (cam / "annotations.jsonl").write_text(json.dumps({
+            "episode_id": "ep", "frame_index": 1, "objects": [{"entity_id": "L0"}]
+        }) + "\n", encoding="utf-8")
+        Image.new("RGB", (2, 2), "red").save(cam / "img1" / "000001.jpg")
+        cams.append(cam)
+    monkeypatch.setattr("grf_ue_bridge.public_episode._load_mask_for_frame",
+                        lambda *_: np.array([[1, 0], [0, 0]], dtype=np.uint8))
+
+    result = write_public_episode(tmp_path, mapping=PUBLIC_MAPPING, sequence_configs=[
+        {"camera_id": "C07", "camera_actor": "GoalCamera", "sequence_name": "FutsalMOT_ep_C07", "camera_dir": cams[1]},
+        {"camera_id": "C03", "camera_actor": "FrontCamera", "sequence_name": "FutsalMOT_ep_C03", "camera_dir": cams[0]},
+    ])
+
+    assert [item["camera_id"] for item in result["sequences"]] == ["C03", "C07"]
+    assert [item["sequence_name"] for item in result["sequences"]] == [
+        "FutsalMOT_ep_C03", "FutsalMOT_ep_C07"
+    ]
+    assert (tmp_path / "FutsalMOT_ep_C03").is_dir()
+    assert (tmp_path / "FutsalMOT_ep_C07").is_dir()
+
+
+def test_writer_rejects_duplicate_camera_actor_values(tmp_path):
+    with pytest.raises(ValueError, match="camera_actor"):
+        write_public_episode(tmp_path, mapping=PUBLIC_MAPPING, sequence_configs=[
+            {"camera_id": "C03", "camera_actor": "SameCamera", "camera_dir": tmp_path / "a"},
+            {"camera_id": "C07", "camera_actor": "SameCamera", "camera_dir": tmp_path / "b"},
+        ])
+
+
 def test_mapping_rejects_missing_extra_and_invalid_entities(tmp_path):
     with pytest.raises(ValueError):
         write_public_episode(tmp_path, mapping={"L0": "x"}, sequence_configs=[])

@@ -80,9 +80,13 @@ class TaskConfigV3(BaseModel):
 
     @model_validator(mode="after")
     def validate_cameras(self):
+        actors = []
         for key, actor_name in self.cameras.items():
             if not re.fullmatch(r"C\d{2}", key) or not actor_name.strip():
                 raise ValueError("cameras 须使用 C## 键且 UE actor 名不能为空")
+            actors.append(actor_name)
+        if len(actors) != len(set(actors)):
+            raise ValueError("cameras 的 UE actor 不允许重复")
         return self
 
 

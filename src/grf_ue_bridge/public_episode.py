@@ -275,6 +275,8 @@ def _camera_id(config: dict, camera_dir: Path, ordinal: int) -> int:
     if value is None:
         match = re.search(r"(\d+)$", camera_dir.name)
         value = int(match.group(1)) if match else ordinal
+    elif isinstance(value, str) and re.fullmatch(r"C\d{2}", value):
+        value = int(value[1:])
     if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 99:
         raise ValueError(f"camera_id 必须是 1..99 的整数: {value!r}")
     return value
@@ -327,7 +329,8 @@ def write_public_episode(episode_dir: Path, *, mapping: dict, sequence_configs: 
     def config_sort_key(item):
         camera_path = str(item.get("camera_dir", item.get("path", item.get("directory", ""))))
         camera_name = Path(camera_path).name
-        return (str(item.get("sequence_name", item.get("name", camera_name))), camera_path)
+        camera_id = item.get("camera_id")
+        return (str(camera_id) if camera_id is not None else "", camera_path)
 
     configs = sorted(sequence_configs, key=config_sort_key)
     camera_dirs = [
@@ -335,6 +338,10 @@ def write_public_episode(episode_dir: Path, *, mapping: dict, sequence_configs: 
         for config in configs
     ]
     _preflight_jpeg_normalization(camera_dirs)
+    actors = [config.get("camera_actor") for config in configs]
+    explicit_actors = [actor for actor in actors if actor is not None]
+    if len(explicit_actors) != len(set(explicit_actors)):
+        raise ValueError("camera_actor 必须唯一")
     source_data = []
     for ordinal, config in enumerate(configs, 1):
         camera_dir = Path(config.get("camera_dir", config.get("path", config.get("directory"))))
@@ -354,7 +361,9 @@ def write_public_episode(episode_dir: Path, *, mapping: dict, sequence_configs: 
     stage_root = Path(tempfile.mkdtemp(prefix=f".{episode_dir.name}.public-", dir=str(episode_dir.parent)))
     try:
       for (ordinal, config, camera_dir, width, height, camera, extrinsics, annotations, pose_by_frame), camera_id in zip(source_data, camera_ids):
-        name = f"FutsalMOT_{episode_id}_C{camera_id:02d}"
+        name = config.get("public_sequence_name")
+        if not name:
+            name = f"FutsalMOT_{episode_id}_C{camera_id:02d}"
         staged_camera = stage_root / name
         (staged_camera / "gt").mkdir(parents=True)
         _copy_normalized_images(camera_dir, staged_camera / "img1", jpeg_quality)

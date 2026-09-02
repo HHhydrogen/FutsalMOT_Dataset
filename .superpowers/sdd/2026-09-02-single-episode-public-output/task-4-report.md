@@ -35,3 +35,15 @@
 `uv run pytest`
 
 结果：`611 passed, 7 deselected in 14.85s`
+
+## Task 4 Review 剩余问题修复
+
+- JPEG 规范化在任何写入前检查规范化帧名冲突，例如 `000001.jpg` 与 `1.png`，并以明确的 `ValueError` 列出冲突源；冲突时保留全部原文件且不留下临时文件。
+
+`uv run pytest tests/test_public_episode.py tests/test_jpeg_contract.py tests/test_task_cli.py::TestTaskStatusAudit tests/test_dataset_manifest.py::TestChecksumProfiles -q`
+
+结果：`33 passed in 1.12s`
+
+`uv run pytest`
+
+结果：`612 passed, 7 deselected in 14.68s`

@@ -193,3 +193,21 @@ def test_jpeg_normalization_removes_png_and_jpeg_sources_and_is_idempotent(tmp_p
     _write_jpegs(tmp_path, 90)
     assert sorted(p.name for p in img.iterdir()) == ["000001.jpg", "000002.jpg"]
     assert {p.name: p.read_bytes() for p in img.iterdir()} == first
+
+
+def test_jpeg_normalization_rejects_normalized_name_collision_without_changes(tmp_path):
+    from PIL import Image
+    img = tmp_path / "img1"
+    img.mkdir()
+    Image.new("RGB", (2, 2), "red").save(img / "000001.jpg")
+    Image.new("RGB", (2, 2), "blue").save(img / "1.png")
+    before = {p.name: p.read_bytes() for p in img.iterdir()}
+
+    from grf_ue_bridge.public_episode import _write_jpegs
+    with pytest.raises(ValueError, match=r"000001\.jpg.*1\.png|1\.png.*000001\.jpg") as error:
+        _write_jpegs(tmp_path, 90)
+
+    assert "000001.jpg" in str(error.value)
+    assert "1.png" in str(error.value)
+    assert {p.name: p.read_bytes() for p in img.iterdir()} == before
+    assert not list(img.glob("*.tmp"))

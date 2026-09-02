@@ -214,6 +214,18 @@ def _write_jpegs(camera_dir: Path, quality: int) -> None:
     for source in sources:
         if not source.stem.isdigit() or int(source.stem) > 999999:
             raise ValueError(f"img1 文件名必须为数字帧号: {source.name}")
+    normalized = {}
+    for source in sources:
+        target = img_dir / f"{int(source.stem):06d}.jpg"
+        normalized.setdefault(target.name, []).append(source.name)
+    conflicts = {
+        target: names for target, names in normalized.items() if len(names) > 1
+    }
+    if conflicts:
+        details = "; ".join(
+            f"{target}: {', '.join(names)}" for target, names in sorted(conflicts.items())
+        )
+        raise ValueError(f"img1 规范化帧名冲突（未修改任何文件）: {details}")
     for source in sources:
         if source.suffix.lower() not in {".png", ".jpg", ".jpeg"}:
             continue

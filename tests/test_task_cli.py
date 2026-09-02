@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from PIL import Image
+import numpy as np
 from typer.testing import CliRunner
 
 from grf_ue_bridge.cli import app
@@ -132,28 +133,42 @@ class TestTaskStatusAudit:
         assert r.exit_code == 0, r.output
 
     def test_postprocess_defaults_to_public_writer(self, tmp_path, pin_repo_root, monkeypatch):
-        tf = _make_task_dir(tmp_path)
+        from grf_ue_bridge.config.models import ResolvedTask
+        from grf_ue_bridge.workflows.task_postprocess import run_postprocess
+        dataset = tmp_path / "public_episode"
+        cam = dataset / "Cam_01"
+        (cam / "img1").mkdir(parents=True)
+        (cam / "gt").mkdir()
+        Image.new("RGB", (4, 4), "black").save(cam / "img1" / "000001.png")
+        (cam / "camera.json").write_text(json.dumps({
+            "camera_id": "Cam_01", "image_width": 4, "image_height": 4,
+            "intrinsics": {"width": 4, "height": 4, "fx": 2, "fy": 2, "cx": 2, "cy": 2},
+            "extrinsics": {"world_location_m": [0, 0, 0], "forward": [1, 0, 0], "right": [0, 1, 0], "up": [0, 0, 1]},
+        }), encoding="utf-8")
+        (cam / "annotations.jsonl").write_text(json.dumps({"episode_id": "ep", "frame_index": 1, "objects": [{"entity_id": "L0"}]}) + "\n", encoding="utf-8")
+        (cam / "pose_keypoints.jsonl").write_text(json.dumps({"kind": "frame", "frame_index": 1, "objects": [{"entity_id": "L0", "keypoints_world": [[4, 0, 1]] * 17}]}) + "\n", encoding="utf-8")
+        mapping = {f"L{i}": f"Player_L{i}" for i in range(5)} | {f"R{i}": f"Player_R{i}" for i in range(5)} | {"BALL": "Ball_01"}
         mapping_path = pin_repo_root / "ue"
         mapping_path.mkdir()
-        (mapping_path / "actor_mapping.example.json").write_text(json.dumps(
-            {f"L{i}": f"Player_L{i}" for i in range(5)} |
-            {f"R{i}": f"Player_R{i}" for i in range(5)} | {"BALL": "Ball_01"}
-        ), encoding="utf-8")
-        calls = []
+        (mapping_path / "actor_mapping.example.json").write_text(json.dumps(mapping), encoding="utf-8")
+        monkeypatch.setattr("grf_ue_bridge.public_episode._load_mask_for_frame", lambda *_: np.pad(np.ones((1, 1), dtype="uint8"), ((0, 3), (0, 3))))
+        resolved = ResolvedTask(task_id="t", episode_name="ep", source_task_file="task.json", repo_root=str(pin_repo_root), ue_project_root=str(pin_repo_root), dataset_root=str(tmp_path), trajectory_output=str(tmp_path), dataset_episode_dir=str(dataset), actor_mapping=str(mapping_path / "actor_mapping.example.json"), ue_profile={"sequences": [{"name": "LS_Cam_01", "camera_actor": "Cam_01"}]}, postprocess={"public_output": True})
+        assert run_postprocess(resolved, skip_validate=False) == 0
+        assert (cam / "img1" / "000001.jpg").exists()
+        assert (cam / "gt" / "gt.txt").exists()
+        assert (cam / "gt" / "gt_pose.json").exists()
+        assert (cam / "gt" / "gt_mots.txt").exists()
+        assert (dataset / "episode_manifest.json").exists()
+        assert not (cam / "mask").exists()
+        assert not (cam / "labels").exists()
+        assert not (dataset / "debug").exists()
 
-        def write_public_episode(*args, **kwargs):
-            calls.append((args, kwargs))
-            return {"episode_id": "episode_cli_t1"}
-
-        monkeypatch.setattr("grf_ue_bridge.public_episode.write_public_episode", write_public_episode)
-        monkeypatch.setattr(
-            "grf_ue_bridge.public_validator.validate_public_episode",
-            lambda path: type("Result", (), {"ok": True, "exit_code": 0})(),
-        )
-        r = runner.invoke(app, ["task", "postprocess", str(tf), "--skip-validate"])
-        assert r.exit_code == 0, r.output
-        assert calls
-        assert calls[0][1]["mapping"] == {f"L{i}": f"Player_L{i}" for i in range(5)} | {f"R{i}": f"Player_R{i}" for i in range(5)} | {"BALL": "Ball_01"}
+    def test_postprocess_public_output_false_keeps_legacy_skip_behavior(self, tmp_path):
+        from grf_ue_bridge.config.models import ResolvedTask
+        from grf_ue_bridge.workflows.task_postprocess import run_postprocess
+        resolved = ResolvedTask(task_id="t", episode_name="ep", source_task_file="task.json", repo_root=str(tmp_path), ue_project_root=str(tmp_path), dataset_root=str(tmp_path), trajectory_output=str(tmp_path), dataset_episode_dir=str(tmp_path / "ep"), postprocess={"public_output": False})
+        assert run_postprocess(resolved, skip_cryptomatte=True, skip_annotate=True, skip_validate=True) == 0
+        assert not (tmp_path / "ep" / "episode_manifest.json").exists()
 
 
 class TestActiveTask:

@@ -164,13 +164,13 @@ def _bbox(mask: np.ndarray, mask_id: int) -> Optional[Tuple[int, int, int, int]]
     return int(xs.min()), int(ys.min()), int(xs.max() - xs.min() + 1), int(ys.max() - ys.min() + 1)
 
 
-def _pose_keypoints(obj: Optional[dict], camera, extrinsics) -> Optional[List[float]]:
+def _pose_keypoints(obj: Optional[dict], camera, extrinsics) -> Optional[List[List[float]]]:
     if obj is None or extrinsics is None:
         return None
     points = obj.get("keypoints_world")
     if not isinstance(points, list) or len(points) != 17:
         points = [None] * 17
-    result: List[float] = []
+    result: List[List[float]] = []
     occluded = obj.get("occluded") or []
     for index, point in enumerate(points):
         uv = None
@@ -181,10 +181,10 @@ def _pose_keypoints(obj: Optional[dict], camera, extrinsics) -> Optional[List[fl
                 uv = None
         if (uv is None or not all(math.isfinite(float(v)) for v in uv) or
                 not (0.0 <= float(uv[0]) < camera.width and 0.0 <= float(uv[1]) < camera.height)):
-            result.extend([0.0, 0.0, 0])
+            result.append([0.0, 0.0, 0])
         else:
             visibility = 1 if index < len(occluded) and occluded[index] else 2
-            result.extend([float(uv[0]), float(uv[1]), visibility])
+            result.append([float(uv[0]), float(uv[1]), visibility])
     return result
 
 
@@ -206,20 +206,30 @@ def build_public_manifest(episode_id: str, sequences: list[dict], frame_count: i
 
 def _write_jpegs(camera_dir: Path, quality: int) -> None:
     from PIL import Image
-    for source in sorted((camera_dir / "img1").glob("*")):
+    img_dir = camera_dir / "img1"
+    sources = sorted(
+        p for p in img_dir.glob("*")
+        if p.is_file() and p.suffix.lower() in {".png", ".jpg", ".jpeg"}
+    )
+    for source in sources:
+        if not source.stem.isdigit() or int(source.stem) > 999999:
+            raise ValueError(f"img1 文件名必须为数字帧号: {source.name}")
+    for source in sources:
         if source.suffix.lower() not in {".png", ".jpg", ".jpeg"}:
             continue
-        target = source.with_suffix(".jpg")
-        if source.suffix.lower() != ".jpg":
-            temporary = target.with_name(target.name + ".tmp")
-            try:
-                Image.open(source).convert("RGB").save(
-                    temporary, format="JPEG", quality=int(quality), optimize=False
-                )
-                os.replace(temporary, target)
-            finally:
-                if temporary.exists():
-                    temporary.unlink()
+        target = img_dir / f"{int(source.stem):06d}.jpg"
+        if source == target:
+            continue
+        temporary = target.with_name(target.name + ".tmp")
+        try:
+            Image.open(source).convert("RGB").save(
+                temporary, format="JPEG", quality=int(quality), optimize=False
+            )
+            os.replace(temporary, target)
+            source.unlink()
+        finally:
+            if temporary.exists():
+                temporary.unlink()
 
 
 def write_public_episode(episode_dir: Path, *, mapping: dict, sequence_configs: list[dict],

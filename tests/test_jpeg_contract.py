@@ -8,6 +8,7 @@ from grf_ue_bridge.config.models import ResolvedTask
 from grf_ue_bridge.workflows.task_audit import check_camera, write_reports
 from grf_ue_bridge.workflows.task_status import collect_status
 from grf_ue_bridge.workflows.artifact_cleanup import apply_cleanup, collect_transient, plan_cleanup
+from grf_ue_bridge.public_episode import encode_coco_rle
 
 
 def _camera(root: Path) -> Path:
@@ -94,21 +95,40 @@ def test_cleanup_collects_all_yolo_rgb_suffixes(tmp_path):
     assert all(str(yolo / f"000001.{suffix}") in transient for suffix in ("png", "jpg", "jpeg"))
 
 
-def test_cleanup_preserves_public_outputs_and_removes_render_after_public_validation(tmp_path, monkeypatch):
-    cam = _camera(tmp_path)
+def _write_real_public_fixture(root: Path):
+    cam = root / "Cam_01"
+    (cam / "img1").mkdir(parents=True)
+    (cam / "gt").mkdir()
+    Image.new("RGB", (2, 2), "black").save(cam / "img1" / "000001.jpg")
+    (cam / "seqinfo.ini").write_text(
+        "[Sequence]\nname=Cam_01\nimDir=img1\nframeRate=30\nseqLength=1\nimWidth=2\nimHeight=2\nimExt=.jpg\n",
+        encoding="utf-8",
+    )
+    mot = "1,1,0,0,1,1,1,1,1\n1,100,1,1,1,1,1,100,1\n"
+    (cam / "gt" / "gt.txt").write_text(mot, encoding="utf-8")
+    mask = encode_coco_rle(__import__("numpy").array([[1, 0], [0, 11]], dtype="uint8"))
+    mots = "1 1 1 2 2 " + json.dumps(mask, separators=(",", ":")) + "\n"
+    mots += "1 100 100 2 2 " + json.dumps(encode_coco_rle(__import__("numpy").array([[0, 0], [0, 1]], dtype="uint8")), separators=(",", ":")) + "\n"
+    (cam / "gt" / "gt_mots.txt").write_text(mots, encoding="utf-8")
+    (cam / "gt" / "gt_pose.json").write_text(json.dumps([
+        {"frame_id": 1, "track_id": 1, "class": "player", "bbox": [0, 0, 1, 1], "keypoints": [[0, 0, 2]] * 17},
+        {"frame_id": 1, "track_id": 100, "class": "ball", "bbox": [1, 1, 1, 1], "keypoints": None},
+    ]), encoding="utf-8")
+    (root / "episode_manifest.json").write_text(json.dumps({
+        "schema_version": "futsalmot_public_episode_v1", "episode_id": "episode_01",
+        "trajectory_id": "episode_01", "frame_count": 1, "dimensions": {"width": 2, "height": 2},
+        "sequences": [{"name": "Cam_01", "frame_count": 1, "width": 2, "height": 2}],
+        "public_classes": {"player": 1, "ball": 100},
+    }), encoding="utf-8")
+    (root / "render_summary.json").write_text(json.dumps({"status": "success"}), encoding="utf-8")
+    (root / "pose_session.json").write_text(json.dumps({"capture_complete": True}), encoding="utf-8")
+    return cam
+
+
+def test_cleanup_preserves_public_outputs_and_removes_render_after_public_validation(tmp_path):
+    cam = _write_real_public_fixture(tmp_path)
     (cam / "render_mask").mkdir()
     (cam / "render_mask" / "000000.exr").write_bytes(b"exr")
-    (cam / "gt").mkdir()
-    (tmp_path / "episode_manifest.json").write_text(json.dumps({"schema_version": "futsalmot_public_episode_v1"}), encoding="utf-8")
-    (tmp_path / "render_summary.json").write_text(json.dumps({"status": "success"}), encoding="utf-8")
-    (tmp_path / "pose_session.json").write_text(json.dumps({"capture_complete": True}), encoding="utf-8")
-    public = tmp_path / "Cam_01" / "gt"
-    for name in ("gt_pose.json", "gt_mots.txt"):
-        (public / name).write_text("canonical", encoding="utf-8")
-    monkeypatch.setattr(
-        "grf_ue_bridge.public_validator.validate_public_episode",
-        lambda _: type("Result", (), {"ok": True, "errors": []})(),
-    )
     report = plan_cleanup(tmp_path, ["Cam_01"])
     assert str(cam / "render_mask" / "000000.exr") in report["would_delete"]
     assert str(cam / "img1" / "000001.jpg") not in report["would_delete"]
@@ -116,13 +136,28 @@ def test_cleanup_preserves_public_outputs_and_removes_render_after_public_valida
     assert result["ok"]
     assert not (cam / "render_mask").exists()
     assert (cam / "img1" / "000001.jpg").exists()
-    assert (public / "gt_pose.json").exists()
+    assert (cam / "gt" / "gt_pose.json").exists()
 
 
 def test_cleanup_blocks_when_public_validation_fails(tmp_path, monkeypatch):
-    _camera(tmp_path)
-    (tmp_path / "episode_manifest.json").write_text(json.dumps({"schema_version": "futsalmot_public_episode_v1"}), encoding="utf-8")
+    _write_real_public_fixture(tmp_path)
+    (tmp_path / "Cam_01" / "render_mask").mkdir()
+    (tmp_path / "Cam_01" / "render_mask" / "000000.exr").write_bytes(b"exr")
     monkeypatch.setattr("grf_ue_bridge.public_validator.validate_public_episode", lambda _: type("Result", (), {"ok": False, "errors": ["bad public output"]})())
     result = apply_cleanup(tmp_path, ["Cam_01"])
     assert not result["ok"]
     assert result["reason"] == "validation_gate_failed"
+
+
+def test_cleanup_blocks_real_public_fixture_when_audit_report_fails(tmp_path):
+    _write_real_public_fixture(tmp_path)
+    cam = tmp_path / "Cam_01"
+    (cam / "render_mask").mkdir()
+    (cam / "render_mask" / "000000.exr").write_bytes(b"exr")
+    audit = tmp_path / "audit"
+    audit.mkdir()
+    (audit / "soak_audit_report.json").write_text(json.dumps({"ok": False, "failed_checks": ["rgb"]}), encoding="utf-8")
+    result = apply_cleanup(tmp_path, ["Cam_01"])
+    assert not result["ok"]
+    assert (cam / "render_mask" / "000000.exr").exists()
+    assert any("audit" in problem for problem in result["gate_problems"])

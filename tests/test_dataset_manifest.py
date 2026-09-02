@@ -247,6 +247,16 @@ class TestChecksumProfiles:
         assert any(p.name == "000001.jpg" for p in files)
         assert any(p.name == "gt.txt" for p in files)
 
+    def test_public_final_profile_excludes_transient_and_debug(self, tmp_path):
+        ep = _make_episode(tmp_path, "epA", 1001, with_render=True)
+        (ep / "episode_manifest.json").write_text("{}", encoding="utf-8")
+        (ep / "Cam_01" / "debug").mkdir()
+        (ep / "Cam_01" / "debug" / "overlay.png").write_bytes(b"debug")
+        files = profile_file_paths(ep, "final")
+        assert any(p.name == "episode_manifest.json" for p in files)
+        assert not any("render" in p.parts or "debug" in p.parts for p in files)
+        assert not any("mask" in p.parts or "labels" in p.parts for p in files)
+
 
 class TestHashUtil:
     def test_sha256_file_streaming_matches_bytes(self, tmp_path):

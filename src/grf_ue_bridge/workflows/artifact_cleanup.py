@@ -85,15 +85,15 @@ def collect_transient(dataset_episode_dir: Path, cams, profile="research_minimal
 def _validation_gate(dataset_episode_dir: Path) -> list:
     """返回阻止 cleanup 的原因列表（空 = 可通过）。"""
     problems = []
-    if (dataset_episode_dir / "episode_manifest.json").is_file():
+    public_output = (dataset_episode_dir / "episode_manifest.json").is_file()
+    if public_output:
         try:
             from grf_ue_bridge.public_validator import validate_public_episode
             result = validate_public_episode(dataset_episode_dir)
             if not result.ok:
-                return [f"public validation failed: {error}" for error in result.errors]
-            return []
+                problems.extend(f"public validation failed: {error}" for error in result.errors)
         except Exception as exc:
-            return [f"public validation exception: {exc}"]
+            problems.append(f"public validation exception: {exc}")
     rs_path = dataset_episode_dir / "render_summary.json"
     if rs_path.exists():
         try:
@@ -122,7 +122,8 @@ def _validation_gate(dataset_episode_dir: Path) -> list:
             if ar.get("ok") is False or ar.get("failed_checks"):
                 problems.append("audit 未通过（soak_audit_report ok=false）")
         except Exception:
-            pass
+            if public_output:
+                problems.append("audit 报告解析失败")
     return problems
 
 

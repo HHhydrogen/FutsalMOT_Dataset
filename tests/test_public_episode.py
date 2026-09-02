@@ -100,7 +100,7 @@ def test_invalid_keypoints_are_kept_as_zero_visibility(tmp_path, monkeypatch):
     monkeypatch.setattr("grf_ue_bridge.public_episode._load_mask_for_frame", lambda *_: mask)
     write_public_episode(tmp_path, mapping=PUBLIC_MAPPING, sequence_configs=[{"camera_dir": cam}])
     pose = json.loads((cam / "gt" / "gt_pose.json").read_text(encoding="utf-8"))[0]
-    assert pose["keypoints"][2] == 0
+    assert pose["keypoints"][0][2] == 0
 
 
 def test_offscreen_keypoints_are_zero_visibility(tmp_path, monkeypatch):
@@ -115,7 +115,7 @@ def test_offscreen_keypoints_are_zero_visibility(tmp_path, monkeypatch):
     mask = np.zeros((4, 4), dtype=np.uint8); mask[0, 0] = 1
     monkeypatch.setattr("grf_ue_bridge.public_episode._load_mask_for_frame", lambda *_: mask)
     write_public_episode(tmp_path, mapping=PUBLIC_MAPPING, sequence_configs=[{"camera_dir": cam}])
-    assert json.loads((cam / "gt" / "gt_pose.json").read_text(encoding="utf-8"))[0]["keypoints"][2] == 0
+    assert json.loads((cam / "gt" / "gt_pose.json").read_text(encoding="utf-8"))[0]["keypoints"][0][2] == 0
 
 
 def test_invisible_frame_writes_empty_canonical_files(tmp_path, monkeypatch):
@@ -177,3 +177,19 @@ def test_atomic_jpeg_conversion(tmp_path, monkeypatch):
     _write_jpegs(tmp_path, 90)
     assert (img / "000001.jpg").exists()
     assert not list(img.glob("*.tmp"))
+
+
+def test_jpeg_normalization_removes_png_and_jpeg_sources_and_is_idempotent(tmp_path):
+    from PIL import Image
+    img = tmp_path / "img1"
+    img.mkdir()
+    Image.new("RGBA", (2, 2), "red").save(img / "000001.png")
+    Image.new("RGB", (2, 2), "blue").save(img / "000002.jpeg")
+
+    from grf_ue_bridge.public_episode import _write_jpegs
+    _write_jpegs(tmp_path, 90)
+    first = {p.name: p.read_bytes() for p in img.iterdir()}
+    assert sorted(first) == ["000001.jpg", "000002.jpg"]
+    _write_jpegs(tmp_path, 90)
+    assert sorted(p.name for p in img.iterdir()) == ["000001.jpg", "000002.jpg"]
+    assert {p.name: p.read_bytes() for p in img.iterdir()} == first

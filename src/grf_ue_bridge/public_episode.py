@@ -191,14 +191,14 @@ def _pose_keypoints(obj: Optional[dict], camera, extrinsics) -> List[List[float]
 
 
 def build_public_manifest(episode_id: str, sequences: list[dict], frame_count: int,
-                          width: int, height: int) -> dict:
+                          width: int, height: int, classes: Optional[list[str]] = None) -> dict:
     """构建公开 episode manifest。"""
     return {
         "schema_version": 1,
         "episode_id": episode_id,
         "trajectory_id": episode_id,
         "sequences": sequences,
-        "public_classes": ["player", "ball"],
+        "public_classes": list(classes or ["player", "ball"]),
         "track_id_policy": {"players": "L0..L4=1..5,R0..R4=6..10", "ball": 100},
         "class_id_policy": {"player": 1, "ball": 2},
     }
@@ -309,10 +309,17 @@ def _preflight_jpeg_normalization(camera_dirs: list[Path]) -> None:
 
 
 def write_public_episode(episode_dir: Path, *, mapping: dict, sequence_configs: list[dict],
-                         jpeg_quality: int = 95) -> dict:
+                         jpeg_quality: int = 95, annotations: Optional[list[str]] = None,
+                         classes: Optional[list[str]] = None) -> dict:
     """从内部标注写出所有规范化公开文件。"""
     if set(mapping) != PUBLIC_ENTITY_IDS:
         raise ValueError("mapping 必须正好包含 L0..L4、R0..R4、BALL")
+    requested_annotations = list(annotations or ["mot", "pose", "mots"])
+    requested_classes = list(classes or ["player", "ball"])
+    if set(requested_annotations) - {"mot", "pose", "mots"} or not requested_annotations:
+        raise ValueError("annotations 含不支持的 modality")
+    if set(requested_classes) - {"player", "ball"} or not requested_classes:
+        raise ValueError("classes 含不支持的 class")
     manifest_sequences = []
     episode_id = None
     max_frames = 0
@@ -361,35 +368,46 @@ def write_public_episode(episode_dir: Path, *, mapping: dict, sequence_configs: 
                 raise ValueError("mask 尺寸与 camera.json 不一致")
             pose_objects = {o.get("entity_id"): o for o in pose_by_frame.get(frame_id, {}).get("objects", [])}
             for entity_id in sorted(mapping, key=public_track_id):
+                if (entity_id == "BALL" and "ball" not in requested_classes) or \
+                        (entity_id != "BALL" and "player" not in requested_classes):
+                    continue
                 bbox = _bbox(mask, entity_id_to_mask_id(entity_id))
                 if bbox is None:
                     continue
                 track_id = public_track_id(entity_id)
                 x, y, w, h = bbox
                 class_id = 2 if entity_id == "BALL" else 1
-                mot_rows.append(f"{frame_id},{track_id},{x},{y},{w},{h},1,{class_id},-1")
+                if "mot" in requested_annotations:
+                    mot_rows.append(f"{frame_id},{track_id},{x},{y},{w},{h},1,{class_id},-1")
                 rle = encode_coco_rle(mask == entity_id_to_mask_id(entity_id))
-                mots_rows.append("{} {} {} {} {} {}".format(frame_id, track_id, class_id, height, width,
-                                                              rle["counts"]))
+                if "mots" in requested_annotations:
+                    mots_rows.append("{} {} {} {} {} {}".format(frame_id, track_id, class_id, height, width,
+                                                                  rle["counts"]))
                 keypoints = None if entity_id == "BALL" else _pose_keypoints(pose_objects.get(entity_id), camera, extrinsics)
-                pose_records.append({"frame_id": frame_id, "track_id": track_id,
-                                     "class_id": class_id,
-                                     "class_name": "ball" if entity_id == "BALL" else "player",
-                                     "class": "ball" if entity_id == "BALL" else "player",
-                                     "bbox": [x, y, w, h], "keypoints": keypoints})
+                if "pose" in requested_annotations:
+                    pose_records.append({"frame_id": frame_id, "track_id": track_id,
+                                         "class_id": class_id,
+                                         "class_name": "ball" if entity_id == "BALL" else "player",
+                                         "class": "ball" if entity_id == "BALL" else "player",
+                                         "bbox": [x, y, w, h], "keypoints": keypoints})
         gt_dir = staged_camera / "gt"
-        write_text_atomic(gt_dir / "gt.txt", "\n".join(mot_rows) + ("\n" if mot_rows else ""))
-        write_json_atomic(gt_dir / "gt_pose.json", pose_records)
-        write_text_atomic(gt_dir / "gt_mots.txt", "\n".join(mots_rows) + ("\n" if mots_rows else ""))
+        if "mot" in requested_annotations:
+            write_text_atomic(gt_dir / "gt.txt", "\n".join(mot_rows) + ("\n" if mot_rows else ""))
+        if "pose" in requested_annotations:
+            write_json_atomic(gt_dir / "gt_pose.json", pose_records)
+        if "mots" in requested_annotations:
+            write_text_atomic(gt_dir / "gt_mots.txt", "\n".join(mots_rows) + ("\n" if mots_rows else ""))
         fps = int(config.get("frame_rate", config.get("fps", 30)))
         seqinfo = "[Sequence]\nname={}\nimDir=img1\nframeRate={}\nseqLength={}\nimWidth={}\nimHeight={}\nimExt=.jpg\n".format(name, fps, len(frame_ids), width, height)
         write_text_atomic(staged_camera / "seqinfo.ini", seqinfo)
         manifest_sequences.append({
             "sequence_name": name, "camera_id": f"C{camera_id:02d}", "relative_path": name,
             "frame_count": len(frame_ids), "image_width": width, "image_height": height,
-            "modalities": ["mot", "pose_tracking", "mots"],
+            "modalities": ["mot", "pose_tracking", "mots"] if requested_annotations == ["mot", "pose", "mots"] else [
+                "pose_tracking" if value == "pose" else value for value in requested_annotations
+            ],
         })
-      manifest = build_public_manifest(episode_id, manifest_sequences, max_frames, out_width, out_height)
+      manifest = build_public_manifest(episode_id, manifest_sequences, max_frames, out_width, out_height, requested_classes)
       write_json_atomic(stage_root / "episode_manifest.json", manifest)
       backups = []
       try:

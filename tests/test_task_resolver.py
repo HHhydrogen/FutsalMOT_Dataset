@@ -187,6 +187,24 @@ class TestV3Resolver:
             assert getattr(resolved, field) is not None
         assert resolver.validate_resolved_task(resolved) == []
 
+    def test_v3_rejects_missing_actor_mapping_before_resolve_write(self, tmp_path, monkeypatch):
+        task = _write_v3_task(tmp_path)
+        local = _write_local_config(tmp_path)
+        monkeypatch.setattr(
+            "grf_ue_bridge.config.resolver._paths.resolve_task_relative",
+            lambda *_: tmp_path / "missing-actor-mapping.json",
+        )
+        with pytest.raises(ValueError, match="actor mapping"):
+            resolver.resolve_task(task, local)
+
+    def test_local_project_counts_only_uproject_files(self, tmp_path):
+        task = _write_v3_task(tmp_path)
+        local = _write_local_config(tmp_path)
+        ue_root = tmp_path / "v3-ue"
+        (ue_root / "nested.uproject").mkdir()
+        resolved = resolver.resolve_task(task, local)
+        assert resolved.ue_project_root == str(ue_root.resolve())
+
     def test_cli_local_config_wins_over_environment(self, tmp_path):
         cli_path = _write_local_config(tmp_path, dataset_root=tmp_path / "cli-ds")
         env_path = _write_local_config(tmp_path, dataset_root=tmp_path / "env-ds")

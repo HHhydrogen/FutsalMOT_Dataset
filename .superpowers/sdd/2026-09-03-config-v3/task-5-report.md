@@ -61,3 +61,51 @@ warning: in the working copy of 'README.md', LF will be replaced by CRLF the nex
 
 命令退出码为 0，无空白错误；以上仅为 Git 对两个已跟踪修改文件的换行符提示。未跟踪的
 SDD 资料由 `git status --short` 单独列出，不属于本次 `git diff --check` 输入。
+
+## Config v3 最终修正波
+
+本轮完成：
+
+- public writer 按 v3 `output.annotations` / `output.classes` 只生成请求的 canonical MOT、Pose、MOTS 文件和 player/ball 类别；默认全量与 v2 legacy 保持不变。
+- public validator 按 manifest 中实际的 `modalities` / `public_classes` 校验，并保留固定 public GT 字段 schema。
+- `--local-config` 已贯穿 export、postprocess、audit、cleanup、activate、status、ue-command、manifest、motion-quality 和 resolve runtime 路径。
+- v3 resolve 校验 derived actor mapping 文件；UE project 只统计根目录下的 `.uproject` 文件，不统计同名目录。
+- README 与可复现性文档补充实际 v3 命令和按选择输出的说明。
+
+本轮聚焦测试原始输出：
+
+`uv run pytest tests/test_public_episode.py tests/test_public_validator.py tests/test_task_resolver.py tests/test_task_cli.py -q`
+
+```text
+........................................................................ [ 67%]
+...................................                                      [100%]
+============================== warnings summary ===============================
+tests/test_task_resolver.py: 6 warnings
+tests/test_task_cli.py: 8 warnings
+  C:\Users\20113\AppData\Local\Temp\opencode\futsalmot-single-episode-public-output\src\grf_ue_bridge\config\resolver.py:119: DeprecationWarning: Config v2 deprecated
+tests/test_task_resolver.py::TestResolvePaths::test_wrong_camera_expectation
+tests/test_task_resolver.py::TestResolvePaths::test_missing_dataset_root_fails
+tests/test_task_cli.py::TestTaskValidateCLI::test_validate_pass
+tests/test_task_cli.py::TestTaskValidateCLI::test_validate_fail_missing_dataset_root
+  C:\Users\20113\AppData\Local\Temp\opencode\futsalmot-single-episode-public-output\src\grf_ue_bridge\config\resolver.py:63: DeprecationWarning: Config v2 deprecated
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+107 passed, 18 warnings in 1.19s
+```
+
+本轮完整测试原始输出：
+
+`uv run pytest`
+
+```text
+============================= test session starts =============================
+platform win32 -- Python 3.9.25, pytest-8.4.2, pluggy-1.6.0
+collected 718 items / 7 deselected / 711 selected
+============================== warnings summary ===============================
+tests\\test_repository_hygiene.py: 28 warnings
+tests\\test_task_cli.py: 8 warnings
+tests\\test_task_resolver.py: 6 warnings
+tests\\test_ue_resolved_task.py: 6 warnings
+tests\\test_task_config.py: 10 warnings
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=============== 711 passed, 7 deselected, 62 warnings in 11.95s ===============
+```

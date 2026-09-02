@@ -48,7 +48,7 @@ def _local_paths(path: Path) -> tuple[Path, Path]:
         raise ValueError(f"dataset_root 不存在或不是目录: {dataset_root}")
     if not ue_root.is_dir():
         raise ValueError(f"ue_project_root 不存在或不是目录: {ue_root}")
-    projects = list(ue_root.glob("*.uproject"))
+    projects = [path for path in ue_root.glob("*.uproject") if path.is_file()]
     if len(projects) != 1:
         raise ValueError(f"ue_project_root 必须恰好包含一个 .uproject: {ue_root}")
     return dataset_root, ue_root
@@ -183,6 +183,8 @@ def resolve_task(task_file: Path, local_config: Optional[Path] = None) -> m.Reso
         task.ue.actor_mapping if not isinstance(task, m.TaskConfigV3) else "ue/actor_mapping.example.json",
         repo_root,
     )
+    if isinstance(task, m.TaskConfigV3) and not actor_mapping.is_file():
+        raise ValueError(f"actor mapping 不存在或不是文件: {actor_mapping}")
 
     # 把 export.playback_fps 注入 annotation_export，让 render_episode 帧映射正确
     # （render_episode 用 annotation_export.playback_fps 做 Sequence display rate 帧映射）

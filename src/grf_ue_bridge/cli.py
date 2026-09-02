@@ -666,9 +666,9 @@ def _resolve_task_or_active(task: Optional[Path]) -> Path:
     return active
 
 
-def _resolve_runtime(task: Optional[Path]):
+def _resolve_runtime(task: Optional[Path], local_config: Optional[Path] = None):
     task_file = _resolve_task_or_active(task)
-    return task_file, _resolver.resolve_task(task_file)
+    return task_file, _resolver.resolve_task(task_file, local_config=local_config)
 
 
 def _deprecated_v2_warning(task_file: Path) -> None:
@@ -767,11 +767,12 @@ def task_export(
     task: Optional[Path] = typer.Argument(
         None, help="task 文件（缺省用 active task）"
     ),
+    local_config: Optional[Path] = typer.Option(None, "--local-config", help="Config v3 本机路径配置文件"),
 ):
     """按 task 导出轨迹（复用现有 exporter），写 provenance。"""
     from grf_ue_bridge.workflows.task_export import run_export
 
-    _task_file, resolved = _resolve_runtime(task)
+    _task_file, resolved = _resolve_runtime(task, local_config)
     rc = run_export(resolved, print_fn=typer.echo)
     if rc != 0:
         raise typer.Exit(rc)
@@ -782,9 +783,10 @@ def task_ue_command(
     task: Optional[Path] = typer.Argument(
         None, help="task 文件（缺省用 active task）"
     ),
+    local_config: Optional[Path] = typer.Option(None, "--local-config", help="Config v3 本机路径配置文件"),
 ):
     """输出可在 Unreal Editor Python Console 复制的命令（先保存 resolved task）。"""
-    task_file, resolved = _resolve_runtime(task)
+    task_file, resolved = _resolve_runtime(task, local_config)
     runtime_file = _resolver.save_resolved_task(
         resolved, Path(resolved.repo_root)
     )
@@ -804,11 +806,12 @@ def task_postprocess(
     skip_validate: bool = typer.Option(False, "--skip-validate"),
     skip_pose: bool = typer.Option(False, "--skip-pose"),
     skip_debug: bool = typer.Option(False, "--skip-debug"),
+    local_config: Optional[Path] = typer.Option(None, "--local-config", help="Config v3 本机路径配置文件"),
 ):
     """按 task 顺序执行 cryptomatte → annotate → validate →（可选）yolo pose →（可选）debug。"""
     from grf_ue_bridge.workflows.task_postprocess import run_postprocess
 
-    _task_file, resolved = _resolve_runtime(task)
+    _task_file, resolved = _resolve_runtime(task, local_config)
     rc = run_postprocess(
         resolved,
         skip_cryptomatte=skip_cryptomatte,
@@ -830,11 +833,12 @@ def task_audit(
     validation_level: str = typer.Option(
         "quick", "--validation-level", help="进程内 validate 级别（quick/full/none）"
     ),
+    local_config: Optional[Path] = typer.Option(None, "--local-config", help="Config v3 本机路径配置文件"),
 ):
     """对 task 的数据集目录运行完整性审计。"""
     from grf_ue_bridge.workflows.task_audit import main as audit_main
 
-    _task_file, resolved = _resolve_runtime(task)
+    _task_file, resolved = _resolve_runtime(task, local_config)
     audit_cfg = resolved.audit
     # instance_mask 是否启用（决定 audit 是否校验 mask/render_mask）
     ue_ann = (resolved.ue_profile.get("annotation_export") or {}) if resolved.ue_profile else {}
@@ -876,11 +880,12 @@ def task_motion_quality(
     min_window_s: float = typer.Option(60.0, "--min-window-s",
                                         help="期望的最小连续 active-play 秒数"),
     out: Optional[Path] = typer.Option(None, "--out", help="JSON 报告输出路径"),
+    local_config: Optional[Path] = typer.Option(None, "--local-config", help="Config v3 本机路径配置文件"),
 ):
     """对 task 的 trajectory（frames.jsonl）运行 Motion Quality Audit。"""
     from grf_ue_bridge.motion_quality import analyze_frames, find_active_window
 
-    _task_file, resolved = _resolve_runtime(task)
+    _task_file, resolved = _resolve_runtime(task, local_config)
     frames_path = Path(resolved.trajectory_output) / "frames.jsonl"
     if not frames_path.is_file():
         typer.echo(f"ERROR: 缺 {frames_path}（先运行 grf-ue task export）", err=True)
@@ -911,11 +916,12 @@ def task_cleanup(
         None, help="task 文件（缺省用 active task）"
     ),
     apply: bool = typer.Option(False, "--apply", help="真正删除（默认 dry-run）"),
+    local_config: Optional[Path] = typer.Option(None, "--local-config", help="Config v3 本机路径配置文件"),
 ):
     """按 artifact_policy 清理 transient 产物。默认 dry-run。"""
     from grf_ue_bridge.workflows.artifact_cleanup import plan_cleanup, apply_cleanup
 
-    _task_file, resolved = _resolve_runtime(task)
+    _task_file, resolved = _resolve_runtime(task, local_config)
     ep_dir = Path(resolved.dataset_episode_dir)
     ue_ann = (resolved.ue_profile.get("annotation_export") or {}) if resolved.ue_profile else {}
     cams = (ue_ann.get("cameras") or [])
@@ -943,11 +949,12 @@ def task_manifest(
     task: Optional[Path] = typer.Argument(
         None, help="task 文件（缺省用 active task）"
     ),
+    local_config: Optional[Path] = typer.Option(None, "--local-config", help="Config v3 本机路径配置文件"),
 ):
     """生成 dataset_manifest.json。"""
     from grf_ue_bridge.workflows.artifact_cleanup import build_manifest
 
-    _task_file, resolved = _resolve_runtime(task)
+    _task_file, resolved = _resolve_runtime(task, local_config)
     ep_dir = Path(resolved.dataset_episode_dir)
     ue_ann = (resolved.ue_profile.get("annotation_export") or {}) if resolved.ue_profile else {}
     cams = (ue_ann.get("cameras") or [])
@@ -963,11 +970,12 @@ def task_status(
     task: Optional[Path] = typer.Argument(
         None, help="task 文件（缺省用 active task）；空参数时也可只查 active"
     ),
+    local_config: Optional[Path] = typer.Option(None, "--local-config", help="Config v3 本机路径配置文件"),
 ):
     """只读显示任务各产物状态（不修改文件）。"""
     from grf_ue_bridge.workflows.task_status import collect_status, print_status
 
-    _task_file, resolved = _resolve_runtime(task)
+    _task_file, resolved = _resolve_runtime(task, local_config)
     st = collect_status(resolved)
     print_status(resolved, st, print_fn=typer.echo)
 
@@ -975,9 +983,11 @@ def task_status(
 @task_app.command("activate")
 def task_activate(
     task: Path = typer.Argument(..., help="task 文件"),
+    local_config: Optional[Path] = typer.Option(None, "--local-config", help="Config v3 本机路径配置文件"),
 ):
     """激活 task（可选便利；显式 task 参数始终优先）。"""
     repo_root = _cfg_paths.default_repo_root()
+    _resolver.resolve_task(task, local_config=local_config)
     path = _resolver.save_active_task(task, repo_root)
     typer.echo(f"Active task set: {task}  ->  {path}")
 

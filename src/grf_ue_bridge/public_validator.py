@@ -96,7 +96,7 @@ def _seqinfo(path: Path, errors: List[str]) -> Dict[str, str]:
         return {}
 
 
-def _validate_sequence(cam: Path, manifest_seq: dict, errors: List[str]) -> Tuple[Set[Tuple[int, int, int]], Dict[str, Any]]:
+def _validate_sequence(cam: Path, manifest_seq: dict, public_classes: list[str], errors: List[str]) -> Tuple[Set[Tuple[int, int, int]], Dict[str, Any]]:
     name = cam.name
     width = manifest_seq.get("image_width")
     height = manifest_seq.get("image_height")
@@ -129,8 +129,10 @@ def _validate_sequence(cam: Path, manifest_seq: dict, errors: List[str]) -> Tupl
         errors.append(f"序列目录名 {name!r} 与 manifest sequence_name {manifest_seq.get('sequence_name')!r} 不一致")
     if manifest_seq.get("relative_path") != name:
         errors.append(f"{name}: relative_path 必须等于 sequence_name")
-    if manifest_seq.get("modalities") != ["mot", "pose_tracking", "mots"]:
+    modalities = manifest_seq.get("modalities")
+    if not isinstance(modalities, list) or not modalities or set(modalities) - {"mot", "pose_tracking", "mots"}:
         errors.append(f"{name}: modalities 不匹配")
+        modalities = []
     seqinfo_path = cam / "seqinfo.ini"
     if not seqinfo_path.exists():
         errors.append(f"{name}: 缺少 seqinfo.ini")
@@ -185,24 +187,25 @@ def _validate_sequence(cam: Path, manifest_seq: dict, errors: List[str]) -> Tupl
             errors.append(f"{name}: JPG 帧不连续或缺失（实际 {sorted(frames)}，期望 {sorted(expected_frames)}）")
 
     mot_path, mots_path, pose_path = cam / "gt" / "gt.txt", cam / "gt" / "gt_mots.txt", cam / "gt" / "gt_pose.json"
-    mot_set = _validate_mot(mot_path, name, width, height, frame_count, errors)
-    mots_set = _validate_mots(mots_path, name, width, height, frame_count, errors)
-    pose_set = _validate_pose(pose_path, name, width, height, frame_count, errors)
+    mot_set = _validate_mot(mot_path, name, width, height, frame_count, public_classes, errors) if "mot" in modalities else set()
+    mots_set = _validate_mots(mots_path, name, width, height, frame_count, public_classes, errors) if "mots" in modalities else set()
+    pose_set = _validate_pose(pose_path, name, width, height, frame_count, public_classes, errors) if "pose_tracking" in modalities else set()
     stats["gt_txt_lines"] = len(mot_set)
     stats["gt_mots_lines"] = len(mots_set)
-    if pose_path.exists():
+    if pose_path.exists() and "pose_tracking" in modalities:
         try:
             records = json.loads(pose_path.read_text(encoding="utf-8"))
             stats["gt_pose_records"] = len(records) if isinstance(records, list) else 0
         except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
             pass
     stats["annotations_frames"] = max((frame for frame, *_ in mot_set), default=0)
-    if not (mot_set == mots_set == pose_set):
+    selected_sets = [value for value, enabled in ((mot_set, "mot" in modalities), (mots_set, "mots" in modalities), (pose_set, "pose_tracking" in modalities)) if enabled]
+    if selected_sets and any(value != selected_sets[0] for value in selected_sets[1:]):
         errors.append(f"{name}: MOT、MOTS、Pose 的 (frame_id, track_id) 集合不一致")
     return mot_set, stats
 
 
-def _validate_mot(path: Path, name: str, width: int, height: int, frame_count: int, errors: List[str]) -> Set[Tuple[int, int, int]]:
+def _validate_mot(path: Path, name: str, width: int, height: int, frame_count: int, public_classes: list[str], errors: List[str]) -> Set[Tuple[int, int, int]]:
     result: Set[Tuple[int, int, int]] = set()
     if not path.exists():
         errors.append(f"{name}: 缺少 gt/gt.txt")
@@ -224,6 +227,8 @@ def _validate_mot(path: Path, name: str, width: int, height: int, frame_count: i
         x, y, w, h = map(float, fields[2:6])
         cls = _strict_int(fields[7].strip())
         expected_cls = 2 if track == 100 else 1
+        if (track == 100 and "ball" not in public_classes) or (track != 100 and "player" not in public_classes):
+            errors.append(f"{name}: MOT 第 {line_no} 行含未请求 class")
         visibility = float(fields[8].strip())
         if (frame < 1 or frame > frame_count or track not in set(range(1, 11)) | {100} or
                 cls != expected_cls or w <= 0 or h <= 0 or x < 0 or y < 0 or
@@ -236,7 +241,7 @@ def _validate_mot(path: Path, name: str, width: int, height: int, frame_count: i
     return result
 
 
-def _validate_mots(path: Path, name: str, width_limit: int, height_limit: int, frame_count: int, errors: List[str]) -> Set[Tuple[int, int, int]]:
+def _validate_mots(path: Path, name: str, width_limit: int, height_limit: int, frame_count: int, public_classes: list[str], errors: List[str]) -> Set[Tuple[int, int, int]]:
     result: Set[Tuple[int, int, int]] = set()
     if not path.exists():
         errors.append(f"{name}: 缺少 gt/gt_mots.txt")
@@ -256,7 +261,7 @@ def _validate_mots(path: Path, name: str, width_limit: int, height_limit: int, f
             if frame < 1 or frame > frame_count or height != height_limit or width != width_limit or height <= 0 or width <= 0:
                 raise ValueError("帧号或尺寸非法")
             area = _read_rle(fields[5], height, width)
-            if frame < 1 or track not in set(range(1, 11)) | {100} or cls != (2 if track == 100 else 1) or area < 0:
+            if frame < 1 or track not in set(range(1, 11)) | {100} or cls != (2 if track == 100 else 1) or area < 0 or (track == 100 and "ball" not in public_classes) or (track != 100 and "player" not in public_classes):
                 raise ValueError("ID/class/面积非法")
         except (ValueError, TypeError, json.JSONDecodeError, UnicodeError) as exc:
             errors.append(f"{name}: MOTS 第 {line_no} 行非法: {exc}")
@@ -267,7 +272,7 @@ def _validate_mots(path: Path, name: str, width_limit: int, height_limit: int, f
     return result
 
 
-def _validate_pose(path: Path, name: str, width: int, height: int, frame_count: int, errors: List[str]) -> Set[Tuple[int, int, int]]:
+def _validate_pose(path: Path, name: str, width: int, height: int, frame_count: int, public_classes: list[str], errors: List[str]) -> Set[Tuple[int, int, int]]:
     result: Set[Tuple[int, int, int]] = set()
     if not path.exists():
         errors.append(f"{name}: 缺少 gt/gt_pose.json")
@@ -290,6 +295,8 @@ def _validate_pose(path: Path, name: str, width: int, height: int, frame_count: 
         if valid_identity:
             result.add((frame, track, class_id))
         is_ball = track == 100
+        if (is_ball and "ball" not in public_classes) or (not is_ball and "player" not in public_classes):
+            errors.append(f"{name}: Pose 第 {index} 条含未请求 class")
         expected_class_name = "ball" if is_ball else "player"
         expected_class_id = 2 if is_ball else 1
         if record.get("class_name", record.get("class")) != expected_class_name or record.get("class_id") != expected_class_id:
@@ -329,8 +336,10 @@ def validate_public_episode(episode_dir: Path) -> ValidationResult:
         errors.append("manifest schema_version 不匹配")
     if not isinstance(manifest.get("episode_id"), str) or not isinstance(manifest.get("trajectory_id"), str) or manifest.get("episode_id") != manifest.get("trajectory_id"):
         errors.append("manifest episode_id 与 trajectory_id 不一致")
-    if manifest.get("public_classes") != ["player", "ball"]:
-        errors.append("manifest public_classes 必须为 [player, ball]")
+    public_classes = manifest.get("public_classes")
+    if not isinstance(public_classes, list) or not public_classes or set(public_classes) - {"player", "ball"}:
+        errors.append("manifest public_classes 非法")
+        public_classes = ["player", "ball"]
     expected_policy = {"players": "L0..L4=1..5,R0..R4=6..10", "ball": 100}
     if manifest.get("track_id_policy") != expected_policy:
         errors.append("manifest track_id_policy 不匹配")
@@ -363,7 +372,7 @@ def validate_public_episode(episode_dir: Path) -> ValidationResult:
         if not cam.is_dir():
             errors.append(f"manifest sequence 目录不存在: {cam}")
             continue
-        _, sequence_stats = _validate_sequence(cam, sequence, errors)
+        _, sequence_stats = _validate_sequence(cam, sequence, public_classes, errors)
         all_sets.append(sequence_stats)
     if len(names) != len(set(names)):
         errors.append("manifest sequences 含重复 name")

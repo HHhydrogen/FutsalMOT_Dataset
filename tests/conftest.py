@@ -28,5 +28,8 @@ def pin_repo_root(monkeypatch, tmp_path):
 
     repo = tmp_path / "repo"
     repo.mkdir(parents=True, exist_ok=True)
+    mapping = repo / "ue" / "actor_mapping.example.json"
+    mapping.parent.mkdir(parents=True, exist_ok=True)
+    mapping.write_text("{}", encoding="utf-8")
     monkeypatch.setattr(paths, "default_repo_root", lambda: repo)
     return repo

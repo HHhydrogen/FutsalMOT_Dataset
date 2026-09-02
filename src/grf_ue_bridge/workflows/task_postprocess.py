@@ -48,6 +48,8 @@ def _run_public_postprocess(resolved: m.ResolvedTask, pp: dict, dataset: Path,
             mapping=mapping_dict,
             sequence_configs=_public_sequence_configs(resolved, dataset),
             jpeg_quality=int(pp.get("jpeg_quality", 95)),
+            annotations=(resolved.config_v3.get("annotations") if resolved.config_v3 else None),
+            classes=(resolved.config_v3.get("classes") if resolved.config_v3 else None),
         )
     except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
         print_fn(f"ERROR: public 输出失败: {exc}")

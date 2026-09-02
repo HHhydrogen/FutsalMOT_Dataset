@@ -156,7 +156,7 @@ split 或 assembler。
 ## 四、单 episode 公开输出契约
 
 `task export` 先生成轨迹，UE 完成相机渲染与内部 JSONL 后，默认的
-`task postprocess` 生成一个自包含的公开 episode。公开输出树为：
+`task postprocess` 按 v3 `output.annotations` 与 `output.classes` 生成请求的 canonical 输出；未指定时保持全部默认输出。公开输出树为：
 
 ```text
 <dataset_root>/<episode_id>/
@@ -171,7 +171,7 @@ split 或 assembler。
         └── gt_pose.json             # COCO 17 点；足球 keypoints=null
 ```
 
-规范为单 episode、每相机连续六位帧号 JPG。MOT 每行字段依次为
+规范为单 episode、每相机连续六位帧号 JPG。实际输出的 modality/class 由 manifest 记录，validator 按 manifest 选择校验。MOT 每行字段依次为
 `frame,track_id,x,y,w,h,mark,class_id,visibility`，共 9 列；球员 `class_id=1`，
 足球 `track_id=100`，类别定义为 `player=1 / ball=2`，球员 ID 为 `L0..L4=1..5`、`R0..R4=6..10`。
 MOTS 每行依次为 `frame_id track_id class_id height width compressed_RLE`，最后一列只写 COCO

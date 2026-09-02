@@ -72,6 +72,38 @@ def test_valid_public_player_ball_episode_passes(tmp_path):
     assert int(result) == 0
 
 
+def test_public_validator_uses_selected_modalities_and_classes_from_manifest(tmp_path):
+    _make_public_episode(tmp_path)
+    manifest_path = tmp_path / "episode_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["public_classes"] = ["player"]
+    manifest["sequences"][0]["modalities"] = ["mot"]
+    cam = tmp_path / "FutsalMOT_episode_01_C01"
+    (cam / "gt" / "gt.txt").write_text(
+        "1,1,0,0,2,2,1,1,-1\n2,1,0,0,2,2,1,1,-1\n", encoding="utf-8"
+    )
+    (cam / "gt" / "gt_mots.txt").unlink()
+    (cam / "gt" / "gt_pose.json").unlink()
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    result = validate_public_episode(tmp_path)
+
+    assert result.ok, result.errors
+
+
+def test_public_validator_rejects_invalid_modalities_without_crashing(tmp_path):
+    _make_public_episode(tmp_path)
+    manifest_path = tmp_path / "episode_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["sequences"][0]["modalities"] = {"mot": True}
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    result = validate_public_episode(tmp_path)
+
+    assert not result.ok
+    assert any("modalities" in error for error in result.errors)
+
+
 def test_public_validator_accepts_minimal_approved_manifest_without_root_counts(tmp_path):
     _make_public_episode(tmp_path)
     manifest_path = tmp_path / "episode_manifest.json"

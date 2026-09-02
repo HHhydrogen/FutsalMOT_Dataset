@@ -89,7 +89,7 @@ classes 决定 `include_ball`；audit 期望值由 camera 数和帧数派生。v
 
 ```powershell
 $env:FUTSALMOT_LOCAL_CONFIG = "configs/local.machine.json"
-uv run grf-ue task export configs/episode_0001.json
+uv run grf-ue task export configs/episode_0001.json --local-config configs/local.machine.json
 ```
 
 产出：`<dataset_root>/<episode_id>/{meta.json, frames.jsonl, provenance/}`。
@@ -98,7 +98,7 @@ uv run grf-ue task export configs/episode_0001.json
 
 ```powershell
 $env:FUTSALMOT_LOCAL_CONFIG = "configs/local.machine.json"
-uv run grf-ue task ue-command configs/episode_0001.json
+uv run grf-ue task ue-command configs/episode_0001.json --local-config configs/local.machine.json
 ```
 
 `task ue-command` 输出给 Unreal Editor 的 `run_task.py` 命令。配置了 Unreal MCP 时，
@@ -110,12 +110,12 @@ MRQ 渲染异步，完成后写 `render_summary.json`；相机数据写入同一
 
 ```powershell
 $env:FUTSALMOT_LOCAL_CONFIG = "configs/local.machine.json"
-uv run grf-ue task postprocess configs/episode_0001.json
-uv run grf-ue task audit configs/episode_0001.json
-uv run grf-ue task status configs/episode_0001.json
+uv run grf-ue task postprocess configs/episode_0001.json --local-config configs/local.machine.json
+uv run grf-ue task audit configs/episode_0001.json --local-config configs/local.machine.json
+uv run grf-ue task status configs/episode_0001.json --local-config configs/local.machine.json
 ```
 
-`task postprocess` 的默认模式是公开输出模式：在一次干净运行中只写规范的 JPG、MOT、
+`task postprocess` 的默认模式是公开输出模式：v3 按 `output.annotations` 与 `output.classes` 只写请求的 canonical 文件，未指定时保持默认全部输出；在一次干净运行中只写规范的 JPG、MOT、
 MOTS、Pose 和 `episode_manifest.json`，不会生成重复的 PNG mask、YOLO、debug 图集/视频
 或重复的内部标签。它不会清理运行前已经存在的 transient、debug 或其他内部文件；如需
 清理这些文件，必须单独执行下面的 cleanup 命令。
@@ -140,7 +140,7 @@ MOTS、Pose 和 `episode_manifest.json`，不会生成重复的 PNG mask、YOLO�
 默认 `task postprocess` 生成上述公开输出：RGB 只写规范六位帧号的 JPG（RGB、
 quality=95），不生成 PNG mask、YOLO、debug 图集/视频或重复的内部标注文件；这里的
 “不生成”不等于删除同一 episode 中运行前已经存在的文件。
-公开 MOT 的格式为 `frame,track_id,x,y,w,h,mark,class_id,visibility` 共 9 列；球员的
+公开 MOT 的格式为 `frame,track_id,x,y,w,h,mark,class_id,visibility` 共 9 列；实际 modality/class 以 manifest 为准，validator 按 manifest 选择校验。球员的
 `track_id` 为 `L0..L4=1..5`、`R0..R4=6..10`，足球为 `track_id=100`。
 类别定义为 `player=1`、`ball=2`。visibility 为真实可用时的 `[0,1]` 比例；当前
 流程无法可靠计算时写 `-1`，表示 unavailable/not computed，不伪造 `1.00`。

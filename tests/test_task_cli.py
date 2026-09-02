@@ -8,7 +8,9 @@ from pathlib import Path
 
 from PIL import Image
 import numpy as np
+import pytest
 from typer.testing import CliRunner
+import inspect
 
 from grf_ue_bridge.cli import app
 
@@ -109,6 +111,26 @@ def _make_minimal_dataset(ds_root: Path, ep: str, cam_count: int = 1) -> Path:
 
 
 class TestTaskValidateCLI:
+    @pytest.mark.parametrize("function_name", [
+        "task_export", "task_postprocess", "task_audit", "task_cleanup",
+        "task_activate", "task_status", "task_ue_command", "task_manifest",
+        "task_motion_quality",
+    ])
+    def test_resolving_task_commands_accept_local_config(self, function_name):
+        from grf_ue_bridge import cli
+        assert "local_config" in inspect.signature(getattr(cli, function_name)).parameters
+
+    def test_runtime_resolution_for_export_forwards_local_config(self, tmp_path, monkeypatch):
+        from grf_ue_bridge import cli
+        expected = object()
+        seen = {}
+        monkeypatch.setattr(cli, "_resolve_task_or_active", lambda task: task)
+        monkeypatch.setattr(cli._resolver, "resolve_task", lambda task, local_config=None: seen.update({"task": task, "local": local_config}) or expected)
+        task = tmp_path / "task.json"
+        local = tmp_path / "local.json"
+        assert cli._resolve_runtime(task, local) == (task, expected)
+        assert seen == {"task": task, "local": local}
+
     def test_validate_pass(self, tmp_path, pin_repo_root):
         tf = _make_task_dir(tmp_path)
         r = runner.invoke(app, ["task", "validate", str(tf)])
@@ -257,7 +279,7 @@ class TestTaskStatusAudit:
         (cam / "pose_keypoints.jsonl").write_text(json.dumps({"kind": "frame", "frame_index": 1, "objects": [{"entity_id": "L0", "keypoints_world": [[4, 0, 1]] * 17}]}) + "\n", encoding="utf-8")
         mapping = {f"L{i}": f"Player_L{i}" for i in range(5)} | {f"R{i}": f"Player_R{i}" for i in range(5)} | {"BALL": "Ball_01"}
         mapping_path = pin_repo_root / "ue"
-        mapping_path.mkdir()
+        mapping_path.mkdir(exist_ok=True)
         (mapping_path / "actor_mapping.example.json").write_text(json.dumps(mapping), encoding="utf-8")
         monkeypatch.setattr("grf_ue_bridge.public_episode._load_mask_for_frame", lambda *_: np.pad(np.ones((1, 1), dtype="uint8"), ((0, 3), (0, 3))))
         resolved = ResolvedTask(task_id="t", episode_name="ep", source_task_file="task.json", repo_root=str(pin_repo_root), ue_project_root=str(pin_repo_root), dataset_root=str(tmp_path), trajectory_output=str(tmp_path), dataset_episode_dir=str(dataset), actor_mapping=str(mapping_path / "actor_mapping.example.json"), ue_profile={"sequences": [{"name": "LS_Cam_01", "camera_actor": "Cam_01"}]}, postprocess={"public_output": True})
@@ -271,6 +293,33 @@ class TestTaskStatusAudit:
         assert not (cam / "mask").exists()
         assert not (cam / "labels").exists()
         assert not (dataset / "debug").exists()
+
+    def test_v3_postprocess_forwards_selected_output_to_public_writer(self, tmp_path, monkeypatch):
+        from grf_ue_bridge.config.models import ResolvedTask
+        from grf_ue_bridge.workflows import task_postprocess
+
+        dataset = tmp_path / "public_episode"
+        dataset.mkdir()
+        mapping_path = tmp_path / "mapping.json"
+        mapping_path.write_text("{}", encoding="utf-8")
+        resolved = ResolvedTask(
+            task_id="t", episode_name="ep", source_task_file="task.json",
+            repo_root=str(tmp_path), ue_project_root=str(tmp_path), dataset_root=str(tmp_path),
+            trajectory_output=str(tmp_path), dataset_episode_dir=str(dataset),
+            actor_mapping=str(mapping_path), ue_profile={"sequences": []},
+            postprocess={"public_output": True},
+            config_v3={"annotations": ["mot"], "classes": ["player"]},
+        )
+        seen = {}
+
+        def fake_writer(*args, **kwargs):
+            seen.update(kwargs)
+            return {"sequences": []}
+
+        monkeypatch.setattr("grf_ue_bridge.public_episode.write_public_episode", fake_writer)
+        assert task_postprocess.run_postprocess(resolved, skip_validate=True) == 0
+        assert seen["annotations"] == ["mot"]
+        assert seen["classes"] == ["player"]
 
     def test_postprocess_public_output_false_keeps_legacy_skip_behavior(self, tmp_path):
         from grf_ue_bridge.config.models import ResolvedTask

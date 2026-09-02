@@ -84,6 +84,62 @@ def test_writer_emits_player_ball_and_matching_identity_sets(tmp_path, monkeypat
     assert not (public_cam / "mask").exists()
 
 
+@pytest.mark.parametrize(
+    "annotations, classes, expected_files, expected_tracks",
+    [
+        (["mot"], ["player", "ball"], {"gt.txt"}, {1, 100}),
+        (["pose"], ["player", "ball"], {"gt_pose.json"}, {1, 100}),
+        (["mots"], ["player", "ball"], {"gt_mots.txt"}, {1, 100}),
+        (["mot", "pose", "mots"], ["player"], {"gt.txt", "gt_pose.json", "gt_mots.txt"}, {1}),
+        (["mot", "mots"], ["player", "ball"], {"gt.txt", "gt_mots.txt"}, {1, 100}),
+    ],
+)
+def test_writer_emits_only_requested_modalities_and_classes(
+    tmp_path, monkeypatch, annotations, classes, expected_files, expected_tracks
+):
+    cam = tmp_path / "Cam_01"
+    (cam / "img1").mkdir(parents=True)
+    (cam / "camera.json").write_text(json.dumps({
+        "image_width": 2, "image_height": 2,
+        "intrinsics": {"width": 2, "height": 2, "fx": 1, "fy": 1, "cx": 1, "cy": 1},
+        "extrinsics": {},
+    }), encoding="utf-8")
+    (cam / "annotations.jsonl").write_text(json.dumps({
+        "episode_id": "ep", "frame_index": 1,
+        "objects": [{"entity_id": "L0"}, {"entity_id": "BALL"}],
+    }) + "\n", encoding="utf-8")
+    (cam / "pose_keypoints.jsonl").write_text(json.dumps({
+        "kind": "frame", "frame_index": 1,
+        "objects": [{"entity_id": "L0", "keypoints_world": [[1, 0, 1]] * 17}],
+    }) + "\n", encoding="utf-8")
+    Image.new("RGB", (2, 2), "black").save(cam / "img1" / "000001.jpg")
+    monkeypatch.setattr(
+        "grf_ue_bridge.public_episode._load_mask_for_frame",
+        lambda *_: np.array([[1, 0], [0, 11]], dtype=np.uint8),
+    )
+
+    manifest = write_public_episode(
+        tmp_path, mapping=PUBLIC_MAPPING,
+        sequence_configs=[{"camera_dir": cam}],
+        annotations=annotations, classes=classes,
+    )
+
+    gt_dir = tmp_path / "FutsalMOT_ep_C01" / "gt"
+    assert {path.name for path in gt_dir.iterdir()} == expected_files
+    if "mot" in annotations:
+        tracks = {int(line.split(",")[1]) for line in (gt_dir / "gt.txt").read_text().splitlines()}
+        assert tracks == expected_tracks
+    if "mots" in annotations:
+        tracks = {int(line.split()[1]) for line in (gt_dir / "gt_mots.txt").read_text().splitlines()}
+        assert tracks == expected_tracks
+    if "pose" in annotations:
+        tracks = {row["track_id"] for row in json.loads((gt_dir / "gt_pose.json").read_text())}
+        assert tracks == expected_tracks
+    assert manifest["public_classes"] == classes
+    expected_modalities = ["pose_tracking" if value == "pose" else value for value in annotations]
+    assert manifest["sequences"][0]["modalities"] == expected_modalities
+
+
 def test_manifest_trajectory_id_and_approved_policy():
     manifest = build_public_manifest("ep", [{"name": "Cam_01", "frame_count": 2,
                                              "width": 8, "height": 6}], 2, 8, 6)

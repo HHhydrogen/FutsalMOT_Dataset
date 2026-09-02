@@ -3,9 +3,9 @@
 用 Google Research Football (GRF) 生成足球比赛轨迹 → Unreal Engine Level Sequence 回放 →
 RGB + Instance-ID Mask 渲染 → 像素级 CV 标注（MOT / YOLO det / YOLO seg）。
 
-本项目以**数据集任务（dataset task）**为统一入口：**一个自包含配置（单 config）**描述一次
-完整的「导出 → UE 导入/渲染 → 后处理 → 审计」流程——导出参数、UE 相机/渲染参数与
-机器路径（`dataset_root`/`ue_project_root`）都写在同一文件里，直接入库。
+本项目以**数据集任务（dataset task）**为统一入口。Config v3 用一个不含机器路径的配置描述
+一次单 episode 任务；本机路径由未入库的 local config 提供，resolver 再生成 P1/P2 共用的
+`resolved_task.json`。旧的 Config v2 仍兼容，但其机器路径仍内联在 task 文件中。
 
 ```
 GRF 轨迹（P1, .venv）──→ JSONL ──→ UE Level Sequence + 渲染（Unreal Editor）──→ 标注数据集（G:）
@@ -21,8 +21,37 @@ GRF 轨迹（P1, .venv）──→ JSONL ──→ UE Level Sequence + 渲染（
 
 ### 1. 使用或新建单 config
 
-仓库内已提交的自包含单 config（`configs/*.json`）可直接运行（机器路径已入库）：
-冒烟/demo 用 `configs/pose_smoke_3frames_1cam.json`（yolo_pose 已启用）。
+Config v3 task 只提交任务意图；本机路径使用未入库的 `configs/local.machine.json`。
+完整 v3 示例：
+
+```json
+{
+  "schema": "futsalmot_task",
+  "version": 3,
+  "episode_id": "0001",
+  "simulation": {"scenario": "5_vs_5", "seed": 42, "steps": 300},
+  "cameras": {"C01": "CineCam_01", "C02": "CineCam_02"},
+  "output": {
+    "fps": 30,
+    "resolution": [1920, 1080],
+    "annotations": ["mot", "pose", "mots"],
+    "classes": ["player", "ball"]
+  },
+  "debug": false
+}
+```
+
+本机配置模板为 `configs/local.machine.example.json`：
+
+```json
+{
+  "dataset_root": "G:/FutsalMOT_Dataset",
+  "ue_project_root": "G:/FutsalMOT_UE"
+}
+```
+
+将其复制为 `configs/local.machine.json` 并替换为真实路径。真实 local config 已被
+`.gitignore` 忽略，不得提交；它只能包含本机路径和可选环境元数据，不能加入任务字段。
 
 新 episode：复制 `configs/example.json` 到新文件名，替换占位符并改参数。
 **每个参数的说明与填写指南见 [`configs/README.md`](configs/README.md)**（含 `example.json`
@@ -31,9 +60,29 @@ GRF 轨迹（P1, .venv）──→ JSONL ──→ UE Level Sequence + 渲染（
 ### 2. 验证并解析
 
 ```powershell
-uv run grf-ue task validate configs/my_dataset.json
-uv run grf-ue task resolve configs/my_dataset.json
+uv run grf-ue task validate configs/episode_0001.json --local-config configs/local.machine.json
+uv run grf-ue task resolve configs/episode_0001.json --local-config configs/local.machine.json
 ```
+
+也可以省略 CLI 参数而设置 `FUTSALMOT_LOCAL_CONFIG`。优先级固定为
+`--local-config` > `FUTSALMOT_LOCAL_CONFIG` > 缺少配置时报错；不会自动搜索 task 同目录
+或其他目录的 local config。v3 的 `validate`/`resolve` 都会检查 local config、
+`dataset_root`/`ue_project_root` 是否存在且为目录，并要求 UE 项目根目录恰好包含一个
+`.uproject`。任一门禁失败都不会创建半完整的 resolved 输出；`validate` 只读，`resolve`
+失败时保留已有 resolved 文件不变。
+
+`task resolve` 会将 v3 展开为旧 pipeline 所需的完整字段：`export_profile`、`ue_profile`、
+`actor_mapping`、`postprocess`、`audit`、`artifact_policy`，以及绝对的 `repo_root`、
+`dataset_root`、`ue_project_root`、`trajectory_output` 和 `dataset_episode_dir`，并保存
+`config_v3` 摘要。命令摘要包含 episode、seed/steps、FPS、resolution、每个 camera key 与
+UE actor、expected frames、annotations、classes 和 public sequence names；例如 `C01`
+生成 `FutsalMOT_<episode_id>_C01`。
+
+v3 的派生关系是唯一来源：`output.fps` 同时决定导出/回放/MRQ FPS；resolution 决定标注、
+渲染和相机尺寸；camera mapping 决定 sequence、annotation actor 和 camera count；
+`simulation.steps` 与 FPS 决定每相机期望帧数；annotations 决定 MOT/Pose/MOTS 及其依赖；
+classes 决定 `include_ball`；audit 期望值由 camera 数和帧数派生。v3 不接受 v2 的
+`dataset_root`、`ue_project_root`、`export`、`ue`、`postprocess` 或 `audit` 重复字段。
 
 ### 3. 导出轨迹（产出到 dataset_root）
 

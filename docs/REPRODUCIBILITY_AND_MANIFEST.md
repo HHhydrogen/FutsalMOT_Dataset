@@ -90,7 +90,67 @@ CLI `--seed` 优先级：**CLI > 配置文件 > 默认值**。运行时打印 ro
 `frames.jsonl` 的原始字节 SHA-256 即 `trajectory_hash`（见 manifest）。两个 episode
 若 hash 相同 ⇒ 轨迹完全一致。
 
-## 三、单 episode 公开输出契约
+## 三、Config v3 与本机路径
+
+Config v3 的用户层配置只描述单 episode 的期望数据，不包含机器绝对路径。最小完整示例：
+
+```json
+{
+  "schema": "futsalmot_task",
+  "version": 3,
+  "episode_id": "0001",
+  "simulation": {"scenario": "5_vs_5", "seed": 42, "steps": 300},
+  "cameras": {"C01": "CineCam_01", "C02": "CineCam_02"},
+  "output": {
+    "fps": 30,
+    "resolution": [1920, 1080],
+    "annotations": ["mot", "pose", "mots"],
+    "classes": ["player", "ball"]
+  },
+  "debug": false
+}
+```
+
+本机配置使用 `configs/local.machine.example.json` 作为模板，真实文件
+`configs/local.machine.json` 只应包含如下路径（以及允许的环境元数据），并由 `.gitignore`
+忽略，不能提交：
+
+```json
+{
+  "dataset_root": "G:/FutsalMOT_Dataset",
+  "ue_project_root": "G:/FutsalMOT_UE"
+}
+```
+
+固定命令和选择优先级如下：
+
+```powershell
+uv run grf-ue task validate configs/episode_0001.json --local-config configs/local.machine.json
+uv run grf-ue task resolve configs/episode_0001.json --local-config configs/local.machine.json
+```
+
+`--local-config` > `FUTSALMOT_LOCAL_CONFIG` > 缺少配置时报错。resolver 不自动搜索 task
+同目录或其他目录的 local config。v3 的 validate/resolve 会检查 local config 文件和字段，
+`dataset_root`、`ue_project_root` 存在且为目录，以及 UE 项目根目录恰好包含一个 `.uproject`。
+任一检查失败都不写半完整 resolved 输出；validate 不创建 runtime 或输出目录，resolve 使用
+原子替换，失败时保留已有的 resolved 文件。
+
+resolver 将 `output.fps` 派生到导出、回放和 MRQ，resolution 派生到标注/渲染尺寸，camera
+mapping 派生到 sequence、annotation actor、公开 sequence 名和 camera count，steps 与
+FPS 派生 expected frames，annotations 派生 MOT/Pose/MOTS 及其依赖，classes 派生
+`include_ball`，并派生 audit 期望值。生成的 resolved task 保留完整旧字段
+`export_profile`、`ue_profile`、`actor_mapping`、`postprocess`、`audit`、`artifact_policy`
+及全部绝对运行路径，并在 `config_v3` 保存 episode、seed、steps、fps、resolution、cameras、
+annotations、classes、expected frames 和 public sequence names；这些旧字段是 P1/P2 的
+运行时兼容接口，不是 v3 用户层的重复配置。
+
+v2 的 `futsalmot_dataset_task` version 2 仍按旧字段读取和运行，并输出明确的 deprecated
+warning，提示迁移到 Config v3 + local config；为保持历史配置兼容，v2 不强制 local config。
+v3 不接受 v2 的 `dataset_root`、`ue_project_root`、`export`、`ue`、`postprocess` 或
+`audit` 字段，也不接受未知 annotation/class。当前范围只支持单 episode，不提供 batch、
+split 或 assembler。
+
+## 四、单 episode 公开输出契约
 
 `task export` 先生成轨迹，UE 完成相机渲染与内部 JSONL 后，默认的
 `task postprocess` 生成一个自包含的公开 episode。公开输出树为：
@@ -171,7 +231,7 @@ internal JSONL、debug 文件和其他 audit 报告不会因本 cleanup 被删�
 camera metadata、轨迹、manifest 和 provenance 保留。dry-run 只报告计划，不删除文件；删除
 门禁失败则保留 transient 以便诊断。cleanup 不判断文件是运行前已存在还是由公开后处理生成；门禁通过后，凡命中上述显式路径 allowlist 的文件都会删除，无论其 provenance 如何。
 
-## 四、Dataset Manifest
+## 五、Dataset Manifest
 
 ### 1. 用途
 
@@ -249,7 +309,7 @@ manifest 与 checksum 文件全部使用 **POSIX 相对路径**，无盘符/反�
 - 原始 `render/`、`render_mask/` 在 `final` profile 下不在校验范围，verify 列为
   extra 警告（`--strict` 才失败）；需要校验原始帧用 `--checksum-profile all`。
 
-## 五、真实 soak 数据集实测（episode_0001，300 步 × 4 相机）
+## 六、真实 soak 数据集实测（episode_0001，300 步 × 4 相机）
 
 | 指标 | 值 |
 |------|-----|
@@ -269,7 +329,7 @@ manifest 与 checksum 文件全部使用 **POSIX 相对路径**，无盘符/反�
 > GRF seed 未知。用新代码重新导出会因 seed 派生改变轨迹，需同步重渲重标注——因此
 > 本轮保留旧轨迹并如实标记 legacy。
 
-## 六、推荐命令汇总
+## 七、推荐命令汇总
 
 ```powershell
 # 1) 可复现导出（seed 覆盖）

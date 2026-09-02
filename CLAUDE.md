@@ -23,7 +23,8 @@
 ## 常用命令
 
 所有 P1 命令都在 `code/` 下通过 `uv` 运行（`.venv`，Python 3.9 由 `.python-version` 固定）。
-**推荐以 dataset task 为入口**（单 config，`configs/*.json` 已含机器路径并入库）：
+**推荐以 dataset task 为入口**。Config v3 task 不含机器路径；通过显式 local config
+解析后生成运行时文件。现有 v2 task 仍保留旧的内联机器路径兼容模式：
 
 ```powershell
 uv sync                                   # 安装依赖（含 dev 组的 pytest）
@@ -37,6 +38,28 @@ uv run grf-ue task cleanup configs/pose_smoke_3frames_1cam.json --dry-run # 默�
 uv run pytest                             # 运行全部测试
 uv run pytest -m grf_integration -q       # 真实 GRF seed 复现集成测试
 ```
+
+Config v3 使用方式：
+
+```powershell
+uv run grf-ue task validate configs/episode_0001.json --local-config configs/local.machine.json
+uv run grf-ue task resolve configs/episode_0001.json --local-config configs/local.machine.json
+```
+
+local config 模板为 `configs/local.machine.example.json`，真实文件
+`configs/local.machine.json` 已忽略且不得入库。选择优先级固定为
+`--local-config` > `FUTSALMOT_LOCAL_CONFIG` > 缺少配置时报错；不自动搜索 task 同目录。
+v3 validate/resolve 要求 local config 合法，`dataset_root` 与 `ue_project_root` 存在且为目录，
+并要求 UE 根目录恰好包含一个 `.uproject`。门禁失败不写半完整 resolved task；resolve 失败
+保留已有文件，validate 只读。
+
+v3 用户层只允许 `schema`/`version`、`episode_id`、`simulation`、`cameras`、`output` 和
+`debug`，其中 `output.fps`、resolution、annotations、classes 与 camera mapping 各只有
+一个来源。resolver 仍派生完整的 `export_profile`、`ue_profile`、`actor_mapping`、
+`postprocess`、`audit`、`artifact_policy` 和全部绝对运行路径，并在 `config_v3` 保存
+episode、seed、steps、fps、resolution、cameras、annotations、classes、expected frames、
+public sequence names 摘要。不得在 v3 混入 v2 的路径、`export`、`ue`、`postprocess` 或
+`audit` 字段。
 
 P2 脚本**在 Unreal Editor 内**运行，绝不在 `.venv` 中运行；配置了 Unreal MCP 时优先
 通过 `FutsalMOTTools` 执行真实 Unreal Python：
@@ -65,7 +88,7 @@ outputs，canonical JPG/GT/manifest 保留。
 ### P1：导出（`src/grf_ue_bridge/`）
 
 - `cli.py` — typer 应用；提供 `grf-ue task ...` 工作流 + 既有 `export`/`validate`/`annotate-*`/`cryptomatte-to-mask`/`build-manifest` 等命令。
-- `config/` — `models.py`（DatasetTaskConfig 单 config：`export`/`ue`/`dataset_root`/`ue_project_root` 内联、ResolvedTask、ExportConfig）、`loader.py`、`resolver.py`（归一化 resolved task）、`paths.py`（仓库根探测/可移植）。旧 `config.py`（ExportConfig）已并入 `config/models.py`。
+- `config/` — `models.py`（Config v3、local config、v2 DatasetTaskConfig、ResolvedTask、ExportConfig）、`loader.py`、`resolver.py`（v3 路径门禁与旧字段归一化）、`paths.py`（仓库根探测/可移植）。旧 `config.py`（ExportConfig）已并入 `config/models.py`。
 - `grf_runner.py` — 运行 GRF 环境。强制 `number_of_left_players_agent_controls=1`，每一步都发送 `action_builtin_ai`（索引 19，`action_set='v2'`），使所有球员都表现为内置 AI，同时把完整观测记录进 `EpisodeResult`/`StepSnapshot`。
 - `coordinate_transform.py` — `CoordinateTransform`：GRF 归一化 x/y `[-1, 1]` → 米 `[-half_field, +half_field]`；球的 z 原样透传（引擎 `Z_FIELD_SCALE=1`，地面约 0.11 m）；球员固定 z=0。
 - `exporter.py` — 写入 `meta.json` + `frames.jsonl`（`dump_full_raw_observation` 时额外写 `raw_observations.jsonl`）。从 `external_sources.lock.json` 读取固定的提交号写入 `meta.source`。
@@ -122,5 +145,5 @@ outputs，canonical JPG/GT/manifest 保留。
 - **环境隔离必须严格**：UE 脚本绝不能导入 P1 代码（UE Python 没有 gfootball）。JSONL 格式是两者之间唯一的接口。
 - P1 侧可 import `ue/` 下不依赖 unreal 的纯模块（`instance_mask`/`annotation_utils`/`dataset_export`，`tests/conftest.py` 已把 `ue/` 加入 sys.path，`mask_annotator`/`annotation_validator` 同样处理）。UE 侧只 import 纯 Python 模块（`annotation_utils`/`dataset_export`/`scene_apply`），**绝不能 import 依赖 numpy 的 `instance_mask`**（UE Python 没有 numpy）；UE 侧要 mask_id 映射时用 `annotation_utils.entity_id_to_mask_id`。
 - 外部仓库（`google-research-football`、`GRF_MARL`）vendor 在 `.external/` 下（git 忽略），提交号在 `external_sources.lock.json` 中固定。`gfootball`/`gym<0.26` 要求 Python 3.9——不要升级 Python 版本。
-- 生成的 episode 放在 `outputs/`（git 忽略）；`configs/*.json` 的 task 配置（含机器路径）**直接入库**（单 config 设计；不忽略本地配置——机器路径本就是仓库内容的一部分）。
+- 生成的 episode 放在 `outputs/`（git 忽略）；Config v3 task 可入库但不含机器路径，真实 `configs/local.machine.json` 被 git 忽略。v2 task 仍可按兼容模式使用内联路径。
 - 当前只有 `main` 分支（本地与远程同步）。旧的 `grf-reboot`、`archive/legacy-*` 分支已删除，历史完整保留在 `main` 中。

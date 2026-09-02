@@ -5,11 +5,14 @@ from __future__ import annotations
 import configparser
 import json
 import math
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Set, Tuple
 
 from PIL import Image
+
+SEQUENCE_NAME_RE = re.compile(r"^FutsalMOT_(?P<episode>.+)_C(?P<camera>\d{2})$")
 
 
 @dataclass
@@ -99,6 +102,14 @@ def _seqinfo(path: Path, errors: List[str]) -> Dict[str, str]:
 def _validate_sequence(cam: Path, manifest_seq: dict, manifest_dims: Tuple[int, int], errors: List[str]) -> Tuple[Set[Tuple[int, int]], Dict[str, Any]]:
     name = cam.name
     width, height = manifest_dims
+    match = SEQUENCE_NAME_RE.fullmatch(name)
+    if not match:
+        errors.append(f"{name}: 序列目录名不匹配规范")
+    camera_id = manifest_seq.get("camera_id")
+    if isinstance(camera_id, bool) or not isinstance(camera_id, int) or not 1 <= camera_id <= 99:
+        errors.append(f"{name}: camera_id 必须为 1..99 整数")
+    elif match and int(match.group("camera")) != camera_id:
+        errors.append(f"{name}: camera_id 与目录名不一致")
     stats: Dict[str, Any] = {"camera_id": name, "ok": True, "render_rgb": 0,
                              "render_mask_exr": 0, "img1_rgb": 0, "mask_png": 0,
                              "annotations_frames": 0, "det_txt": 0, "seg_txt": 0,
@@ -111,11 +122,15 @@ def _validate_sequence(cam: Path, manifest_seq: dict, manifest_dims: Tuple[int, 
         frame_count = 0
     if width <= 0 or height <= 0:
         errors.append(f"{name}: episode dimensions 必须为正整数")
-    for key, expected in (("width", width), ("height", height)):
+    for key, expected in (("image_width", width), ("image_height", height)):
         if manifest_seq.get(key) != expected:
             errors.append(f"{name}: manifest sequence {key} 与 episode dimensions 不一致")
-    if manifest_seq.get("name") != name:
-        errors.append(f"序列目录名 {name!r} 与 manifest name {manifest_seq.get('name')!r} 不一致")
+    if manifest_seq.get("sequence_name") != name:
+        errors.append(f"序列目录名 {name!r} 与 manifest sequence_name {manifest_seq.get('sequence_name')!r} 不一致")
+    if manifest_seq.get("relative_path") != name:
+        errors.append(f"{name}: relative_path 必须等于 sequence_name")
+    if manifest_seq.get("modalities") != ["rgb", "mot", "mots", "pose"]:
+        errors.append(f"{name}: modalities 不匹配")
     seqinfo_path = cam / "seqinfo.ini"
     if not seqinfo_path.exists():
         errors.append(f"{name}: 缺少 seqinfo.ini")
@@ -300,12 +315,18 @@ def validate_public_episode(episode_dir: Path) -> ValidationResult:
     if not isinstance(manifest, dict):
         errors.append("缺少或无效 episode_manifest.json")
         return ValidationResult(False, errors, {"sequences": 0})
-    if manifest.get("schema_version") != "futsalmot_public_episode_v1":
+    if manifest.get("schema_version") != 1:
         errors.append("manifest schema_version 不匹配")
     if manifest.get("episode_id") != manifest.get("trajectory_id"):
         errors.append("manifest episode_id 与 trajectory_id 不一致")
-    if manifest.get("public_classes") != {"player": 1, "ball": 100}:
-        errors.append("manifest public_classes 必须为 player=1、ball=100")
+    if manifest.get("public_classes") != ["player", "ball"]:
+        errors.append("manifest public_classes 必须为 [player, ball]")
+    expected_policy = {
+        "player": {"track_id_range": [1, 10], "class_id": 1},
+        "ball": {"track_id": 100, "class_id": 100},
+    }
+    if manifest.get("track_id_policy") != expected_policy:
+        errors.append("manifest track_id_policy 不匹配")
     dimensions = manifest.get("dimensions") or {}
     try:
         if any(isinstance(dimensions[key], bool) or not isinstance(dimensions[key], int) for key in ("width", "height")):
@@ -327,16 +348,19 @@ def validate_public_episode(episode_dir: Path) -> ValidationResult:
     names = []
     all_sets = []
     for sequence in sequences:
-        if not isinstance(sequence, dict) or not isinstance(sequence.get("name"), str):
-            errors.append("manifest sequence 缺少 name")
+        if not isinstance(sequence, dict) or not isinstance(sequence.get("sequence_name"), str):
+            errors.append("manifest sequence 缺少 sequence_name")
             continue
-        names.append(sequence["name"])
+        names.append(sequence["sequence_name"])
+        sequence_match = SEQUENCE_NAME_RE.fullmatch(sequence["sequence_name"])
+        if sequence_match and sequence_match.group("episode") != manifest.get("episode_id"):
+            errors.append(f"{sequence['sequence_name']}: 序列 episode_id 与 manifest 不一致")
         seq_count = sequence.get("frame_count")
         if isinstance(seq_count, bool) or not isinstance(seq_count, int) or seq_count <= 0:
-            errors.append(f"{sequence['name']}: sequence frame_count 必须为正整数")
+            errors.append(f"{sequence['sequence_name']}: sequence frame_count 必须为正整数")
         elif seq_count != root_frame_count:
-            errors.append(f"{sequence['name']}: sequence frame_count 与 manifest frame_count 不一致")
-        cam = episode_dir / sequence["name"]
+            errors.append(f"{sequence['sequence_name']}: sequence frame_count 与 manifest frame_count 不一致")
+        cam = episode_dir / sequence.get("relative_path", "")
         if not cam.is_dir():
             errors.append(f"manifest sequence 目录不存在: {cam}")
             continue
@@ -344,6 +368,10 @@ def validate_public_episode(episode_dir: Path) -> ValidationResult:
         all_sets.append(sequence_stats)
     if len(names) != len(set(names)):
         errors.append("manifest sequences 含重复 name")
+    sequence_camera_ids = [sequence.get("camera_id") for sequence in sequences if isinstance(sequence, dict)]
+    valid_camera_ids = [value for value in sequence_camera_ids if isinstance(value, int) and not isinstance(value, bool)]
+    if len(valid_camera_ids) != len(set(valid_camera_ids)):
+        errors.append("manifest sequences 含重复 camera_id")
     stats = {"sequences": len(sequences), "frames": sum(value.get("annotations_frames", 0) for value in all_sets),
              "sequence_names": names, "cameras": {value["camera_id"]: value for value in all_sets}}
     return ValidationResult(not errors, errors, stats)

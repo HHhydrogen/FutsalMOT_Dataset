@@ -6,6 +6,8 @@ import json
 import math
 import os
 import re
+import shutil
+import tempfile
 import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -164,9 +166,9 @@ def _bbox(mask: np.ndarray, mask_id: int) -> Optional[Tuple[int, int, int, int]]
     return int(xs.min()), int(ys.min()), int(xs.max() - xs.min() + 1), int(ys.max() - ys.min() + 1)
 
 
-def _pose_keypoints(obj: Optional[dict], camera, extrinsics) -> Optional[List[List[float]]]:
+def _pose_keypoints(obj: Optional[dict], camera, extrinsics) -> List[List[float]]:
     if obj is None or extrinsics is None:
-        return None
+        return [[0.0, 0.0, 0]] * 17
     points = obj.get("keypoints_world")
     if not isinstance(points, list) or len(points) != 17:
         points = [None] * 17
@@ -192,15 +194,18 @@ def build_public_manifest(episode_id: str, sequences: list[dict], frame_count: i
                           width: int, height: int) -> dict:
     """构建公开 episode manifest。"""
     return {
-        "schema_version": "futsalmot_public_episode_v1",
+        "schema_version": 1,
         "episode_id": episode_id,
         "trajectory_id": episode_id,
         "sequences": sequences,
         "frame_count": int(frame_count),
         "dimensions": {"width": int(width), "height": int(height)},
         "modalities": ["rgb", "mot", "mots", "pose"],
-        "public_classes": {"player": 1, "ball": 100},
-        "track_policy": {"players": "L0..L4=1..5,R0..R4=6..10", "ball": 100},
+        "public_classes": ["player", "ball"],
+        "track_id_policy": {
+            "player": {"track_id_range": [1, 10], "class_id": 1},
+            "ball": {"track_id": 100, "class_id": 100},
+        },
     }
 
 
@@ -234,14 +239,50 @@ def _write_jpegs(camera_dir: Path, quality: int) -> None:
             continue
         temporary = target.with_name(target.name + ".tmp")
         try:
-            Image.open(source).convert("RGB").save(
-                temporary, format="JPEG", quality=int(quality), optimize=False
-            )
+            Image.open(source).convert("RGB").save(temporary, format="JPEG", quality=int(quality), optimize=False)
             os.replace(temporary, target)
             source.unlink()
         finally:
             if temporary.exists():
                 temporary.unlink()
+
+
+def _copy_normalized_images(source_dir: Path, target_dir: Path, quality: int) -> None:
+    """复制 JPG/JPEG 原字节；仅将 PNG 转为 JPEG。"""
+    from PIL import Image
+
+    target_dir.mkdir(parents=True, exist_ok=True)
+    sources = sorted(p for p in (source_dir / "img1").glob("*")
+                     if p.is_file() and p.suffix.lower() in {".png", ".jpg", ".jpeg"})
+    normalized = {}
+    for source in sources:
+        if not source.stem.isdigit() or int(source.stem) > 999999:
+            raise ValueError(f"img1 文件名必须为数字帧号: {source.name}")
+        target = f"{int(source.stem):06d}.jpg"
+        normalized.setdefault(target, []).append(source)
+    conflicts = {name: paths for name, paths in normalized.items() if len(paths) > 1}
+    if conflicts:
+        detail = "; ".join(f"{name}: {', '.join(p.name for p in paths)}"
+                            for name, paths in sorted(conflicts.items()))
+        raise ValueError(f"img1 规范化帧名冲突（未修改任何文件）: {detail}")
+    for target_name, paths in normalized.items():
+        source = paths[0]
+        target = target_dir / target_name
+        if source.suffix.lower() in {".jpg", ".jpeg"}:
+            shutil.copyfile(source, target)
+        else:
+            with Image.open(source) as image:
+                image.convert("RGB").save(target, format="JPEG", quality=int(quality), optimize=False)
+
+
+def _camera_id(config: dict, camera_dir: Path, ordinal: int) -> int:
+    value = config.get("camera_id")
+    if value is None:
+        match = re.search(r"(\d+)$", camera_dir.name)
+        value = int(match.group(1)) if match else ordinal
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 99:
+        raise ValueError(f"camera_id 必须是 1..99 的整数: {value!r}")
+    return value
 
 
 def _preflight_jpeg_normalization(camera_dirs: list[Path]) -> None:
@@ -292,15 +333,29 @@ def write_public_episode(episode_dir: Path, *, mapping: dict, sequence_configs: 
         for config in configs
     ]
     _preflight_jpeg_normalization(camera_dirs)
-    for config in configs:
+    source_data = []
+    for ordinal, config in enumerate(configs, 1):
         camera_dir = Path(config.get("camera_dir", config.get("path", config.get("directory"))))
-        name = str(config.get("sequence_name", config.get("name", camera_dir.name)))
         width, height, camera, extrinsics = _load_camera(camera_dir)
         annotations = {int(row["frame_index"]): row for row in _load_jsonl(camera_dir / "annotations.jsonl")}
         pose_rows = _load_jsonl(camera_dir / "pose_keypoints.jsonl")
         pose_by_frame = {int(row["frame_index"]): row for row in pose_rows if row.get("kind") == "frame"}
         if annotations:
             episode_id = episode_id or next(iter(annotations.values())).get("episode_id")
+        source_data.append((ordinal, config, camera_dir, width, height, camera, extrinsics, annotations, pose_by_frame))
+    if episode_id is None:
+        episode_id = episode_dir.name
+    camera_ids = [_camera_id(config, camera_dir, ordinal)
+                  for ordinal, config, camera_dir, *_ in source_data]
+    if len(camera_ids) != len(set(camera_ids)):
+        raise ValueError("camera_id 必须唯一")
+    stage_root = Path(tempfile.mkdtemp(prefix=f".{episode_dir.name}.public-", dir=str(episode_dir.parent)))
+    try:
+      for (ordinal, config, camera_dir, width, height, camera, extrinsics, annotations, pose_by_frame), camera_id in zip(source_data, camera_ids):
+        name = f"FutsalMOT_{episode_id}_C{camera_id:02d}"
+        staged_camera = stage_root / name
+        (staged_camera / "gt").mkdir(parents=True)
+        _copy_normalized_images(camera_dir, staged_camera / "img1", jpeg_quality)
         frame_ids = sorted(annotations)
         max_frames = max(max_frames, len(frame_ids))
         out_width, out_height = width, height
@@ -325,17 +380,44 @@ def write_public_episode(episode_dir: Path, *, mapping: dict, sequence_configs: 
                 pose_records.append({"frame_id": frame_id, "track_id": track_id,
                                      "class": "ball" if entity_id == "BALL" else "player",
                                      "bbox": [x, y, w, h], "keypoints": keypoints})
-        gt_dir = camera_dir / "gt"
+        gt_dir = staged_camera / "gt"
         write_text_atomic(gt_dir / "gt.txt", "\n".join(mot_rows) + ("\n" if mot_rows else ""))
         write_json_atomic(gt_dir / "gt_pose.json", pose_records)
         write_text_atomic(gt_dir / "gt_mots.txt", "\n".join(mots_rows) + ("\n" if mots_rows else ""))
         fps = int(config.get("frame_rate", config.get("fps", 30)))
         seqinfo = "[Sequence]\nname={}\nimDir=img1\nframeRate={}\nseqLength={}\nimWidth={}\nimHeight={}\nimExt=.jpg\n".format(name, fps, len(frame_ids), width, height)
-        write_text_atomic(camera_dir / "seqinfo.ini", seqinfo)
-        _write_jpegs(camera_dir, jpeg_quality)
-        manifest_sequences.append({"name": name, "frame_count": len(frame_ids), "width": width, "height": height})
-    if episode_id is None:
-        episode_id = episode_dir.name
-    manifest = build_public_manifest(episode_id, manifest_sequences, max_frames, out_width, out_height)
-    write_json_atomic(episode_dir / "episode_manifest.json", manifest)
-    return manifest
+        write_text_atomic(staged_camera / "seqinfo.ini", seqinfo)
+        manifest_sequences.append({
+            "sequence_name": name, "camera_id": camera_id, "relative_path": name,
+            "frame_count": len(frame_ids), "image_width": width, "image_height": height,
+            "modalities": ["rgb", "mot", "mots", "pose"],
+        })
+      manifest = build_public_manifest(episode_id, manifest_sequences, max_frames, out_width, out_height)
+      write_json_atomic(stage_root / "episode_manifest.json", manifest)
+      backups = []
+      try:
+        for item in manifest_sequences:
+            target = episode_dir / item["relative_path"]
+            backup = stage_root / (".backup-" + target.name)
+            if target.exists():
+                os.replace(target, backup)
+                backups.append((target, backup))
+            os.replace(stage_root / item["relative_path"], target)
+        manifest_target = episode_dir / "episode_manifest.json"
+        manifest_backup = stage_root / ".backup-episode_manifest.json"
+        if manifest_target.exists():
+            os.replace(manifest_target, manifest_backup)
+            backups.append((manifest_target, manifest_backup))
+        os.replace(stage_root / "episode_manifest.json", manifest_target)
+      except Exception:
+        for target in [episode_dir / item["relative_path"] for item in manifest_sequences]:
+            if target.exists():
+                shutil.rmtree(target)
+        if (episode_dir / "episode_manifest.json").exists():
+            (episode_dir / "episode_manifest.json").unlink()
+        for target, backup in reversed(backups):
+            os.replace(backup, target)
+        raise
+      return manifest
+    finally:
+      shutil.rmtree(stage_root, ignore_errors=True)

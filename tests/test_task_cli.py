@@ -154,10 +154,11 @@ class TestTaskStatusAudit:
         monkeypatch.setattr("grf_ue_bridge.public_episode._load_mask_for_frame", lambda *_: np.pad(np.ones((1, 1), dtype="uint8"), ((0, 3), (0, 3))))
         resolved = ResolvedTask(task_id="t", episode_name="ep", source_task_file="task.json", repo_root=str(pin_repo_root), ue_project_root=str(pin_repo_root), dataset_root=str(tmp_path), trajectory_output=str(tmp_path), dataset_episode_dir=str(dataset), actor_mapping=str(mapping_path / "actor_mapping.example.json"), ue_profile={"sequences": [{"name": "LS_Cam_01", "camera_actor": "Cam_01"}]}, postprocess={"public_output": True})
         assert run_postprocess(resolved, skip_validate=False) == 0
-        assert (cam / "img1" / "000001.jpg").exists()
-        assert (cam / "gt" / "gt.txt").exists()
-        assert (cam / "gt" / "gt_pose.json").exists()
-        assert (cam / "gt" / "gt_mots.txt").exists()
+        public_cam = dataset / "FutsalMOT_ep_C01"
+        assert (public_cam / "img1" / "000001.jpg").exists()
+        assert (public_cam / "gt" / "gt.txt").exists()
+        assert (public_cam / "gt" / "gt_pose.json").exists()
+        assert (public_cam / "gt" / "gt_mots.txt").exists()
         assert (dataset / "episode_manifest.json").exists()
         assert not (cam / "mask").exists()
         assert not (cam / "labels").exists()

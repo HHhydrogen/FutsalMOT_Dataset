@@ -70,13 +70,14 @@ def test_writer_emits_player_ball_and_matching_identity_sets(tmp_path, monkeypat
     result = write_public_episode(tmp_path, mapping=PUBLIC_MAPPING,
                                   sequence_configs=[{"sequence_name": "Cam_01", "camera_dir": cam}])
     assert result["episode_id"] == "ep1"
-    gt = (cam / "gt" / "gt.txt").read_text(encoding="utf-8").splitlines()
+    public_cam = tmp_path / "FutsalMOT_ep1_C01"
+    gt = (public_cam / "gt" / "gt.txt").read_text(encoding="utf-8").splitlines()
     assert gt == ["1,1,1,1,2,3,1,1,1.00", "1,100,6,4,2,2,1,100,1.00"]
-    pose = json.loads((cam / "gt" / "gt_pose.json").read_text(encoding="utf-8"))
+    pose = json.loads((public_cam / "gt" / "gt_pose.json").read_text(encoding="utf-8"))
     assert {(x["frame_id"], x["track_id"]) for x in pose} == {(1, 1), (1, 100)}
-    mots = (cam / "gt" / "gt_mots.txt").read_text(encoding="utf-8").splitlines()
+    mots = (public_cam / "gt" / "gt_mots.txt").read_text(encoding="utf-8").splitlines()
     assert len(mots) == 2 and mots[0].split()[1:3] == ["1", "1"]
-    assert not (cam / "mask").exists()
+    assert not (public_cam / "mask").exists()
 
 
 def test_manifest_trajectory_id_and_dimensions():
@@ -100,7 +101,7 @@ def test_invalid_keypoints_are_kept_as_zero_visibility(tmp_path, monkeypatch):
     mask[0:2, 0:2] = 1
     monkeypatch.setattr("grf_ue_bridge.public_episode._load_mask_for_frame", lambda *_: mask)
     write_public_episode(tmp_path, mapping=PUBLIC_MAPPING, sequence_configs=[{"camera_dir": cam}])
-    pose = json.loads((cam / "gt" / "gt_pose.json").read_text(encoding="utf-8"))[0]
+    pose = json.loads((tmp_path / "FutsalMOT_ep_C01" / "gt" / "gt_pose.json").read_text(encoding="utf-8"))[0]
     assert pose["keypoints"][0][2] == 0
 
 
@@ -116,7 +117,7 @@ def test_offscreen_keypoints_are_zero_visibility(tmp_path, monkeypatch):
     mask = np.zeros((4, 4), dtype=np.uint8); mask[0, 0] = 1
     monkeypatch.setattr("grf_ue_bridge.public_episode._load_mask_for_frame", lambda *_: mask)
     write_public_episode(tmp_path, mapping=PUBLIC_MAPPING, sequence_configs=[{"camera_dir": cam}])
-    assert json.loads((cam / "gt" / "gt_pose.json").read_text(encoding="utf-8"))[0]["keypoints"][0][2] == 0
+    assert json.loads((tmp_path / "FutsalMOT_ep_C01" / "gt" / "gt_pose.json").read_text(encoding="utf-8"))[0]["keypoints"][0][2] == 0
 
 
 def test_invisible_frame_writes_empty_canonical_files(tmp_path, monkeypatch):
@@ -127,8 +128,9 @@ def test_invisible_frame_writes_empty_canonical_files(tmp_path, monkeypatch):
     (cam / "annotations.jsonl").write_text(json.dumps({"episode_id": "ep", "frame_index": 1, "objects": []}) + "\n", encoding="utf-8")
     monkeypatch.setattr("grf_ue_bridge.public_episode._load_mask_for_frame", lambda *_: np.zeros((2, 3), dtype=np.uint8))
     write_public_episode(tmp_path, mapping=PUBLIC_MAPPING, sequence_configs=[{"camera_dir": cam}])
-    assert (cam / "gt" / "gt.txt").read_text(encoding="utf-8") == ""
-    assert json.loads((cam / "gt" / "gt_pose.json").read_text(encoding="utf-8")) == []
+    public_cam = tmp_path / "FutsalMOT_ep_C01"
+    assert (public_cam / "gt" / "gt.txt").read_text(encoding="utf-8") == ""
+    assert json.loads((public_cam / "gt" / "gt_pose.json").read_text(encoding="utf-8")) == []
 
 
 def test_sequence_order_and_bbox_are_deterministic(tmp_path, monkeypatch):
@@ -142,7 +144,7 @@ def test_sequence_order_and_bbox_are_deterministic(tmp_path, monkeypatch):
         m = np.zeros((3, 4), dtype=np.uint8); m[:, 3 if camera_dir.name == "Cam_B" else 0] = 1; return m
     monkeypatch.setattr("grf_ue_bridge.public_episode._load_mask_for_frame", mask_loader)
     result = write_public_episode(tmp_path, mapping=PUBLIC_MAPPING, sequence_configs=[{"camera_dir": cams[0]}, {"camera_dir": cams[1]}])
-    assert [s["name"] for s in result["sequences"]] == ["Cam_A", "Cam_B"]
+    assert [s["sequence_name"] for s in result["sequences"]] == ["FutsalMOT_ep_C01", "FutsalMOT_ep_C02"]
 
 
 def test_mapping_rejects_missing_extra_and_invalid_entities(tmp_path):
@@ -248,3 +250,85 @@ def test_write_public_episode_preflights_collision_before_any_episode_write(tmp_
 
     assert "000001.jpg" in str(error.value) and "1.png" in str(error.value)
     assert {str(p.relative_to(tmp_path)): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()} == snapshot
+
+
+def test_public_manifest_uses_canonical_sequence_schema_and_camera_ids(tmp_path, monkeypatch):
+    cam = tmp_path / "Cam_01"
+    cam.mkdir()
+    (cam / "img1").mkdir()
+    (cam / "camera.json").write_text(json.dumps({
+        "camera_id": "Cam_01", "image_width": 2, "image_height": 2,
+        "intrinsics": {"width": 2, "height": 2, "fx": 1, "fy": 1, "cx": 1, "cy": 1},
+        "extrinsics": {},
+    }), encoding="utf-8")
+    (cam / "annotations.jsonl").write_text(json.dumps({
+        "episode_id": "ep", "frame_index": 1, "objects": [{"entity_id": "L0"}]
+    }) + "\n", encoding="utf-8")
+    Image.new("RGB", (2, 2), "red").save(cam / "img1" / "000001.jpg", quality=91)
+    monkeypatch.setattr("grf_ue_bridge.public_episode._load_mask_for_frame",
+                        lambda *_: np.array([[1, 0], [0, 0]], dtype=np.uint8))
+
+    manifest = write_public_episode(tmp_path, mapping=PUBLIC_MAPPING,
+                                    sequence_configs=[{"camera_dir": cam}])
+
+    assert manifest["schema_version"] == 1
+    assert manifest["public_classes"] == ["player", "ball"]
+    assert set(manifest["track_id_policy"]) == {"player", "ball"}
+    assert manifest["sequences"] == [{
+        "sequence_name": "FutsalMOT_ep_C01", "camera_id": 1,
+        "relative_path": "FutsalMOT_ep_C01", "frame_count": 1,
+        "image_width": 2, "image_height": 2,
+        "modalities": ["rgb", "mot", "mots", "pose"],
+    }]
+    assert (tmp_path / "FutsalMOT_ep_C01" / "img1" / "000001.jpg").read_bytes() == \
+        (cam / "img1" / "000001.jpg").read_bytes()
+
+
+def test_public_writer_rolls_back_all_cameras_on_late_failure(tmp_path, monkeypatch):
+    cams = []
+    for index in (1, 2):
+        cam = tmp_path / f"Cam_{index:02d}"
+        cam.mkdir()
+        (cam / "img1").mkdir()
+        (cam / "camera.json").write_text(json.dumps({
+            "image_width": 2, "image_height": 2,
+            "intrinsics": {"width": 2, "height": 2, "fx": 1, "fy": 1, "cx": 1, "cy": 1},
+            "extrinsics": {},
+        }), encoding="utf-8")
+        (cam / "annotations.jsonl").write_text(json.dumps({
+            "episode_id": "ep", "frame_index": 1, "objects": [{"entity_id": "L0"}]
+        }) + "\n", encoding="utf-8")
+        Image.new("RGB", (2, 2), "red").save(cam / "img1" / "000001.jpg")
+        cams.append(cam)
+    old = tmp_path / "FutsalMOT_ep_C01"
+    (old / "gt").mkdir(parents=True)
+    (old / "gt" / "gt.txt").write_text("old\n", encoding="utf-8")
+    (tmp_path / "episode_manifest.json").write_text("old manifest", encoding="utf-8")
+    monkeypatch.setattr("grf_ue_bridge.public_episode._load_mask_for_frame",
+                        lambda camera_dir, *_: (_ for _ in ()).throw(RuntimeError("second camera"))
+                        if camera_dir.name == "Cam_02" else np.array([[1, 0], [0, 0]], dtype=np.uint8))
+    before = {str(p.relative_to(tmp_path)): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+
+    with pytest.raises(RuntimeError, match="second camera"):
+        write_public_episode(tmp_path, mapping=PUBLIC_MAPPING,
+                             sequence_configs=[{"camera_dir": c} for c in cams])
+
+    assert {str(p.relative_to(tmp_path)): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()} == before
+
+
+def test_player_pose_without_projection_is_seventeen_zero_triples(tmp_path, monkeypatch):
+    cam = tmp_path / "Cam_01"
+    cam.mkdir()
+    (cam / "camera.json").write_text(json.dumps({
+        "image_width": 2, "image_height": 2,
+        "intrinsics": {"width": 2, "height": 2, "fx": 1, "fy": 1, "cx": 1, "cy": 1},
+        "extrinsics": {},
+    }), encoding="utf-8")
+    (cam / "annotations.jsonl").write_text(json.dumps({
+        "episode_id": "ep", "frame_index": 1, "objects": [{"entity_id": "L0"}]
+    }) + "\n", encoding="utf-8")
+    monkeypatch.setattr("grf_ue_bridge.public_episode._load_mask_for_frame",
+                        lambda *_: np.array([[1, 0], [0, 0]], dtype=np.uint8))
+    write_public_episode(tmp_path, mapping=PUBLIC_MAPPING, sequence_configs=[{"camera_dir": cam}])
+    pose = json.loads((tmp_path / "FutsalMOT_ep_C01" / "gt" / "gt_pose.json").read_text())
+    assert pose[0]["keypoints"] == [[0.0, 0.0, 0]] * 17

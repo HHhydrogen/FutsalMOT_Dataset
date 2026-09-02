@@ -96,12 +96,12 @@ def test_cleanup_collects_all_yolo_rgb_suffixes(tmp_path):
 
 
 def _write_real_public_fixture(root: Path):
-    cam = root / "Cam_01"
+    cam = root / "FutsalMOT_episode_01_C01"
     (cam / "img1").mkdir(parents=True)
     (cam / "gt").mkdir()
     Image.new("RGB", (2, 2), "black").save(cam / "img1" / "000001.jpg")
     (cam / "seqinfo.ini").write_text(
-        "[Sequence]\nname=Cam_01\nimDir=img1\nframeRate=30\nseqLength=1\nimWidth=2\nimHeight=2\nimExt=.jpg\n",
+        "[Sequence]\nname=FutsalMOT_episode_01_C01\nimDir=img1\nframeRate=30\nseqLength=1\nimWidth=2\nimHeight=2\nimExt=.jpg\n",
         encoding="utf-8",
     )
     mot = "1,1,0,0,1,1,1,1,1\n1,100,1,1,1,1,1,100,1\n"
@@ -115,10 +115,15 @@ def _write_real_public_fixture(root: Path):
         {"frame_id": 1, "track_id": 100, "class": "ball", "bbox": [1, 1, 1, 1], "keypoints": None},
     ]), encoding="utf-8")
     (root / "episode_manifest.json").write_text(json.dumps({
-        "schema_version": "futsalmot_public_episode_v1", "episode_id": "episode_01",
+        "schema_version": 1, "episode_id": "episode_01",
         "trajectory_id": "episode_01", "frame_count": 1, "dimensions": {"width": 2, "height": 2},
-        "sequences": [{"name": "Cam_01", "frame_count": 1, "width": 2, "height": 2}],
-        "public_classes": {"player": 1, "ball": 100},
+        "sequences": [{"sequence_name": "FutsalMOT_episode_01_C01", "camera_id": 1,
+                       "relative_path": "FutsalMOT_episode_01_C01", "frame_count": 1,
+                       "image_width": 2, "image_height": 2,
+                       "modalities": ["rgb", "mot", "mots", "pose"]}],
+        "public_classes": ["player", "ball"],
+        "track_id_policy": {"player": {"track_id_range": [1, 10], "class_id": 1},
+                             "ball": {"track_id": 100, "class_id": 100}},
     }), encoding="utf-8")
     (root / "render_summary.json").write_text(json.dumps({"status": "success"}), encoding="utf-8")
     (root / "pose_session.json").write_text(json.dumps({"capture_complete": True}), encoding="utf-8")
@@ -129,10 +134,10 @@ def test_cleanup_preserves_public_outputs_and_removes_render_after_public_valida
     cam = _write_real_public_fixture(tmp_path)
     (cam / "render_mask").mkdir()
     (cam / "render_mask" / "000000.exr").write_bytes(b"exr")
-    report = plan_cleanup(tmp_path, ["Cam_01"])
+    report = plan_cleanup(tmp_path, ["FutsalMOT_episode_01_C01"])
     assert str(cam / "render_mask" / "000000.exr") in report["would_delete"]
     assert str(cam / "img1" / "000001.jpg") not in report["would_delete"]
-    result = apply_cleanup(tmp_path, ["Cam_01"])
+    result = apply_cleanup(tmp_path, ["FutsalMOT_episode_01_C01"])
     assert result["ok"]
     assert not (cam / "render_mask").exists()
     assert (cam / "img1" / "000001.jpg").exists()
@@ -141,23 +146,23 @@ def test_cleanup_preserves_public_outputs_and_removes_render_after_public_valida
 
 def test_cleanup_blocks_when_public_validation_fails(tmp_path, monkeypatch):
     _write_real_public_fixture(tmp_path)
-    (tmp_path / "Cam_01" / "render_mask").mkdir()
-    (tmp_path / "Cam_01" / "render_mask" / "000000.exr").write_bytes(b"exr")
+    (tmp_path / "FutsalMOT_episode_01_C01" / "render_mask").mkdir()
+    (tmp_path / "FutsalMOT_episode_01_C01" / "render_mask" / "000000.exr").write_bytes(b"exr")
     monkeypatch.setattr("grf_ue_bridge.public_validator.validate_public_episode", lambda _: type("Result", (), {"ok": False, "errors": ["bad public output"]})())
-    result = apply_cleanup(tmp_path, ["Cam_01"])
+    result = apply_cleanup(tmp_path, ["FutsalMOT_episode_01_C01"])
     assert not result["ok"]
     assert result["reason"] == "validation_gate_failed"
 
 
 def test_cleanup_blocks_real_public_fixture_when_audit_report_fails(tmp_path):
     _write_real_public_fixture(tmp_path)
-    cam = tmp_path / "Cam_01"
+    cam = tmp_path / "FutsalMOT_episode_01_C01"
     (cam / "render_mask").mkdir()
     (cam / "render_mask" / "000000.exr").write_bytes(b"exr")
     audit = tmp_path / "audit"
     audit.mkdir()
     (audit / "soak_audit_report.json").write_text(json.dumps({"ok": False, "failed_checks": ["rgb"]}), encoding="utf-8")
-    result = apply_cleanup(tmp_path, ["Cam_01"])
+    result = apply_cleanup(tmp_path, ["FutsalMOT_episode_01_C01"])
     assert not result["ok"]
     assert (cam / "render_mask" / "000000.exr").exists()
     assert any("audit" in problem for problem in result["gate_problems"])

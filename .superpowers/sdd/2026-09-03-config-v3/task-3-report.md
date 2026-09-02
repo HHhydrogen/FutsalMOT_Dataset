@@ -23,6 +23,8 @@ uv run pytest tests/test_task_cli.py -q
 18 passed, 9 warnings in 0.46s
 ```
 
+命令退出码：`0`
+
 命令：
 
 ```text
@@ -32,11 +34,13 @@ uv run pytest
 输出摘要：
 
 ```text
-============================= 687 passed, 7 deselected, 59 warnings in 11.81s =============================
+=============== 687 passed, 7 deselected, 59 warnings in 11.81s ===============
 ```
+
+命令退出码：`0`
 
 warning 均为预期的 Config v2 弃用提示。
 
 ## 提交
 
-提交：`待提交`
+提交：`110b65e`（后续报告修正提交见 git log）

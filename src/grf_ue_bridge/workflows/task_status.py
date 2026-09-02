@@ -55,7 +55,7 @@ def collect_status(resolved: m.ResolvedTask) -> Dict:
         st["cameras"][cam.name] = {
             "render_rgb": _count_rgb(cam / "render"),
             "object_id_exr": _count(cam / "render_mask", "*.exr"),
-            "img1": _count(cam / "img1", "*.jpg"),
+            "img1": _count_rgb(cam / "img1"),
             "mask": _count(cam / "mask", "*.png"),
             "annotations": _lines(cam / "annotations.jsonl"),
             "det": _count(cam / "labels" / "det", "*.txt"),

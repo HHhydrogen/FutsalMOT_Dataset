@@ -563,14 +563,14 @@ def write_reports(
         "",
         "## 每相机统计",
         "",
-        "| 相机 | render PNG | render_mask EXR | img1 | mask | annotations | det | seg | gt.txt | 缺帧 | 重复 | 零字节 |",
+        "| 相机 | render RGB | render_mask EXR | img1 RGB | mask | annotations | det | seg | gt.txt | 缺帧 | 重复 | 零字节 |",
         "|------|-----------:|----------------:|-----:|-----:|------------:|----:|----:|-------:|:----:|:----:|:------:|",
     ]
     for cid in sorted(report["cameras"]):
         c = report["cameras"][cid]
         lines.append(
-            f"| {cid} | {c.get('render_rgb_png', '-')} | {c.get('render_mask_exr', '-')} "
-            f"| {c.get('img1_png', '-')} | {c.get('mask_png', '-')} | {c.get('annotations_frames', '-')} "
+            f"| {cid} | {c.get('render_rgb', '-')} | {c.get('render_mask_exr', '-')} "
+            f"| {c.get('img1_rgb', '-')} | {c.get('mask_png', '-')} | {c.get('annotations_frames', '-')} "
             f"| {c.get('det_txt', '-')} | {c.get('seg_txt', '-')} | {c.get('gt_txt_lines', '-')} "
             f"| {len(c.get('img1_missing', []))} | {len(c.get('img1_dup', []))} | {c.get('zero_byte', '-')} |"
         )

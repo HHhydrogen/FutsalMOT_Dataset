@@ -58,3 +58,15 @@
 命令：`uv run pytest`
 
 结果：`588 passed, 7 deselected in 13.67s`
+
+## 最终修复
+
+- `task_audit.py` 的 Markdown 汇总使用当前 `render_rgb` 和 `img1_rgb` 统计键，报告显示实际计数。
+- `task_status.py` 的 img1 状态计数支持 `.png`、`.jpg`、`.jpeg`；公开格式约束仍由其他 canonical 路径保持 `.jpg`。
+- 新增混合 RGB 后缀状态计数与 audit Markdown 回归测试。
+
+## 最终测试
+
+命令：`uv run pytest`
+
+结果：`590 passed, 7 deselected in 14.30s`

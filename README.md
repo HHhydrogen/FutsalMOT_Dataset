@@ -381,9 +381,9 @@ uv build
 
 | 现象 | 解决 |
 |------|------|
-| `task validate` 报「解析失败」 | 检查 `configs/*.json` 的 schema/version、`dataset_root`/`ue_project_root` 与 export/ue 块是否完整 |
-| UE 找不到 actor | 检查 `ue` 块的 `actor_mapping` 指向的 JSON 与关卡标签一致 |
-| 球陷进地面 / 倒着滚 | 调 `ue` 块 `ball_rolling` 的 `BALL_Z_OFFSET_CM` / `roll_sign` |
+| Config v3 `task validate` 报「解析失败」 | 检查 v3 task 的 schema/version、`configs/local.machine.json`（或 `FUTSALMOT_LOCAL_CONFIG`）以及 `dataset_root`/`ue_project_root` 和 `.uproject` 门禁；v2 legacy 才检查内联的 export/ue 字段 |
+| Config v3 的 UE 找不到 actor | 检查 task 的 `cameras` 中 UE actor 标签是否与关卡一致；v2 legacy 才检查 `ue.actor_mapping` 指向的 JSON |
+| Config v3 球陷进地面 / 倒着滚 | 检查 `simulation.ball_rolling`；`ue.ball_rolling` 和 `BALL_Z_OFFSET_CM` / `roll_sign` 仅适用于 Config v2 legacy |
 | 渲染未写 `img1/` | 检查 `render_summary.json` 状态；用 `ue/recover_render.py --resolved-task ...` 恢复 |
 | **首帧渲成关卡默认位置**（后续帧正常） | MRQ/PIE 第 0 帧 possessable actor 尚未被 Sequence 接管——`render_episode.py` 已做**首帧 spawn 状态烘焙**（提交渲染前把 actor 设到第 0 帧并保存关卡）；确认 UE 控制台打印 `[MRQ] 首帧 spawn 状态已烘焙` |
 | pose 控制台报 `unreal.ETraceTypeQuery` / `无法读取球员骨骼名` | 是旧版代码：`run_task.py` 已带强制 reload，**重跑同一命令即可**（新代码 probe 解析骨骼、遮挡 trace 全防御，不崩溃） |

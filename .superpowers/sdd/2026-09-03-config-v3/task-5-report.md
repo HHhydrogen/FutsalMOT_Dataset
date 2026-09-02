@@ -20,13 +20,12 @@
 
 ## Commit
 
-前序提交：`86d4095`、`ba1b2c0`、`b19f20a`、`a6a2245`。
-本次修正提交：待提交，提交信息为 `修正Config v3文档兼容说明`。
+文档修正已提交：`5acd53f 修正Config v3文档兼容说明`。
 
 ## 测试与检查
 
 - `uv run pytest`：通过，`691 passed, 7 deselected`。
-- `git diff --check`：通过；仅输出 Git 的 LF/CRLF 提示。
+- `git diff --check`：通过；对当前已跟踪文件的 diff 未发现空白错误，仅输出 Git 的 LF/CRLF 提示。
 - `configs/local.machine.json`：不存在，未创建真实本机配置。
 - tracked `configs/local.machine.json`：0；tracked runtime files：0；tracked secret-like files：0。
 - v3 resolve：未运行。具体限制是 `configs/local.machine.json` 不存在，且不能用占位路径
@@ -35,7 +34,9 @@
 ## 关注事项
 
 当前工作树在任务开始时已有未跟踪的 `.superpowers/sdd/` 资料和 `docs/superpowers/`
-目录，本任务未修改或清理这些既有内容。
+目录，本任务未修改或清理这些既有内容。`git diff --check` 不检查这些未跟踪文件；它们不会
+出现在当前已跟踪文件的 diff 检查结果中。报告文件本身在当前工作树中是已跟踪文件，其他
+未跟踪的 Task 资料仅由 `git status --short` 单独列出。
 
 本次修正更新 `README.md`、`CLAUDE.md`、`configs/README.md`、
 `docs/REPRODUCIBILITY_AND_MANIFEST.md` 和本报告；未修改代码或公开 GT 契约。
@@ -48,17 +49,15 @@
 ============================= test session starts =============================
 platform win32 -- Python 3.9.25, pytest-8.4.2, pluggy-1.6.0
 collected 698 items / 7 deselected / 691 selected
-======================= 691 passed, 7 deselected, 61 warnings in 11.91s =======================
+======================= 691 passed, 7 deselected, 61 warnings in 11.77s =======================
 ```
 
-`git diff --check`
+`git diff --check`（命令退出码 0；当前已跟踪文件的工作树 diff）
 
 ```text
 warning: in the working copy of '.superpowers/sdd/2026-09-03-config-v3/task-5-report.md', LF will be replaced by CRLF the next time Git touches it
-warning: in the working copy of 'CLAUDE.md', LF will be replaced by CRLF the next time Git touches it
 warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
-warning: in the working copy of 'configs/README.md', LF will be replaced by CRLF the next time Git touches it
-warning: in the working copy of 'docs/REPRODUCIBILITY_AND_MANIFEST.md', LF will be replaced by CRLF the next time Git touches it
 ```
 
-`git diff --check` 无空白错误；以上仅为 Git 的换行符提示。
+命令退出码为 0，无空白错误；以上仅为 Git 对两个已跟踪修改文件的换行符提示。未跟踪的
+SDD 资料由 `git status --short` 单独列出，不属于本次 `git diff --check` 输入。

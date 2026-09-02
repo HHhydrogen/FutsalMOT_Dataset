@@ -6,6 +6,7 @@ from PIL import Image
 from grf_ue_bridge.config.models import ResolvedTask
 from grf_ue_bridge.workflows.task_audit import check_camera
 from grf_ue_bridge.workflows.task_status import collect_status
+from grf_ue_bridge.workflows.artifact_cleanup import collect_transient
 
 
 def _camera(root: Path) -> Path:
@@ -43,6 +44,18 @@ def test_task_audit_counts_public_jpeg_and_transient_rgb(tmp_path):
     errors = []
     stats = check_camera(cam, 1, [0], errors, [], mask_enabled=False)
 
-    assert stats["img1_jpg"] == 1
+    assert stats["img1_rgb"] == 1
     assert stats["render_rgb"] == 3
     assert not errors
+
+
+def test_cleanup_collects_all_yolo_rgb_suffixes(tmp_path):
+    _camera(tmp_path)
+    yolo = tmp_path / "yolo_pose" / "images"
+    yolo.mkdir(parents=True)
+    for suffix in ("png", "jpg", "jpeg"):
+        (yolo / f"000001.{suffix}").write_bytes(b"x")
+
+    transient = collect_transient(tmp_path, ["Cam_01"])
+
+    assert all(str(yolo / f"000001.{suffix}") in transient for suffix in ("png", "jpg", "jpeg"))

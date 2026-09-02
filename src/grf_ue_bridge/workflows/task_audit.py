@@ -172,7 +172,10 @@ def check_camera(
     det_dir, seg_dir = cam_dir / "labels" / "det", cam_dir / "labels" / "seg"
     gt_txt = cam_dir / "gt" / "gt.txt"
 
-    img1_files = sorted(img1_dir.glob("*.jpg")) if img1_dir.exists() else []
+    img1_files = sorted(
+        p for p in img1_dir.iterdir()
+        if p.is_file() and p.suffix.lower() in RGB_SUFFIXES
+    ) if img1_dir.exists() else []
     mask_files = sorted(mask_dir.glob("*.png")) if mask_dir.exists() else []
     render_files = sorted(
         p for p in render_dir.rglob("*")
@@ -184,7 +187,7 @@ def check_camera(
 
     st["render_rgb"] = len(render_files)
     st["render_mask_exr"] = len(exr_files)
-    st["img1_jpg"] = len(img1_files)
+    st["img1_rgb"] = len(img1_files)
     st["mask_png"] = len(mask_files)
     st["det_txt"] = len(det_files)
     st["seg_txt"] = len(seg_files)

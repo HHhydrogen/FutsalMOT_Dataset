@@ -66,14 +66,14 @@ class ExternalSourcesInfo(BaseModel):
 class ArtifactCounts(BaseModel):
     """每个 episode 的产物数量统计。"""
 
-    rgb_final: int = 0          # img1/*.png
+    rgb_final: int = 0          # img1/*.jpg（公共格式；兼容读取 PNG/JPG/JPEG）
     instance_mask: int = 0      # mask/*.png
     annotation_frames: int = 0  # annotations.jsonl 行数
     yolo_detect_files: int = 0  # labels/det/*.txt
     yolo_segment_files: int = 0  # labels/seg/*.txt
     yolo_pose_files: int = 0     # labels_pose/*.txt（YOLO Pose，可选）
     mot_sequences: int = 0      # gt/gt.txt 数
-    raw_rgb: int = 0            # render/*.png
+    raw_rgb: int = 0            # render/*.png/*.jpg/*.jpeg
     raw_object_id_exr: int = 0  # render_mask/*.exr
 
 

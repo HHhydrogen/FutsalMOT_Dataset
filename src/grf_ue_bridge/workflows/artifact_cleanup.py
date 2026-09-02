@@ -22,6 +22,8 @@ import json
 import shutil
 from pathlib import Path
 
+RGB_SUFFIXES = {".png", ".jpg", ".jpeg"}
+
 # 每 camera 下 transient 的相对路径（相对 cam_dir）
 _TRANSIENT_CAM_RELS = {
     "render": None,          # render/* （FinalImage + BurnIn）
@@ -74,8 +76,9 @@ def collect_transient(dataset_episode_dir: Path, cams, profile="research_minimal
     for ydir in _YOLO_IMAGE_DIRS:
         t = dataset_episode_dir / ydir
         if t.is_dir():
-            for f in t.rglob("*.png"):
-                to_delete[str(f)] = f.stat().st_size
+            for f in t.rglob("*"):
+                if f.is_file() and f.suffix.lower() in RGB_SUFFIXES:
+                    to_delete[str(f)] = f.stat().st_size
     return to_delete
 
 
@@ -196,7 +199,10 @@ def build_manifest(dataset_episode_dir, resolved, cams) -> dict:
         "mot_ball_policy": "include_ball=true (BALL track_id=100)",
         "pose_schema": "coco17_3d/2d (17 keypoints, meters/pixels)",
         "artifact_profile": (resolved.get("artifact_policy") or {}).get("profile", "research_minimal"),
-        "rgb_count_per_camera": len(list((dataset_episode_dir / cams[0] / "img1").glob("*.png")))
+        "rgb_count_per_camera": sum(
+            1 for p in (dataset_episode_dir / cams[0] / "img1").iterdir()
+            if p.is_file() and p.suffix.lower() in RGB_SUFFIXES
+        )
         if cams and (dataset_episode_dir / cams[0] / "img1").is_dir() else 0,
         "annotation_count": len(list((dataset_episode_dir / cams[0] / "annotations.jsonl").exists()
                                      and [0])) if cams else 0,

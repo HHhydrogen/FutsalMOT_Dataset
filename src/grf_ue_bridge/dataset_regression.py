@@ -178,7 +178,10 @@ def _validate_camera(cam_dir: Path) -> List[str]:
 
     ann_frames = {int(f.get("frame_index")) for f in frames if isinstance(f.get("frame_index"), int)}
     img1_dir, mask_dir = cam_dir / "img1", cam_dir / "mask"
-    img_frames = _frame_numbers(img1_dir)
+    manifest = cam_dir.parent / "episode_manifest.json"
+    public_jpg = manifest.exists()
+    img_suffixes = {".jpg"} if public_jpg else RGB_SUFFIXES
+    img_frames = _frame_numbers(img1_dir, img_suffixes)
     mask_frames = _frame_numbers(mask_dir, {".png"})
     has_mask = mask_dir.exists()
     has_img = img1_dir.exists()
@@ -207,8 +210,9 @@ def _validate_camera(cam_dir: Path) -> List[str]:
     for fi in sorted(ann_frames):
         # 2. RGB 分辨率 == mask 分辨率 == camera 分辨率
         if has_img:
-            img_path = img1_dir / f"{fi:06d}.jpg"
-            if not img_path.exists():
+            candidates = [img1_dir / f"{fi:06d}{s}" for s in img_suffixes]
+            img_path = next((p for p in candidates if p.exists()), None)
+            if img_path is None:
                 errors.append(f"{label} img1/{fi:06d}.jpg 缺失")
             else:
                 sz = _png_size(img_path)

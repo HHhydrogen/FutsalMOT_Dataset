@@ -263,11 +263,13 @@ def _check_bbox(errors: List[str], obj: dict, label: str, width: int, height: in
 
 
 def _frame_numbers(dir_path: Path) -> set:
-    """从目录里的 PNG 文件名解析帧号集合。"""
+    """从目录里的 PNG/JPG/JPEG 文件名解析帧号集合。"""
     if not dir_path.exists():
         return set()
     nums = set()
-    for p in dir_path.glob("*.png"):
+    for p in dir_path.iterdir():
+        if not p.is_file() or p.suffix.lower() not in {".png", ".jpg", ".jpeg"}:
+            continue
         digits = "".join(ch for ch in p.stem if ch.isdigit())
         if digits:
             nums.add(int(digits))

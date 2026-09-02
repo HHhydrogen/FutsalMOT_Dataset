@@ -80,6 +80,15 @@ def _make_camera(root: Path) -> Path:
     return cam
 
 
+def test_pose_validator_discovers_all_rgb_suffixes(tmp_path):
+    cam = _make_camera(tmp_path)
+    img1 = cam / "img1"
+    for suffix in ("jpg", "jpeg"):
+        (img1 / f"000001.{suffix}").write_bytes(b"x")
+    annotate_pose_dir(tmp_path, write_yaml=False)
+    assert validate_pose_dir(tmp_path) == 0
+
+
 class TestStructuralValidation:
     def test_valid_labels_pass(self, tmp_path):
         _make_camera(tmp_path)

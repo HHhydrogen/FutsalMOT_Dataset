@@ -38,6 +38,12 @@
 
 结果：`132 passed in 8.75s`
 
+本轮修复：
+
+- `annotation_validator.py`、`pose_validator.py` 和 `artifact_cleanup.py` 的 img1/RGB 读取、计数、清理支持 `.png`、`.jpg`、`.jpeg`；新的公开输出仍以 `.jpg` 为规范格式。
+- `dataset_regression.py` 在存在公开 `episode_manifest.json` 时要求 `img1/*.jpg`，没有公开 manifest 时对 legacy PNG/JPG/JPEG 使用后缀感知回退。
+- 更新 `dataset_manifest.py` 的 RGB 格式说明，保留最终 profile 的公共 `.jpg` 语义。
+
 ## 提交
 
 提交：见最终提交记录。
@@ -46,3 +52,9 @@
 
 - MRQ JPEG 类名和质量属性在 Unreal 版本间可能不同；实现按 `MoviePipelineImageSequenceOutput_JPG`、`MoviePipelineImageSequenceOutput_JPEG` 及多个质量属性名进行防御处理。
 - 本地 pytest 未连接 Unreal Editor，因此未执行真实 UE 5.8 MRQ 渲染验证。
+
+## 本轮测试
+
+命令：`uv run pytest`
+
+结果：`588 passed, 7 deselected in 13.67s`

@@ -68,6 +68,14 @@ def _make_camera(root: Path, frames: int = 2) -> Path:
 
 
 class TestDatasetRegression:
+    def test_public_manifest_requires_canonical_jpeg(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cam = _make_camera(root)
+            (cam / "img1" / "000001.jpg").unlink()
+            (root / "episode_manifest.json").write_text(json.dumps({"schema_version": "futsalmot_public_episode_v1"}))
+            assert validate_dataset_regression(root) == 1
+
     def test_valid_passes(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

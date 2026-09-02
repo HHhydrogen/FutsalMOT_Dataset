@@ -75,6 +75,16 @@ def _write_camera(dir_path: Path, objects_by_frame, width=1920, height=1080, mot
         (dir_path / "gt" / "gt.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def test_annotation_validator_frame_discovery_accepts_rgb_suffixes(tmp_path):
+    from grf_ue_bridge.annotation_validator import _frame_numbers
+
+    img1 = tmp_path / "img1"
+    img1.mkdir()
+    for suffix in ("png", "jpg", "jpeg"):
+        (img1 / f"000001.{suffix}").write_bytes(b"x")
+    assert _frame_numbers(img1) == {1}
+
+
 class TestAnnotationValidator:
     def test_valid_dir(self):
         with tempfile.TemporaryDirectory() as tmp:

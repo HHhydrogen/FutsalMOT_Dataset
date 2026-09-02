@@ -242,7 +242,9 @@ def _validate_pose_camera(cam_dir: Path, radius: int, validation_level: str) -> 
     img1 = cam_dir / "img1"
     if img1.is_dir():
         img_frames = set()
-        for p in img1.glob("*.png"):
+        for p in img1.iterdir():
+            if not p.is_file() or p.suffix.lower() not in {".png", ".jpg", ".jpeg"}:
+                continue
             digits = "".join(ch for ch in p.stem if ch.isdigit())
             if digits:
                 img_frames.add(int(digits))

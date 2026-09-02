@@ -8,7 +8,12 @@ from PIL import Image
 from grf_ue_bridge.config.models import ResolvedTask
 from grf_ue_bridge.workflows.task_audit import check_camera, write_reports
 from grf_ue_bridge.workflows.task_status import collect_status
-from grf_ue_bridge.workflows.artifact_cleanup import apply_cleanup, collect_transient, plan_cleanup
+from grf_ue_bridge.workflows.artifact_cleanup import (
+    apply_cleanup,
+    build_manifest,
+    collect_transient,
+    plan_cleanup,
+)
 from grf_ue_bridge.public_episode import encode_coco_rle
 
 
@@ -53,6 +58,64 @@ def test_task_status_counts_legacy_img1_suffixes(tmp_path):
         trajectory_output=str(tmp_path / "trajectory"), dataset_episode_dir=str(tmp_path),
     )
     assert collect_status(resolved)["cameras"]["Cam_01"]["img1"] == 3
+
+
+@pytest.mark.parametrize(
+    ("annotations", "classes", "expected_modalities", "expected_classes"),
+    [
+        (["mot"], ["player"], ["mot"], ["player"]),
+        (["mot", "mots"], ["player", "ball"], ["mot", "mots"], ["player", "ball"]),
+    ],
+)
+def test_manifest_and_status_reflect_resolved_public_capabilities(
+    tmp_path, annotations, classes, expected_modalities, expected_classes
+):
+    cam = _camera(tmp_path)
+    resolved = ResolvedTask(
+        task_id="task", episode_name="episode", source_task_file="task.json",
+        repo_root=str(tmp_path), ue_project_root=str(tmp_path), dataset_root=str(tmp_path),
+        trajectory_output=str(tmp_path / "trajectory"), dataset_episode_dir=str(tmp_path),
+        config_v3={
+            "episode": "episode",
+            "annotations": annotations,
+            "classes": classes,
+            "cameras": {"C03": "Camera_A"},
+            "public_sequence_names": ["FutsalMOT_episode_C03"],
+        },
+    )
+
+    manifest = build_manifest(tmp_path, resolved.model_dump(), [cam.name])
+    status = collect_status(resolved)
+
+    assert manifest["annotations"] == annotations
+    assert manifest["modalities"] == expected_modalities
+    assert manifest["classes"] == expected_classes
+    assert manifest["camera_mapping"] == {"C03": "Camera_A"}
+    assert manifest["cleanup_status"] == "pending"
+    assert status["annotations"] == annotations
+    assert status["modalities"] == expected_modalities
+    assert status["classes"] == expected_classes
+    assert status["camera_mapping"] == {"C03": "Camera_A"}
+    assert status["cleanup_status"] == "pending"
+
+
+def test_manifest_and_status_keep_legacy_capability_defaults(tmp_path):
+    cam = _camera(tmp_path)
+    resolved = ResolvedTask(
+        task_id="task", episode_name="episode", source_task_file="task.json",
+        repo_root=str(tmp_path), ue_project_root=str(tmp_path), dataset_root=str(tmp_path),
+        trajectory_output=str(tmp_path / "trajectory"), dataset_episode_dir=str(tmp_path),
+    )
+
+    manifest = build_manifest(tmp_path, resolved.model_dump(), [cam.name])
+    status = collect_status(resolved)
+
+    assert manifest["annotations"] == ["mot", "pose", "mots"]
+    assert manifest["modalities"] == ["mot", "pose_tracking", "mots"]
+    assert manifest["classes"] == ["player", "ball"]
+    assert status["annotations"] == ["mot", "pose", "mots"]
+    assert status["modalities"] == ["mot", "pose_tracking", "mots"]
+    assert status["classes"] == ["player", "ball"]
 
 
 def test_task_audit_counts_public_jpeg_and_transient_rgb(tmp_path):

@@ -38,8 +38,11 @@ def _lines(path: Path) -> int:
 
 def collect_status(resolved: m.ResolvedTask) -> Dict:
     """收集任务各产物的只读状态。"""
+    from .artifact_cleanup import public_capabilities
+
     traj = Path(resolved.trajectory_output)
     ds = Path(resolved.dataset_episode_dir)
+    capabilities = public_capabilities(resolved)
 
     cams = sorted(d.parent for d in ds.rglob("camera.json")) if ds.is_dir() else []
 
@@ -50,7 +53,18 @@ def collect_status(resolved: m.ResolvedTask) -> Dict:
         "camera_count": len(cams),
         "cameras": {},
         "render_summary": None,
+        **capabilities,
+        "cleanup_status": "pending",
     }
+    manifest_path = ds / "dataset_manifest.json"
+    if manifest_path.is_file():
+        try:
+            import json
+            st["cleanup_status"] = json.loads(manifest_path.read_text(encoding="utf-8")).get(
+                "cleanup_status", "pending"
+            )
+        except (OSError, ValueError):
+            pass
     for cam in cams:
         st["cameras"][cam.name] = {
             "render_rgb": _count_rgb(cam / "render"),

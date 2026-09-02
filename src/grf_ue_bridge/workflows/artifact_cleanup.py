@@ -39,6 +39,40 @@ _TRANSIENT_EP_RELS = {
 _YOLO_IMAGE_DIRS = ("yolo_pose/images", "yolo_det/images", "yolo_seg/images")
 
 
+def public_capabilities(resolved=None):
+    """返回公开输出能力；Config v3 优先，旧 task 使用历史默认值。"""
+    contract = {}
+    if hasattr(resolved, "config_v3"):
+        contract = resolved.config_v3 or {}
+    elif isinstance(resolved, dict):
+        contract = resolved.get("config_v3") or {}
+    if contract.get("annotations"):
+        annotations = list(contract["annotations"])
+        classes = list(contract.get("classes") or ["player", "ball"])
+        cameras = dict(contract.get("cameras") or {})
+        sequence_names = list(contract.get("public_sequence_names") or [])
+    else:
+        annotations = ["mot", "pose", "mots"]
+        classes = ["player", "ball"]
+        cameras = {}
+        sequences = ((resolved.get("ue_profile") if isinstance(resolved, dict) else
+                      getattr(resolved, "ue_profile", None)) or {}).get("sequences", [])
+        for sequence in sequences:
+            camera_id = sequence.get("camera_id")
+            actor = sequence.get("camera_actor")
+            if camera_id is not None and actor is not None:
+                cameras[camera_id] = actor
+        sequence_names = [sequence.get("name") for sequence in sequences if sequence.get("name")]
+    modalities = ["pose_tracking" if value == "pose" else value for value in annotations]
+    return {
+        "annotations": annotations,
+        "modalities": modalities,
+        "classes": classes,
+        "camera_mapping": cameras,
+        "public_sequence_names": sequence_names,
+    }
+
+
 def _path_matches(p: Path, cam_rel: str):
     """判断 cam_rel 是否为 p 的父目录之一或 p 本身。"""
     parts = p.parts
@@ -214,6 +248,16 @@ def apply_cleanup(dataset_episode_dir, cams, profile="research_minimal", resolve
 def build_manifest(dataset_episode_dir, resolved, cams) -> dict:
     """生成 dataset_manifest.json 内容（不写盘，返回 dict）。"""
     dataset_episode_dir = Path(dataset_episode_dir)
+    capabilities = public_capabilities(resolved)
+    existing_manifest = dataset_episode_dir / "dataset_manifest.json"
+    cleanup_status = "pending"
+    if existing_manifest.is_file():
+        try:
+            cleanup_status = json.loads(existing_manifest.read_text(encoding="utf-8")).get(
+                "cleanup_status", cleanup_status
+            )
+        except (OSError, ValueError):
+            pass
     manifest = {
         "dataset_version": 1,
         "episode_id": resolved.get("episode_name"),
@@ -223,10 +267,14 @@ def build_manifest(dataset_episode_dir, resolved, cams) -> dict:
         "tempo": float((resolved.get("export_profile") or {}).get("trajectory_time_scale") or 1.0),
         "seed": int((resolved.get("export_profile") or {}).get("seed") or 0),
         "cameras": cams,
-        "classes": ["player", "ball"],
+        "camera_mapping": capabilities["camera_mapping"],
+        "public_sequence_names": capabilities["public_sequence_names"],
+        "annotations": capabilities["annotations"],
+        "modalities": capabilities["modalities"],
+        "classes": capabilities["classes"],
         "global_track_id_policy": "L0=1..L4=5,R0=6..R4=10,BALL=100",
         "mot_ball_policy": "include_ball=true (BALL track_id=100)",
-        "pose_schema": "coco17_3d/2d (17 keypoints, meters/pixels)",
+        "pose_schema": "coco17_3d/2d (17 keypoints, meters/pixels)" if "pose" in capabilities["annotations"] else None,
         "artifact_profile": (resolved.get("artifact_policy") or {}).get("profile", "research_minimal"),
         "rgb_count_per_camera": sum(
             1 for p in (dataset_episode_dir / cams[0] / "img1").iterdir()
@@ -235,7 +283,7 @@ def build_manifest(dataset_episode_dir, resolved, cams) -> dict:
         if cams and (dataset_episode_dir / cams[0] / "img1").is_dir() else 0,
         "annotation_count": len(list((dataset_episode_dir / cams[0] / "annotations.jsonl").exists()
                                      and [0])) if cams else 0,
-        "cleanup_status": "pending",
+        "cleanup_status": cleanup_status,
         "source_commit": "see provenance/task.json",
     }
     # 计算最终数据集大小（不含 pending cleanup）

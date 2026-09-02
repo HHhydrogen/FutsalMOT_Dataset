@@ -90,7 +90,87 @@ CLI `--seed` 优先级：**CLI > 配置文件 > 默认值**。运行时打印 ro
 `frames.jsonl` 的原始字节 SHA-256 即 `trajectory_hash`（见 manifest）。两个 episode
 若 hash 相同 ⇒ 轨迹完全一致。
 
-## 二、Dataset Manifest
+## 三、单 episode 公开输出契约
+
+`task export` 先生成轨迹，UE 完成相机渲染与内部 JSONL 后，默认的
+`task postprocess` 生成一个自包含的公开 episode。公开输出树为：
+
+```text
+<dataset_root>/<episode_id>/
+├── meta.json / frames.jsonl / provenance/
+├── episode_manifest.json
+└── <camera>/
+    ├── camera.json / seqinfo.ini
+    ├── img1/000001.jpg             # RGB JPEG，quality=95
+    └── gt/
+        ├── gt.txt                  # MOT：9 列
+        ├── gt_mots.txt             # MOTS：6 字段 + COCO 压缩 RLE JSON
+        └── gt_pose.json             # COCO 17 点；足球 keypoints=null
+```
+
+规范为单 episode、每相机连续六位帧号 JPG。MOT 每行字段依次为
+`frame,track_id,x,y,w,h,mark,class_id,visibility`，共 9 列；球员 `class_id=1`，
+足球 `track_id=100/class_id=100`，球员 ID 为 `L0..L4=1..5`、`R0..R4=6..10`。
+MOTS 每行依次为 `frame_id track_id class_id height width rle_json`，RLE 使用 COCO
+列优先压缩字符串。Pose、MOT、MOTS 的身份集合一致，球员含 COCO 17 个关键点，足球
+记录保留但 `keypoints` 必须为 `null`。`episode_manifest.json` 使用批准的最小 schema：
+`schema_version` 为数值 `1`，根字段为 `episode_id`、`trajectory_id`、`sequences`、
+`track_id_policy` 和 `public_classes: ["player", "ball"]`；不要求根级 `frame_count` 或
+`dimensions`。每个 sequence 使用 `sequence_name`、`camera_id`（如 `C01`）、
+`relative_path`、`frame_count`、`image_width`、`image_height` 和
+`modalities: ["mot", "pose_tracking", "mots"]`。固定策略为：
+
+```json
+{
+  "schema_version": 1,
+  "episode_id": "episode_01",
+  "trajectory_id": "episode_01",
+  "sequences": [{
+    "sequence_name": "FutsalMOT_episode_01_C01",
+    "camera_id": "C01",
+    "relative_path": "FutsalMOT_episode_01_C01",
+    "frame_count": 300,
+    "image_width": 1920,
+    "image_height": 1080,
+    "modalities": ["mot", "pose_tracking", "mots"]
+  }],
+  "track_id_policy": {"players": "L0..L4=1..5,R0..R4=6..10", "ball": 100},
+  "public_classes": ["player", "ball"]
+}
+```
+
+默认公开输出不包含 PNG mask、YOLO、debug 图集/视频或重复的内部标注标签。现有
+cryptomatte、mask、YOLO、debug converter 仍可显式调用，或设置
+`postprocess.public_output=false` 使用 legacy 内部链路；batch/split/assembler
+不属于当前实现。
+
+### 公开、temporary、debug 与 internal 的生命周期
+
+一次干净运行的公开 `task postprocess` 只生成上面的 canonical JPG、GT 和
+`episode_manifest.json`（以及公开契约要求的元数据），不会生成重复的 PNG mask、YOLO、
+debug 图集/视频或重复的内部标签。这里的“不生成”不表示清理：postprocess 不会删除运行
+开始前已经存在的 transient、debug 或 internal 文件。既有 converter 仍可显式生成这些
+非公开产物，legacy 链路通过 `postprocess.public_output=false` 开启。
+
+清理必须显式作为独立步骤执行，默认命令是 dry-run：
+
+```powershell
+uv run grf-ue task cleanup configs/my_dataset.json --dry-run
+uv run grf-ue task cleanup configs/my_dataset.json --apply
+```
+
+public validation gate 仅在 `episode_manifest.json` 存在时应用。无论是否存在 manifest，缺少
+`render_summary.json` 或 `pose_session.json` 都会阻止 cleanup；文件存在但状态未通过时也会
+阻止 cleanup。若 `audit/soak_audit_report.json` 存在且报告失败，则阻止 cleanup；其他 audit
+报告不属于此 cleanup gate。cleanup 的删除 allowlist 具体为每个相机目录下 `render/`、
+`render_mask/`、`debug/` 中的文件，`mask/` 中的 PNG，episode 根目录的
+`pose_capture.jsonl`，以及 `yolo_pose/images/`、`yolo_det/images/`、`yolo_seg/images/`
+中的 RGB 图像；删除后还会移除这些相机 transient 目录中变为空的目录。allowlist 之外的
+internal JSONL、debug 文件和其他 audit 报告不会因本 cleanup 被删除。canonical JPG、GT、
+camera metadata、轨迹、manifest 和 provenance 保留。dry-run 只报告计划，不删除文件；删除
+门禁失败则保留 transient 以便诊断。cleanup 不判断文件是运行前已存在还是由公开后处理生成；门禁通过后，凡命中上述显式路径 allowlist 的文件都会删除，无论其 provenance 如何。
+
+## 四、Dataset Manifest
 
 ### 1. 用途
 
@@ -168,7 +248,7 @@ manifest 与 checksum 文件全部使用 **POSIX 相对路径**，无盘符/反�
 - 原始 `render/`、`render_mask/` 在 `final` profile 下不在校验范围，verify 列为
   extra 警告（`--strict` 才失败）；需要校验原始帧用 `--checksum-profile all`。
 
-## 三、真实 soak 数据集实测（episode_0001，300 步 × 4 相机）
+## 五、真实 soak 数据集实测（episode_0001，300 步 × 4 相机）
 
 | 指标 | 值 |
 |------|-----|
@@ -188,7 +268,7 @@ manifest 与 checksum 文件全部使用 **POSIX 相对路径**，无盘符/反�
 > GRF seed 未知。用新代码重新导出会因 seed 派生改变轨迹，需同步重渲重标注——因此
 > 本轮保留旧轨迹并如实标记 legacy。
 
-## 四、推荐命令汇总
+## 六、推荐命令汇总
 
 ```powershell
 # 1) 可复现导出（seed 覆盖）

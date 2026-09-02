@@ -99,16 +99,24 @@ def _seqinfo(path: Path, errors: List[str]) -> Dict[str, str]:
         return {}
 
 
-def _validate_sequence(cam: Path, manifest_seq: dict, manifest_dims: Tuple[int, int], errors: List[str]) -> Tuple[Set[Tuple[int, int]], Dict[str, Any]]:
+def _validate_sequence(cam: Path, manifest_seq: dict, errors: List[str]) -> Tuple[Set[Tuple[int, int]], Dict[str, Any]]:
     name = cam.name
-    width, height = manifest_dims
+    width = manifest_seq.get("image_width")
+    height = manifest_seq.get("image_height")
+    valid_dimensions = all(
+        isinstance(value, int) and not isinstance(value, bool) and value > 0
+        for value in (width, height)
+    )
+    if not valid_dimensions:
+        errors.append(f"{name}: sequence image dimensions 必须为正整数")
+        width = height = 0
     match = SEQUENCE_NAME_RE.fullmatch(name)
     if not match:
         errors.append(f"{name}: 序列目录名不匹配规范")
     camera_id = manifest_seq.get("camera_id")
-    if isinstance(camera_id, bool) or not isinstance(camera_id, int) or not 1 <= camera_id <= 99:
-        errors.append(f"{name}: camera_id 必须为 1..99 整数")
-    elif match and int(match.group("camera")) != camera_id:
+    if not isinstance(camera_id, str) or not re.fullmatch(r"C\d{2}", camera_id):
+        errors.append(f"{name}: camera_id 必须为 C## 字符串")
+    elif match and match.group("camera") != camera_id[1:]:
         errors.append(f"{name}: camera_id 与目录名不一致")
     stats: Dict[str, Any] = {"camera_id": name, "ok": True, "render_rgb": 0,
                              "render_mask_exr": 0, "img1_rgb": 0, "mask_png": 0,
@@ -120,16 +128,11 @@ def _validate_sequence(cam: Path, manifest_seq: dict, manifest_dims: Tuple[int, 
     if not valid_frame_count:
         errors.append(f"{name}: sequence frame_count 必须为正整数")
         frame_count = 0
-    if width <= 0 or height <= 0:
-        errors.append(f"{name}: episode dimensions 必须为正整数")
-    for key, expected in (("image_width", width), ("image_height", height)):
-        if manifest_seq.get(key) != expected:
-            errors.append(f"{name}: manifest sequence {key} 与 episode dimensions 不一致")
     if manifest_seq.get("sequence_name") != name:
         errors.append(f"序列目录名 {name!r} 与 manifest sequence_name {manifest_seq.get('sequence_name')!r} 不一致")
     if manifest_seq.get("relative_path") != name:
         errors.append(f"{name}: relative_path 必须等于 sequence_name")
-    if manifest_seq.get("modalities") != ["rgb", "mot", "mots", "pose"]:
+    if manifest_seq.get("modalities") != ["mot", "pose_tracking", "mots"]:
         errors.append(f"{name}: modalities 不匹配")
     seqinfo_path = cam / "seqinfo.ini"
     if not seqinfo_path.exists():
@@ -315,32 +318,19 @@ def validate_public_episode(episode_dir: Path) -> ValidationResult:
     if not isinstance(manifest, dict):
         errors.append("缺少或无效 episode_manifest.json")
         return ValidationResult(False, errors, {"sequences": 0})
-    if manifest.get("schema_version") != 1:
+    required_root = {"schema_version", "episode_id", "trajectory_id", "sequences", "track_id_policy", "public_classes"}
+    missing_root = sorted(required_root - set(manifest))
+    if missing_root:
+        errors.append(f"manifest 缺少根字段 {missing_root}")
+    if manifest.get("schema_version") != 1 or isinstance(manifest.get("schema_version"), bool):
         errors.append("manifest schema_version 不匹配")
-    if manifest.get("episode_id") != manifest.get("trajectory_id"):
+    if not isinstance(manifest.get("episode_id"), str) or not isinstance(manifest.get("trajectory_id"), str) or manifest.get("episode_id") != manifest.get("trajectory_id"):
         errors.append("manifest episode_id 与 trajectory_id 不一致")
     if manifest.get("public_classes") != ["player", "ball"]:
         errors.append("manifest public_classes 必须为 [player, ball]")
-    expected_policy = {
-        "player": {"track_id_range": [1, 10], "class_id": 1},
-        "ball": {"track_id": 100, "class_id": 100},
-    }
+    expected_policy = {"players": "L0..L4=1..5,R0..R4=6..10", "ball": 100}
     if manifest.get("track_id_policy") != expected_policy:
         errors.append("manifest track_id_policy 不匹配")
-    dimensions = manifest.get("dimensions") or {}
-    try:
-        if any(isinstance(dimensions[key], bool) or not isinstance(dimensions[key], int) for key in ("width", "height")):
-            raise ValueError("dimensions 必须为整数")
-        dims = (dimensions["width"], dimensions["height"])
-        if dims[0] <= 0 or dims[1] <= 0:
-            raise ValueError("dimensions 必须为正整数")
-    except (KeyError, TypeError, ValueError):
-        dims = (0, 0)
-        errors.append("manifest 尺寸 dimensions 非法")
-    root_frame_count = manifest.get("frame_count")
-    if isinstance(root_frame_count, bool) or not isinstance(root_frame_count, int) or root_frame_count <= 0:
-        errors.append("manifest frame_count 必须为正整数")
-        root_frame_count = 0
     sequences = manifest.get("sequences")
     if not isinstance(sequences, list) or not sequences:
         errors.append("manifest sequences 为空或非法")
@@ -351,6 +341,12 @@ def validate_public_episode(episode_dir: Path) -> ValidationResult:
         if not isinstance(sequence, dict) or not isinstance(sequence.get("sequence_name"), str):
             errors.append("manifest sequence 缺少 sequence_name")
             continue
+        missing = sorted({
+            "sequence_name", "camera_id", "relative_path", "frame_count",
+            "image_width", "image_height", "modalities",
+        } - set(sequence))
+        if missing:
+            errors.append(f"{sequence['sequence_name']}: manifest sequence 缺少字段 {missing}")
         names.append(sequence["sequence_name"])
         sequence_match = SEQUENCE_NAME_RE.fullmatch(sequence["sequence_name"])
         if sequence_match and sequence_match.group("episode") != manifest.get("episode_id"):
@@ -358,18 +354,16 @@ def validate_public_episode(episode_dir: Path) -> ValidationResult:
         seq_count = sequence.get("frame_count")
         if isinstance(seq_count, bool) or not isinstance(seq_count, int) or seq_count <= 0:
             errors.append(f"{sequence['sequence_name']}: sequence frame_count 必须为正整数")
-        elif seq_count != root_frame_count:
-            errors.append(f"{sequence['sequence_name']}: sequence frame_count 与 manifest frame_count 不一致")
         cam = episode_dir / sequence.get("relative_path", "")
         if not cam.is_dir():
             errors.append(f"manifest sequence 目录不存在: {cam}")
             continue
-        _, sequence_stats = _validate_sequence(cam, sequence, dims, errors)
+        _, sequence_stats = _validate_sequence(cam, sequence, errors)
         all_sets.append(sequence_stats)
     if len(names) != len(set(names)):
         errors.append("manifest sequences 含重复 name")
     sequence_camera_ids = [sequence.get("camera_id") for sequence in sequences if isinstance(sequence, dict)]
-    valid_camera_ids = [value for value in sequence_camera_ids if isinstance(value, int) and not isinstance(value, bool)]
+    valid_camera_ids = [value for value in sequence_camera_ids if isinstance(value, str)]
     if len(valid_camera_ids) != len(set(valid_camera_ids)):
         errors.append("manifest sequences 含重复 camera_id")
     stats = {"sequences": len(sequences), "frames": sum(value.get("annotations_frames", 0) for value in all_sets),

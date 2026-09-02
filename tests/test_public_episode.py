@@ -80,11 +80,14 @@ def test_writer_emits_player_ball_and_matching_identity_sets(tmp_path, monkeypat
     assert not (public_cam / "mask").exists()
 
 
-def test_manifest_trajectory_id_and_dimensions():
+def test_manifest_trajectory_id_and_approved_policy():
     manifest = build_public_manifest("ep", [{"name": "Cam_01", "frame_count": 2,
                                              "width": 8, "height": 6}], 2, 8, 6)
     assert manifest["trajectory_id"] == "ep"
-    assert manifest["dimensions"] == {"width": 8, "height": 6}
+    assert "frame_count" not in manifest
+    assert "dimensions" not in manifest
+    assert manifest["public_classes"] == ["player", "ball"]
+    assert manifest["track_id_policy"] == {"players": "L0..L4=1..5,R0..R4=6..10", "ball": 100}
 
 
 def test_invalid_keypoints_are_kept_as_zero_visibility(tmp_path, monkeypatch):
@@ -273,12 +276,12 @@ def test_public_manifest_uses_canonical_sequence_schema_and_camera_ids(tmp_path,
 
     assert manifest["schema_version"] == 1
     assert manifest["public_classes"] == ["player", "ball"]
-    assert set(manifest["track_id_policy"]) == {"player", "ball"}
+    assert manifest["track_id_policy"] == {"players": "L0..L4=1..5,R0..R4=6..10", "ball": 100}
     assert manifest["sequences"] == [{
-        "sequence_name": "FutsalMOT_ep_C01", "camera_id": 1,
+        "sequence_name": "FutsalMOT_ep_C01", "camera_id": "C01",
         "relative_path": "FutsalMOT_ep_C01", "frame_count": 1,
         "image_width": 2, "image_height": 2,
-        "modalities": ["rgb", "mot", "mots", "pose"],
+        "modalities": ["mot", "pose_tracking", "mots"],
     }]
     assert (tmp_path / "FutsalMOT_ep_C01" / "img1" / "000001.jpg").read_bytes() == \
         (cam / "img1" / "000001.jpg").read_bytes()

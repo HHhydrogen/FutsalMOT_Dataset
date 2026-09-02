@@ -198,14 +198,8 @@ def build_public_manifest(episode_id: str, sequences: list[dict], frame_count: i
         "episode_id": episode_id,
         "trajectory_id": episode_id,
         "sequences": sequences,
-        "frame_count": int(frame_count),
-        "dimensions": {"width": int(width), "height": int(height)},
-        "modalities": ["rgb", "mot", "mots", "pose"],
         "public_classes": ["player", "ball"],
-        "track_id_policy": {
-            "player": {"track_id_range": [1, 10], "class_id": 1},
-            "ball": {"track_id": 100, "class_id": 100},
-        },
+        "track_id_policy": {"players": "L0..L4=1..5,R0..R4=6..10", "ball": 100},
     }
 
 
@@ -388,9 +382,9 @@ def write_public_episode(episode_dir: Path, *, mapping: dict, sequence_configs: 
         seqinfo = "[Sequence]\nname={}\nimDir=img1\nframeRate={}\nseqLength={}\nimWidth={}\nimHeight={}\nimExt=.jpg\n".format(name, fps, len(frame_ids), width, height)
         write_text_atomic(staged_camera / "seqinfo.ini", seqinfo)
         manifest_sequences.append({
-            "sequence_name": name, "camera_id": camera_id, "relative_path": name,
+            "sequence_name": name, "camera_id": f"C{camera_id:02d}", "relative_path": name,
             "frame_count": len(frame_ids), "image_width": width, "image_height": height,
-            "modalities": ["rgb", "mot", "mots", "pose"],
+            "modalities": ["mot", "pose_tracking", "mots"],
         })
       manifest = build_public_manifest(episode_id, manifest_sequences, max_frames, out_width, out_height)
       write_json_atomic(stage_root / "episode_manifest.json", manifest)

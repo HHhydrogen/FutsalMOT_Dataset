@@ -50,14 +50,12 @@ def _make_public_episode(root: Path):
     (root / "episode_manifest.json").write_text(json.dumps({
         "schema_version": 1,
         "episode_id": "episode_01", "trajectory_id": "episode_01",
-        "frame_count": 2, "dimensions": {"width": 4, "height": 3},
-        "sequences": [{"sequence_name": "FutsalMOT_episode_01_C01", "camera_id": 1,
+        "sequences": [{"sequence_name": "FutsalMOT_episode_01_C01", "camera_id": "C01",
                        "relative_path": "FutsalMOT_episode_01_C01", "frame_count": 2,
                        "image_width": 4, "image_height": 3,
-                       "modalities": ["rgb", "mot", "mots", "pose"]}],
+                       "modalities": ["mot", "pose_tracking", "mots"]}],
         "public_classes": ["player", "ball"],
-        "track_id_policy": {"player": {"track_id_range": [1, 10], "class_id": 1},
-                             "ball": {"track_id": 100, "class_id": 100}},
+        "track_id_policy": {"players": "L0..L4=1..5,R0..R4=6..10", "ball": 100},
     }), encoding="utf-8")
 
 
@@ -71,6 +69,18 @@ def test_valid_public_player_ball_episode_passes(tmp_path):
     assert result.stats["sequences"] == 1
     assert result.exit_code == 0
     assert int(result) == 0
+
+
+def test_public_validator_accepts_minimal_approved_manifest_without_root_counts(tmp_path):
+    _make_public_episode(tmp_path)
+    manifest_path = tmp_path / "episode_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert "frame_count" not in manifest
+    assert "dimensions" not in manifest
+
+    result = validate_public_episode(tmp_path)
+
+    assert result.ok, result.errors
 
 
 def test_public_validator_rejects_cross_modal_frame_track_mismatch(tmp_path):
@@ -142,15 +152,14 @@ def test_public_validator_rejects_invalid_manifest_types_and_counts(tmp_path):
     _make_public_episode(tmp_path)
     manifest_path = tmp_path / "episode_manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    manifest["frame_count"] = True
-    manifest["dimensions"] = {"width": 0, "height": 3}
+    manifest["sequences"][0]["image_width"] = 0
     manifest["sequences"][0]["frame_count"] = 3
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
     result = validate_public_episode(tmp_path)
 
     assert not result.ok
-    assert any("frame_count" in error or "尺寸" in error for error in result.errors)
+    assert any("尺寸" in error or "image_width" in error for error in result.errors)
 
 
 def test_public_validator_rejects_fractional_and_out_of_range_ids(tmp_path):
@@ -200,17 +209,16 @@ def test_public_validator_handles_malformed_counts_without_type_error(tmp_path):
     _make_public_episode(tmp_path)
     manifest_path = tmp_path / "episode_manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    manifest["frame_count"] = "two"
     manifest["sequences"][0]["frame_count"] = "two"
-    manifest["dimensions"] = {"width": 0, "height": -1}
-    manifest["sequences"] = []
+    manifest["sequences"][0]["image_width"] = 0
+    manifest["sequences"][0]["image_height"] = -1
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
     result = validate_public_episode(tmp_path)
 
     assert not result.ok
     assert any("frame_count" in error for error in result.errors)
-    assert any("尺寸" in error for error in result.errors)
+    assert any("尺寸" in error or "image_width" in error for error in result.errors)
 
 
 def test_public_validator_handles_seqinfo_interpolation_error(tmp_path):

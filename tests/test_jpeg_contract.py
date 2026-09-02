@@ -116,14 +116,13 @@ def _write_real_public_fixture(root: Path):
     ]), encoding="utf-8")
     (root / "episode_manifest.json").write_text(json.dumps({
         "schema_version": 1, "episode_id": "episode_01",
-        "trajectory_id": "episode_01", "frame_count": 1, "dimensions": {"width": 2, "height": 2},
-        "sequences": [{"sequence_name": "FutsalMOT_episode_01_C01", "camera_id": 1,
+        "trajectory_id": "episode_01",
+        "sequences": [{"sequence_name": "FutsalMOT_episode_01_C01", "camera_id": "C01",
                        "relative_path": "FutsalMOT_episode_01_C01", "frame_count": 1,
                        "image_width": 2, "image_height": 2,
-                       "modalities": ["rgb", "mot", "mots", "pose"]}],
+                       "modalities": ["mot", "pose_tracking", "mots"]}],
         "public_classes": ["player", "ball"],
-        "track_id_policy": {"player": {"track_id_range": [1, 10], "class_id": 1},
-                             "ball": {"track_id": 100, "class_id": 100}},
+        "track_id_policy": {"players": "L0..L4=1..5,R0..R4=6..10", "ball": 100},
     }), encoding="utf-8")
     (root / "render_summary.json").write_text(json.dumps({"status": "success"}), encoding="utf-8")
     (root / "pose_session.json").write_text(json.dumps({"capture_complete": True}), encoding="utf-8")

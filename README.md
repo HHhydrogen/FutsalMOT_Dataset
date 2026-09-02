@@ -49,7 +49,9 @@ uv run grf-ue task export configs/my_dataset.json
 uv run grf-ue task ue-command configs/my_dataset.json
 ```
 
-把输出命令复制到 **Unreal Editor Python Console**（`py ".../ue/run_task.py" --resolved-task ...`）。
+`task ue-command` 输出给 Unreal Editor 的 `run_task.py` 命令。配置了 Unreal MCP 时，
+应通过 `FutsalMOTTools` 在真实 Unreal Python 环境执行该命令；没有该工具时才需要在
+Unreal Editor Python Console 中执行（`py ".../ue/run_task.py" --resolved-task ...`）。
 MRQ 渲染异步，完成后写 `render_summary.json`；相机数据写入同一 `<dataset_root>/<episode_name>/`。
 
 ### 5. 后处理 + 审计
@@ -60,15 +62,73 @@ uv run grf-ue task audit configs/my_dataset.json
 uv run grf-ue task status configs/my_dataset.json
 ```
 
+`task postprocess` 的默认模式是公开输出模式：在一次干净运行中只写规范的 JPG、MOT、
+MOTS、Pose 和 `episode_manifest.json`，不会生成重复的 PNG mask、YOLO、debug 图集/视频
+或重复的内部标签。它不会清理运行前已经存在的 transient、debug 或其他内部文件；如需
+清理这些文件，必须单独执行下面的 cleanup 命令。
+
 ### 输出布局（自包含，全在 dataset_root）
 
 ```text
 <dataset_root>/<episode_name>/
 ├── meta.json / frames.jsonl / provenance/     # 轨迹（task export）
 ├── render_summary.json
-├── CineCam_01/…{camera.json, img1/, mask/, render/, render_mask/, labels/, gt/}
+├── episode_manifest.json                      # 公开单 episode 清单
+└── FutsalMOT_<episode_id>_C01/
+    ├── camera.json / seqinfo.ini
+    ├── img1/000001.jpg                         # RGB，JPEG quality=95
+    └── gt/
+        ├── gt.txt                              # MOT，每行 9 列
+        ├── gt_mots.txt                         # MOTS，每行 6 个字段，COCO 压缩 RLE
+        └── gt_pose.json                        # Pose：球员 COCO 17 点，足球 keypoints=null
 └── …（每相机）
 ```
+
+默认 `task postprocess` 生成上述公开输出：RGB 只写规范六位帧号的 JPG（RGB、
+quality=95），不生成 PNG mask、YOLO、debug 图集/视频或重复的内部标注文件；这里的
+“不生成”不等于删除同一 episode 中运行前已经存在的文件。
+公开 MOT 的格式为 `frame,track_id,x,y,w,h,1,class_id,1.00` 共 9 列；球员的
+`track_id` 为 `L0..L4=1..5`、`R0..R4=6..10`，足球为 `track_id=100` 且
+`class_id=100`，球员 `class_id=1`。MOTS 的 6 个字段为
+`frame_id track_id class_id height width rle_json`，其中 `rle_json` 是 COCO
+列优先压缩 RLE。Pose 与 MOT/MOTS 使用相同的 `(frame_id, track_id)` 集合，足球
+记录的 `keypoints` 为 `null`；球员记录包含 COCO 17 点。`episode_manifest.json` 的批准最小
+schema 为：根字段包含数值 `schema_version: 1`、`episode_id`、`trajectory_id`、`sequences`、
+`track_id_policy` 和 `public_classes: ["player", "ball"]`；不要求根 `frame_count` 或
+`dimensions`。sequence 字段包含 `sequence_name`、`camera_id`（如 `C01`）、
+`relative_path`、`frame_count`、`image_width`、`image_height` 和
+`modalities: ["mot", "pose_tracking", "mots"]`。固定 `track_id_policy` 为
+`{"players": "L0..L4=1..5,R0..R4=6..10", "ball": 100}`。
+
+PNG mask、YOLO det/seg、YOLO Pose、debug 图集/视频以及内部 `annotations.jsonl`
+等仍是显式能力，可通过对应的既有 converter/CLI 和 `postprocess.public_output=false`
+使用；它们不属于默认公开输出。它们与 canonical public outputs 分属不同的 temporary /
+debug / internal 层，不应混入公开目录契约。当前实现面向单 episode，不提供 batch、split
+或 assembler。
+
+### 6. transient / debug 清理
+
+公开后处理和清理是两个独立步骤。清理命令默认只做 dry-run：
+
+```powershell
+uv run grf-ue task cleanup configs/my_dataset.json --dry-run
+uv run grf-ue task cleanup configs/my_dataset.json --apply
+```
+
+`--apply` 的 public validation 仅在 `episode_manifest.json` 存在时应用。无论是否存在
+manifest，缺少 `render_summary.json` 或 `pose_session.json` 都会阻止清理；文件存在但状态
+未通过时也会阻止清理。若 `audit/soak_audit_report.json` 存在且报告失败，则阻止清理；其他
+audit 报告不属于此 cleanup gate。实际删除 allowlist 仅包括每个相机目录下的 `render/`、
+`render_mask/`、`debug/` 中的文件，`mask/` 中的 PNG，episode 根目录的
+`pose_capture.jsonl`，以及 `yolo_pose/images/`、`yolo_det/images/`、`yolo_seg/images/`
+中的 RGB 图像；删除后还会移除这些相机 transient 目录中变为空的目录。dry-run 不删除任何
+文件。canonical JPG（`img1/`）、GT（`gt/`）、相机元数据、轨迹、manifest 和 provenance
+会保留；allowlist 之外的 internal JSONL、debug 文件和其他 audit 报告不会因本 cleanup 被
+删除。清理失败或门禁未通过时保留 transient，便于诊断。
+
+公开、temporary、debug 和 internal outputs 是分开的生命周期层：公开后处理负责生成
+canonical public outputs，cleanup 负责在验证之后移除 allowlist 内的 temporary/derived 文件，
+不会根据文件来源区分 pre-existing 文件与公开后处理生成的文件；门禁通过后，cleanup 会按显式路径 allowlist 删除匹配文件，无论其 provenance 如何。canonical outputs 不在该 allowlist 内，因此会保留。
 
 ### 可选：active task
 
@@ -147,10 +207,10 @@ grf-ue
 ## CV 标注链路（mask-primary）
 
 1. UE 渲染：RGB → `img1/`，Object ID EXR → `render_mask/`（Cryptomatte）。
-2. `grf-ue task postprocess` → cryptomatte → `mask/*.png`（mask_id 1~11）→
-   mask-primary bbox / 分割 / MOT / YOLO。
-3. bbox 的 primary GT 来自 Instance-ID Mask 可见像素；几何投影 bbox 保留在
-   `geometry_bbox_*` 作 fallback。
+2. `grf-ue task postprocess` 默认直接写规范公开 JPG、MOT、MOTS 和 Pose；公开 MOT/MOTS
+   的 bbox 与实例 mask 的可见像素一致。
+3. 需要内部 mask-primary 链路时，显式设置 `postprocess.public_output=false`，再由
+   既有 cryptomatte、mask annotate 和各 converter 生成 PNG mask、YOLO 等内部产物。
 
 详见 [`docs/architecture/INSTANCE_MASK_PIPELINE.md`](docs/architecture/INSTANCE_MASK_PIPELINE.md)。
 
@@ -216,7 +276,7 @@ yolo pose train model=yolo11n-pose.pt data=<dataset_root>/<episode_name>/futsal_
 
 ## debug 可视化（bbox / 彩色 mask / pose 关节点 + 自动拼视频）
 
-在 `postprocess.debug` 块开启（默认关闭），`task postprocess` 末尾自动为每个 camera
+在 `postprocess.debug` 块开启（仅 legacy `public_output=false` 链路），`task postprocess` 末尾自动为每个 camera
 **全量渲染三套 debug 图集**并**各拼接一个 mp4**：
 
 ```json

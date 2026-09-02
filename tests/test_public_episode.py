@@ -5,6 +5,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from PIL import Image
 
 from grf_ue_bridge.public_episode import (
     build_public_manifest,
@@ -211,3 +212,39 @@ def test_jpeg_normalization_rejects_normalized_name_collision_without_changes(tm
     assert "1.png" in str(error.value)
     assert {p.name: p.read_bytes() for p in img.iterdir()} == before
     assert not list(img.glob("*.tmp"))
+
+
+def test_write_public_episode_preflights_collision_before_any_episode_write(tmp_path, monkeypatch):
+    cam = tmp_path / "Cam_01"
+    (cam / "img1").mkdir(parents=True)
+    (cam / "gt").mkdir()
+    Image.new("RGB", (2, 2), "red").save(cam / "img1" / "000001.jpg")
+    (cam / "camera.json").write_text(json.dumps({
+        "camera_id": "Cam_01", "image_width": 2, "image_height": 2,
+        "intrinsics": {"width": 2, "height": 2, "fx": 1, "fy": 1, "cx": 1, "cy": 1},
+        "extrinsics": {"world_location_m": [0, 0, 0], "forward": [1, 0, 0],
+                        "right": [0, 1, 0], "up": [0, 0, 1]},
+    }), encoding="utf-8")
+    (cam / "annotations.jsonl").write_text(json.dumps({
+        "episode_id": "ep", "frame_index": 1, "objects": [{"entity_id": "L0"}]
+    }) + "\n", encoding="utf-8")
+    (cam / "pose_keypoints.jsonl").write_text("", encoding="utf-8")
+    (cam / "gt" / "gt.txt").write_text("old gt\n", encoding="utf-8")
+    (cam / "gt" / "gt_pose.json").write_text("old pose", encoding="utf-8")
+    (cam / "gt" / "gt_mots.txt").write_text("old mots\n", encoding="utf-8")
+    (cam / "seqinfo.ini").write_text("old seqinfo\n", encoding="utf-8")
+    (tmp_path / "episode_manifest.json").write_text("old manifest", encoding="utf-8")
+    cam2 = tmp_path / "Cam_02"
+    import shutil
+    shutil.copytree(cam, cam2)
+    Image.new("RGB", (2, 2), "blue").save(cam2 / "img1" / "1.png")
+    snapshot = {str(p.relative_to(tmp_path)): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+    monkeypatch.setattr("grf_ue_bridge.public_episode._load_mask_for_frame", lambda *_: np.zeros((2, 2), dtype=np.uint8))
+
+    with pytest.raises(ValueError, match="规范化帧名冲突") as error:
+        write_public_episode(tmp_path, mapping=PUBLIC_MAPPING, sequence_configs=[
+            {"camera_dir": cam}, {"camera_dir": cam2}
+        ])
+
+    assert "000001.jpg" in str(error.value) and "1.png" in str(error.value)
+    assert {str(p.relative_to(tmp_path)): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()} == snapshot

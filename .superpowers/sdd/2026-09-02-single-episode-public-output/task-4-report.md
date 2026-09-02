@@ -47,3 +47,16 @@
 `uv run pytest`
 
 结果：`612 passed, 7 deselected in 14.68s`
+
+## Task 4 Review 最终修复
+
+- `write_public_episode` 现在在 episode 级别预检所有 sequence 的 `img1` PNG/JPG/JPEG 源文件，碰到规范化帧名冲突时在写入任何 GT、seqinfo、manifest 或图片前抛出明确 `ValueError`。
+- 新增跨相机冲突回归测试，快照并验证所有已有 canonical/source 文件保持不变；正常 JPEG 转换继续保持幂等。
+
+`uv run pytest tests/test_public_episode.py tests/test_jpeg_contract.py tests/test_task_cli.py::TestTaskStatusAudit tests/test_dataset_manifest.py::TestChecksumProfiles -q`
+
+结果：`34 passed in 1.13s`
+
+`uv run pytest`
+
+结果：`613 passed, 7 deselected in 14.22s`

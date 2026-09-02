@@ -244,6 +244,34 @@ def _write_jpegs(camera_dir: Path, quality: int) -> None:
                 temporary.unlink()
 
 
+def _preflight_jpeg_normalization(camera_dirs: list[Path]) -> None:
+    """在 episode 写入任何公开文件前检查所有相机的 JPEG 帧名。"""
+    conflicts = []
+    invalid = []
+    for camera_dir in camera_dirs:
+        img_dir = camera_dir / "img1"
+        sources = sorted(
+            p for p in img_dir.glob("*")
+            if p.is_file() and p.suffix.lower() in {".png", ".jpg", ".jpeg"}
+        )
+        normalized = {}
+        for source in sources:
+            if not source.stem.isdigit() or int(source.stem) > 999999:
+                invalid.append(f"{camera_dir.name}/{source.name}")
+                continue
+            target = f"{int(source.stem):06d}.jpg"
+            normalized.setdefault(target, []).append(source.name)
+        for target, names in sorted(normalized.items()):
+            if len(names) > 1:
+                conflicts.append(f"{camera_dir.name}/{target}: {', '.join(names)}")
+    if invalid:
+        raise ValueError("img1 文件名必须为数字帧号: " + ", ".join(invalid))
+    if conflicts:
+        raise ValueError(
+            "img1 规范化帧名冲突（未修改任何文件）: " + "; ".join(conflicts)
+        )
+
+
 def write_public_episode(episode_dir: Path, *, mapping: dict, sequence_configs: list[dict],
                          jpeg_quality: int = 95) -> dict:
     """从内部标注写出所有规范化公开文件。"""
@@ -259,6 +287,11 @@ def write_public_episode(episode_dir: Path, *, mapping: dict, sequence_configs: 
         return (str(item.get("sequence_name", item.get("name", camera_name))), camera_path)
 
     configs = sorted(sequence_configs, key=config_sort_key)
+    camera_dirs = [
+        Path(config.get("camera_dir", config.get("path", config.get("directory"))))
+        for config in configs
+    ]
+    _preflight_jpeg_normalization(camera_dirs)
     for config in configs:
         camera_dir = Path(config.get("camera_dir", config.get("path", config.get("directory"))))
         name = str(config.get("sequence_name", config.get("name", camera_dir.name)))

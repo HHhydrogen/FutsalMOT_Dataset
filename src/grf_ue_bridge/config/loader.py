@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 
 from grf_ue_bridge.config import models as m
+from grf_ue_bridge.config.models import TaskConfig
 from grf_ue_bridge.config import paths as _paths
 
 
@@ -22,7 +23,7 @@ def _read_json(path: Path, label: str) -> dict:
         raise ValueError(f"{label} 不是合法 JSON ({path}): {e}")
 
 
-def load_task_config(path: Path) -> m.TaskConfig:
+def load_task_config(path: Path) -> TaskConfig:
     """加载并校验一个数据集 task 配置（单 config，含内联 export/ue）。"""
     data = _read_json(path, "task 配置")
     if data.get("schema") == _paths.TASK_V3_SCHEMA and data.get("version") != 3:

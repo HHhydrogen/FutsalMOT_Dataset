@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import typing
 from pathlib import Path
 
 import pytest
@@ -163,6 +164,10 @@ def _v3_task(**over):
 
 
 class TestTaskConfigV3:
+    def test_loader_type_hints_resolve_at_runtime(self):
+        hints = typing.get_type_hints(loader.load_task_config)
+        assert hints["return"] == typing.Union[DatasetTaskConfig, TaskConfigV3]
+
     def test_valid_v3_task(self):
         task = TaskConfigV3(**_v3_task())
         assert task.schema_ == TASK_V3_SCHEMA

@@ -79,9 +79,6 @@ class LocalMachineConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
 
-TaskConfig = Union["DatasetTaskConfig", TaskConfigV3]
-
-
 # ── YOLO Pose（人体关键点）后处理配置 ────────────────────────────────────
 
 class YoloPoseTaskConfig(BaseModel):
@@ -267,6 +264,9 @@ class DatasetTaskConfig(BaseModel):
     )
 
     model_config = {"populate_by_name": True}
+
+
+TaskConfig = Union[DatasetTaskConfig, TaskConfigV3]
 
 
 # ── Resolved Task（运行时，含绝对路径）──────────────────────────────────

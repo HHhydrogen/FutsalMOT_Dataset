@@ -649,6 +649,29 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "frames_per_camera": args.expected_frames_per_camera,
     }}
 
+    # 公开 manifest 存在时，公开文件是审计的唯一规范输入；其余产物只是诊断信息。
+    if (dataset_dir / "episode_manifest.json").exists():
+        from grf_ue_bridge.public_validator import validate_public_episode
+
+        result = validate_public_episode(dataset_dir)
+        report.update({
+            "cameras": {}, "sync": {}, "mapping": {}, "calibration": {},
+            "render_summary": {}, "pose_coco17": {}, "cross_camera_identity": {},
+            "validation": {"level": "public", "exit_code": result.exit_code},
+            "public_validation": result.stats,
+            "errors": result.errors, "warnings": [],
+            "passed": result.ok, "exit_code": result.exit_code,
+        })
+        out_dir = Path(args.output) if args.output else dataset_dir / "audit"
+        jpath, mpath = write_reports(dataset_dir, report, out_dir, args)
+        print(f"soak 审计完成: {'PASS' if result.ok else 'FAIL'}")
+        print(f"  失败项: {len(result.errors)}")
+        for error in result.errors[:20]:
+            print(f"    FAIL  {error}")
+        print(f"  报告: {jpath}")
+        print(f"        {mpath}")
+        return result.exit_code
+
     # 相机发现
     cam_dirs = sorted(p.parent for p in dataset_dir.rglob("camera.json"))
     if len(cam_dirs) != args.expected_cameras:

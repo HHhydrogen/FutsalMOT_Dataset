@@ -213,7 +213,7 @@ def build_seqinfo(
     seq_length: int,
     im_width: int,
     im_height: int,
-    im_ext: str = ".png",
+    im_ext: str = ".jpg",
 ) -> str:
     """生成 MOTChallenge seqinfo.ini 文本。"""
     return (

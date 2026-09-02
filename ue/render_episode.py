@@ -21,6 +21,7 @@ UE 5.8 绑定会报 "incorrect number of arguments" 而失败。PIE 渲染窗口
 """
 
 import shutil
+import os
 import sys
 import time
 import traceback
@@ -100,7 +101,9 @@ def find_rendered_frame_numbers(render_dir: Path) -> Dict[int, Path]:
     （RGB 主帧），避免 BurnInOverlay（半透明 overlay）覆盖真实 RGB。
     """
     groups: Dict[str, Dict[int, Path]] = {}
-    for p in sorted(render_dir.rglob("*.png")):
+    for p in sorted(render_dir.rglob("*")):
+        if not p.is_file() or p.suffix.lower() not in {".png", ".jpg", ".jpeg"}:
+            continue
         digits = "".join(ch for ch in p.stem if ch.isdigit())
         if not digits:
             continue
@@ -136,8 +139,17 @@ def copy_rendered_frames(
     ensure_dir(img1_dir)
     copied = 0
     for frame_index, num in mapping.items():
-        dst = img1_dir / f"{frame_index:06d}.png"
-        shutil.copy2(rendered[num], dst)
+        src = rendered[num]
+        dst = img1_dir / f"{frame_index:06d}.jpg"
+        if src.suffix.lower() == ".png":
+            from PIL import Image
+
+            tmp = dst.with_name(dst.name + ".tmp")
+            with Image.open(src) as image:
+                image.convert("RGB").save(tmp, format="JPEG", quality=95)
+            os.replace(tmp, dst)
+        else:
+            shutil.copy2(src, dst)
         copied += 1
     return copied
 
@@ -686,12 +698,7 @@ def _build_mrq_job(
     """从队列分配并配置一个 MRQ job。返回 job，失败时抛错并附 API 说明。"""
     import unreal
 
-    for cls_name in (
-        "MoviePipelineExecutorJob",
-        "MoviePipelineOutputSetting",
-        "MoviePipelineImageSequenceOutput_PNG",
-        "MoviePipelinePrimaryConfig",
-    ):
+    for cls_name in ("MoviePipelineExecutorJob", "MoviePipelineOutputSetting", "MoviePipelinePrimaryConfig"):
         if getattr(unreal, cls_name, None) is None:
             _list_mrq_classes()
             raise RuntimeError(
@@ -727,10 +734,7 @@ def _build_mrq_job(
         except Exception:
             pass
 
-        png = config.find_or_add_setting_by_class(
-            unreal.MoviePipelineImageSequenceOutput_PNG
-        )
-        # PNG 输出无需额外配置
+        _add_jpeg_output(config)
 
         # 渲染 pass（必须，否则 shot 为 0 passes 不输出任何帧）。
         # 标准 Deferred 渲染 pass；若该基类不可实例化，逐个尝试具体变体。
@@ -778,6 +782,32 @@ def _build_mrq_job(
         )
 
     return job
+
+
+def _add_jpeg_output(config, quality: int = 95) -> None:
+    """添加 JPEG RGB 输出；不同 UE 版本的类名/质量属性均防御处理。"""
+    import unreal
+
+    output = None
+    for cls_name in ("MoviePipelineImageSequenceOutput_JPG", "MoviePipelineImageSequenceOutput_JPEG"):
+        cls = getattr(unreal, cls_name, None)
+        if cls is None:
+            continue
+        try:
+            output = config.find_or_add_setting_by_class(cls)
+            break
+        except Exception as e:
+            print(f"  WARNING: 添加 {cls_name} 失败: {e}")
+    if output is None:
+        raise RuntimeError("无法添加 JPEG 输出（MoviePipelineImageSequenceOutput_JPG/JPEG）")
+    for prop in ("compression_quality", "quality", "jpeg_quality"):
+        try:
+            output.set_editor_property(prop, int(quality))
+            print(f"  [MRQ] JPEG 输出质量={quality}（{prop}）")
+            return
+        except Exception:
+            continue
+    print("  WARNING: JPEG 输出设置可用，但未找到质量属性，使用 UE 默认质量")
 
 
 def _ensure_custom_depth_stencil_enabled() -> None:
@@ -1554,10 +1584,12 @@ class _AsyncRenderPipeline:
         return True
 
     def _total_render_files(self) -> int:
-        """所有 camera render/ 目录的 PNG + EXR 总数。"""
+        """所有 camera render/ 目录的 RGB（PNG/JPG/JPEG）+ EXR 总数。"""
         return sum(
-            len(list(info["render_dir"].rglob("*.png")))
-            + len(list(info["render_dir"].rglob("*.exr")))
+            sum(
+                1 for p in info["render_dir"].rglob("*")
+                if p.is_file() and p.suffix.lower() in {".png", ".jpg", ".jpeg", ".exr"}
+            )
             for info in self.jobs
         )
 
@@ -1603,10 +1635,12 @@ class _AsyncRenderPipeline:
                     entry["annotations_jsonl_frames"] = ann_count
                     entry["annotation_img1_match"] = ann_count == copied
                 # Zero-waste（C6-P1.7）：img1 是唯一 RGB 物理副本。
-                # 复制成功后删除 render/ 的 FinalImage / BurnInOverlay PNG（不保留重复 RGB）。
+                # 复制成功后删除 render/ 的 RGB 源文件（不保留重复 RGB）。
                 if copied == expected and render_dir.is_dir():
                     removed = 0
-                    for rp in render_dir.glob("*.png"):
+                    for rp in render_dir.iterdir():
+                        if not rp.is_file() or rp.suffix.lower() not in {".png", ".jpg", ".jpeg"}:
+                            continue
                         try:
                             rp.unlink()
                             removed += 1
@@ -1629,7 +1663,7 @@ class _AsyncRenderPipeline:
                        total_mask_frames=total_mask_copied, reason=reason)
 
     def _check_annotation_frame_count(self, cam_out: Path) -> Optional[int]:
-        """轻量校验：annotations.jsonl 行数 vs img1/ PNG 数。
+        """轻量校验：annotations.jsonl 行数 vs img1/ JPEG 数。
 
         一致返回 None；不一致返回 annotations.jsonl 帧数；无标注文件返回 None。
         纯文件检查，不导入 P1 代码（保持 UE/P1 运行时隔离）。
@@ -1642,7 +1676,10 @@ class _AsyncRenderPipeline:
             ann_count = sum(1 for _ in open(ann_path, encoding="utf-8"))
         except OSError:
             return None
-        img_count = len(list(img1_dir.glob("*.png")))
+        img_count = sum(
+            1 for p in img1_dir.iterdir()
+            if p.is_file() and p.suffix.lower() == ".jpg"
+        )
         return ann_count if ann_count != img_count else None
 
     def _finalize(self, failed, status=None, per_camera=None,

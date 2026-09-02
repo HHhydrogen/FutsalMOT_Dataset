@@ -2,6 +2,8 @@
 
 import json
 
+from PIL import Image
+
 from render_episode import (
     copy_mask_frames,
     copy_rendered_frames,
@@ -9,6 +11,7 @@ from render_episode import (
     map_rendered_to_annotation,
     recover_render_to_img1,
     select_rendered_frame_indices,
+    find_rendered_frame_numbers,
 )
 
 
@@ -44,28 +47,55 @@ class TestMapRenderedToAnnotation:
 
 
 class TestCopyRenderedFrames:
+    @staticmethod
+    def _write_png(path):
+        Image.new("RGBA", (2, 1), (20, 40, 60, 128)).save(path)
+
     def test_copy_names(self, tmp_path):
         render_dir = tmp_path / "render"
         img1 = tmp_path / "img1"
         render_dir.mkdir()
         for n in (0, 3, 6):
-            (render_dir / f"{n:06d}.png").write_bytes(b"x")
+            self._write_png(render_dir / f"{n:06d}.png")
         copied = copy_rendered_frames(render_dir, img1, [0, 3, 6])
         assert copied == 3
-        assert (img1 / "000001.png").exists()
-        assert (img1 / "000002.png").exists()
-        assert (img1 / "000003.png").exists()
-        assert not (img1 / "000004.png").exists()
+        assert (img1 / "000001.jpg").exists()
+        assert (img1 / "000002.jpg").exists()
+        assert (img1 / "000003.jpg").exists()
+        assert not (img1 / "000004.jpg").exists()
+
+    def test_direct_jpeg_copy_preserves_bytes(self, tmp_path):
+        render_dir = tmp_path / "render"
+        img1 = tmp_path / "img1"
+        render_dir.mkdir()
+        source = render_dir / "000000.jpg"
+        Image.new("RGB", (2, 1), (10, 20, 30)).save(source, quality=91)
+        original = source.read_bytes()
+
+        assert copy_rendered_frames(render_dir, img1, [0]) == 1
+        assert (img1 / "000001.jpg").read_bytes() == original
+
+    def test_png_legacy_recovery_converts_to_rgb_jpeg(self, tmp_path):
+        render_dir = tmp_path / "render"
+        img1 = tmp_path / "img1"
+        render_dir.mkdir()
+        self._write_png(render_dir / "000000.png")
+
+        assert copy_rendered_frames(render_dir, img1, [0]) == 1
+        output = Image.open(img1 / "000001.jpg")
+        assert output.mode == "RGB"
+        assert output.format == "JPEG"
+        assert not (img1 / "000001.png").exists()
 
     def test_subdir_scan(self, tmp_path):
         # 渲染输出可能在子目录（MRQ 会建 shot 子目录），递归扫描应能找到
         render_dir = tmp_path / "render" / "sub"
         img1 = tmp_path / "img1"
         render_dir.mkdir(parents=True)
-        (render_dir / "000000.png").write_bytes(b"x")
+        self._write_png(render_dir / "000000.png")
         copied = copy_rendered_frames(render_dir.parent, img1, [0])
         assert copied == 1
-        assert (img1 / "000001.png").exists()
+        assert (img1 / "000001.jpg").exists()
 
 
 def _make_episode(tmp_path, num_steps=3, step_seconds=0.1, fps=30):
@@ -128,6 +158,19 @@ class TestFindMaskFiles:
         assert all(p.suffix == ".exr" for p in found.values())
 
 
+class TestFindRenderedFrameNumbers:
+    def test_accepts_png_jpg_jpeg_and_prefers_final_image(self, tmp_path):
+        render_dir = tmp_path / "render"
+        render_dir.mkdir()
+        for suffix in ("png", "jpg", "jpeg"):
+            (render_dir / f"Beauty_000000.{suffix}").write_bytes(b"x")
+        (render_dir / "FinalImage_000000.jpg").write_bytes(b"x")
+
+        found = find_rendered_frame_numbers(render_dir)
+
+        assert found == {0: render_dir / "FinalImage_000000.jpg"}
+
+
 class TestCopyMaskFrames:
     def test_copy_names(self, tmp_path):
         render_mask = tmp_path / "render_mask"
@@ -171,7 +214,7 @@ class TestRecoverRenderToImg1:
         render_dir = cam_out / "render"
         render_dir.mkdir(parents=True)
         for n in (0, 3, 6, 9):  # 渲染出 4 帧，只保留 3 帧
-            (render_dir / f"{n:06d}.png").write_bytes(b"x")
+            TestCopyRenderedFrames._write_png(render_dir / f"{n:06d}.png")
 
         seqs = [{"name": "LS_Cam", "camera_actor": "Cam_01"}]
         ann = {"render_rgb": {"frame_rate": 30}}
@@ -180,10 +223,10 @@ class TestRecoverRenderToImg1:
         assert status == "success"
         assert per_cam["Cam_01"]["img1_frames"] == 3
         assert per_cam["Cam_01"]["ok"] is True
-        assert (cam_out / "img1" / "000001.png").exists()
-        assert (cam_out / "img1" / "000002.png").exists()
-        assert (cam_out / "img1" / "000003.png").exists()
-        assert not (cam_out / "img1" / "000004.png").exists()
+        assert (cam_out / "img1" / "000001.jpg").exists()
+        assert (cam_out / "img1" / "000002.jpg").exists()
+        assert (cam_out / "img1" / "000003.jpg").exists()
+        assert not (cam_out / "img1" / "000004.jpg").exists()
         summary = json.loads((out / "episode_demo" / "render_summary.json").read_text(encoding="utf-8"))
         assert summary["status"] == "success"
         assert summary["total_img1_frames"] == 3
@@ -201,7 +244,7 @@ class TestRecoverRenderToImg1:
         episode, out = _make_episode(tmp_path, num_steps=3)
         cam_out = out / "episode_demo" / "Cam_01"
         (cam_out / "render").mkdir(parents=True)
-        (cam_out / "render" / "000000.png").write_bytes(b"x")
+        TestCopyRenderedFrames._write_png(cam_out / "render" / "000000.png")
 
         seqs = [{"name": "LS_Cam", "camera_actor": "Cam_01"}]
         ann = {"render_rgb": {"frame_rate": 30}}
@@ -217,7 +260,7 @@ class TestRecoverRenderToImg1:
         (cam_out / "render").mkdir(parents=True)
         (cam_out / "render_mask").mkdir(parents=True)
         for n in (0, 3, 6):
-            (cam_out / "render" / f"{n:06d}.png").write_bytes(b"x")
+            TestCopyRenderedFrames._write_png(cam_out / "render" / f"{n:06d}.png")
             (cam_out / "render_mask" / f"{n:06d}.png").write_bytes(b"x")
 
         seqs = [{"name": "LS_Cam", "camera_actor": "Cam_01"}]
@@ -238,7 +281,7 @@ class TestRecoverRenderToImg1:
         (cam_out / "render").mkdir(parents=True)
         (cam_out / "render_mask").mkdir(parents=True)
         for n in (0, 3, 6):
-            (cam_out / "render" / f"{n:06d}.png").write_bytes(b"x")
+            TestCopyRenderedFrames._write_png(cam_out / "render" / f"{n:06d}.png")
         (cam_out / "render_mask" / "000000.png").write_bytes(b"x")  # mask 只 1 帧
 
         seqs = [{"name": "LS_Cam", "camera_actor": "Cam_01"}]
@@ -256,7 +299,7 @@ class TestRecoverRenderToImg1:
         (cam_out / "render").mkdir(parents=True)
         (cam_out / "render_mask").mkdir(parents=True)
         for n in (0, 3, 6):
-            (cam_out / "render" / f"{n:06d}.png").write_bytes(b"x")
+            TestCopyRenderedFrames._write_png(cam_out / "render" / f"{n:06d}.png")
             (cam_out / "render_mask" / f"{n:06d}.exr").write_bytes(b"x")
 
         seqs = [{"name": "LS_Cam", "camera_actor": "Cam_01"}]
@@ -278,7 +321,7 @@ class TestRecoverRenderToImg1:
         (cam_out / "render").mkdir(parents=True)
         (cam_out / "render_mask").mkdir(parents=True)
         for n in (0, 3, 6):
-            (cam_out / "render" / f"{n:06d}.png").write_bytes(b"x")
+            TestCopyRenderedFrames._write_png(cam_out / "render" / f"{n:06d}.png")
         for n in (0, 3):  # mask 缺 000006.exr
             (cam_out / "render_mask" / f"{n:06d}.exr").write_bytes(b"x")
 

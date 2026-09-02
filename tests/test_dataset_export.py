@@ -104,5 +104,5 @@ class TestSeqinfo:
             "seqLength=300\n"
             "imWidth=1920\n"
             "imHeight=1080\n"
-            "imExt=.png\n"
+            "imExt=.jpg\n"
         )

@@ -72,11 +72,15 @@ def test_writer_emits_player_ball_and_matching_identity_sets(tmp_path, monkeypat
     assert result["episode_id"] == "ep1"
     public_cam = tmp_path / "FutsalMOT_ep1_C01"
     gt = (public_cam / "gt" / "gt.txt").read_text(encoding="utf-8").splitlines()
-    assert gt == ["1,1,1,1,2,3,1,1,1.00", "1,100,6,4,2,2,1,100,1.00"]
+    assert gt == ["1,1,1,1,2,3,1,1,-1", "1,100,6,4,2,2,1,2,-1"]
     pose = json.loads((public_cam / "gt" / "gt_pose.json").read_text(encoding="utf-8"))
-    assert {(x["frame_id"], x["track_id"]) for x in pose} == {(1, 1), (1, 100)}
+    assert {(x["frame_id"], x["track_id"], x["class_id"]) for x in pose} == {(1, 1, 1), (1, 100, 2)}
+    assert pose[1]["class_name"] == "ball"
+    assert pose[1]["keypoints"] is None
     mots = (public_cam / "gt" / "gt_mots.txt").read_text(encoding="utf-8").splitlines()
     assert len(mots) == 2 and mots[0].split()[1:3] == ["1", "1"]
+    assert len(mots[0].split()) == 6
+    assert mots[0].split()[-1] == encode_coco_rle(mask == 1)["counts"]
     assert not (public_cam / "mask").exists()
 
 
@@ -88,6 +92,7 @@ def test_manifest_trajectory_id_and_approved_policy():
     assert "dimensions" not in manifest
     assert manifest["public_classes"] == ["player", "ball"]
     assert manifest["track_id_policy"] == {"players": "L0..L4=1..5,R0..R4=6..10", "ball": 100}
+    assert manifest["class_id_policy"] == {"player": 1, "ball": 2}
 
 
 def test_invalid_keypoints_are_kept_as_zero_visibility(tmp_path, monkeypatch):

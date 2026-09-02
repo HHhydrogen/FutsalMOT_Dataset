@@ -10,8 +10,8 @@
 
 | 阶段 | 运行环境 | 入口 | 输出 |
 |------|----------|------|------|
-| P1 导出 | Python `.venv`（需 gfootball，Python 3.9） | `uv run grf-ue export` | `meta.json` + `frames.jsonl` |
-| P2 导入 | Unreal Editor Python | `import_grf_episode.py` | Level Sequence 资产 |
+| P1 导出 | Python `.venv`（需 gfootball，Python 3.9） | `uv run grf-ue task export` | `meta.json` + `frames.jsonl` + `provenance/` |
+| P2 导入 | Unreal Editor Python（优先通过 Unreal MCP FutsalMOTTools） | `ue/run_task.py` | Level Sequence、渲染与内部 JSONL |
 
 ## 工作流程约定（必须遵守）
 
@@ -30,25 +30,35 @@ uv sync                                   # 安装依赖（含 dev 组的 pytest
 uv run grf-ue task validate configs/pose_smoke_3frames_1cam.json
 uv run grf-ue task resolve configs/pose_smoke_3frames_1cam.json
 uv run grf-ue task export configs/pose_smoke_3frames_1cam.json      # GRF 导出
-uv run grf-ue task postprocess configs/pose_smoke_3frames_1cam.json # cryptomatte + annotate + yolo pose + validate
+uv run grf-ue task postprocess configs/pose_smoke_3frames_1cam.json # 默认公开 JPG/MOT/MOTS/Pose
 uv run grf-ue task audit configs/pose_smoke_3frames_1cam.json
+uv run grf-ue task cleanup configs/pose_smoke_3frames_1cam.json --dry-run # 默认，不删除
+# 通过 public validation + render/pose/audit gates 后才可显式加 --apply
 uv run pytest                             # 运行全部测试
 uv run pytest -m grf_integration -q       # 真实 GRF seed 复现集成测试
 ```
 
-P2 脚本**在 Unreal Editor 内**（Python Console）运行，绝不在 .venv 中运行：
+P2 脚本**在 Unreal Editor 内**运行，绝不在 `.venv` 中运行；配置了 Unreal MCP 时优先
+通过 `FutsalMOTTools` 执行真实 Unreal Python：
 
 ```powershell
 uv run grf-ue task ue-command configs/pose_smoke_3frames_1cam.json
 ```
 
-把输出命令复制到 UE Console，形如：
+输出命令形如：
 
 ```python
 py "D:/.../code/ue/run_task.py" --resolved-task "D:/.../.futsalmot/runtime/<task_id>/resolved-task.json"
 ```
 
-`ue/run_task.py` 读取与 P1 相同的 resolved task；不再隐式读取根目录配置。
+`ue/run_task.py` 读取与 P1 相同的 resolved task；不再隐式读取根目录配置。默认
+`postprocess` 公开输出为 JPG（RGB、quality=95）、MOT 9 列、MOTS 6 字段（COCO
+压缩 RLE）和 Pose；足球 `track_id=100`、`class_id=2`、`keypoints=null`，且
+`trajectory_id=episode_id`。默认不输出 PNG mask、YOLO、debug 或重复内部标签；
+既有 converter 通过显式命令或 `public_output=false` 保留。
+公开后处理不会删除运行前已经存在的 transient/debug/internal 文件；cleanup 是独立的
+validation-gated 操作，`--apply` 只删除 EXR、render、内部 JSONL、PNG mask 和重复 derived
+outputs，canonical JPG/GT/manifest 保留。
 
 ## 架构
 

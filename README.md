@@ -75,7 +75,7 @@ MOTS、Pose 和 `episode_manifest.json`，不会生成重复的 PNG mask、YOLO�
 ├── render_summary.json
 ├── episode_manifest.json                      # 公开单 episode 清单
 └── FutsalMOT_<episode_id>_C01/
-    ├── camera.json / seqinfo.ini
+    ├── seqinfo.ini
     ├── img1/000001.jpg                         # RGB，JPEG quality=95
     └── gt/
         ├── gt.txt                              # MOT，每行 9 列
@@ -87,18 +87,21 @@ MOTS、Pose 和 `episode_manifest.json`，不会生成重复的 PNG mask、YOLO�
 默认 `task postprocess` 生成上述公开输出：RGB 只写规范六位帧号的 JPG（RGB、
 quality=95），不生成 PNG mask、YOLO、debug 图集/视频或重复的内部标注文件；这里的
 “不生成”不等于删除同一 episode 中运行前已经存在的文件。
-公开 MOT 的格式为 `frame,track_id,x,y,w,h,1,class_id,1.00` 共 9 列；球员的
-`track_id` 为 `L0..L4=1..5`、`R0..R4=6..10`，足球为 `track_id=100` 且
-`class_id=100`，球员 `class_id=1`。MOTS 的 6 个字段为
-`frame_id track_id class_id height width rle_json`，其中 `rle_json` 是 COCO
-列优先压缩 RLE。Pose 与 MOT/MOTS 使用相同的 `(frame_id, track_id)` 集合，足球
+公开 MOT 的格式为 `frame,track_id,x,y,w,h,mark,class_id,visibility` 共 9 列；球员的
+`track_id` 为 `L0..L4=1..5`、`R0..R4=6..10`，足球为 `track_id=100`。
+类别定义为 `player=1`、`ball=2`。visibility 为真实可用时的 `[0,1]` 比例；当前
+流程无法可靠计算时写 `-1`，表示 unavailable/not computed，不伪造 `1.00`。
+MOTS 的 6 个字段为 `frame_id track_id class_id height width compressed_RLE`，其中最后一列
+只包含 COCO 列优先 compressed RLE 的 counts 字符串，不包含 JSON 对象。Pose 与 MOT/MOTS
+使用相同的 `(frame_id, track_id, class_id)` 集合，足球
 记录的 `keypoints` 为 `null`；球员记录包含 COCO 17 点。`episode_manifest.json` 的批准最小
 schema 为：根字段包含数值 `schema_version: 1`、`episode_id`、`trajectory_id`、`sequences`、
 `track_id_policy` 和 `public_classes: ["player", "ball"]`；不要求根 `frame_count` 或
 `dimensions`。sequence 字段包含 `sequence_name`、`camera_id`（如 `C01`）、
 `relative_path`、`frame_count`、`image_width`、`image_height` 和
 `modalities: ["mot", "pose_tracking", "mots"]`。固定 `track_id_policy` 为
-`{"players": "L0..L4=1..5,R0..R4=6..10", "ball": 100}`。
+`{"players": "L0..L4=1..5,R0..R4=6..10", "ball": 100}`，`class_id_policy` 为
+`{"player": 1, "ball": 2}`。
 
 PNG mask、YOLO det/seg、YOLO Pose、debug 图集/视频以及内部 `annotations.jsonl`
 等仍是显式能力，可通过对应的既有 converter/CLI 和 `postprocess.public_output=false`

@@ -200,6 +200,7 @@ def build_public_manifest(episode_id: str, sequences: list[dict], frame_count: i
         "sequences": sequences,
         "public_classes": ["player", "ball"],
         "track_id_policy": {"players": "L0..L4=1..5,R0..R4=6..10", "ball": 100},
+        "class_id_policy": {"player": 1, "ball": 2},
     }
 
 
@@ -365,13 +366,15 @@ def write_public_episode(episode_dir: Path, *, mapping: dict, sequence_configs: 
                     continue
                 track_id = public_track_id(entity_id)
                 x, y, w, h = bbox
-                class_id = 100 if entity_id == "BALL" else 1
-                mot_rows.append(f"{frame_id},{track_id},{x},{y},{w},{h},1,{class_id},1.00")
+                class_id = 2 if entity_id == "BALL" else 1
+                mot_rows.append(f"{frame_id},{track_id},{x},{y},{w},{h},1,{class_id},-1")
                 rle = encode_coco_rle(mask == entity_id_to_mask_id(entity_id))
                 mots_rows.append("{} {} {} {} {} {}".format(frame_id, track_id, class_id, height, width,
-                                                             json.dumps(rle, separators=(",", ":"))))
+                                                              rle["counts"]))
                 keypoints = None if entity_id == "BALL" else _pose_keypoints(pose_objects.get(entity_id), camera, extrinsics)
                 pose_records.append({"frame_id": frame_id, "track_id": track_id,
+                                     "class_id": class_id,
+                                     "class_name": "ball" if entity_id == "BALL" else "player",
                                      "class": "ball" if entity_id == "BALL" else "player",
                                      "bbox": [x, y, w, h], "keypoints": keypoints})
         gt_dir = staged_camera / "gt"

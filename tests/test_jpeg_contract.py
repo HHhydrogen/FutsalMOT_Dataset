@@ -104,15 +104,15 @@ def _write_real_public_fixture(root: Path):
         "[Sequence]\nname=FutsalMOT_episode_01_C01\nimDir=img1\nframeRate=30\nseqLength=1\nimWidth=2\nimHeight=2\nimExt=.jpg\n",
         encoding="utf-8",
     )
-    mot = "1,1,0,0,1,1,1,1,1\n1,100,1,1,1,1,1,100,1\n"
+    mot = "1,1,0,0,1,1,1,1,-1\n1,100,1,1,1,1,1,2,-1\n"
     (cam / "gt" / "gt.txt").write_text(mot, encoding="utf-8")
     mask = encode_coco_rle(__import__("numpy").array([[1, 0], [0, 11]], dtype="uint8"))
-    mots = "1 1 1 2 2 " + json.dumps(mask, separators=(",", ":")) + "\n"
-    mots += "1 100 100 2 2 " + json.dumps(encode_coco_rle(__import__("numpy").array([[0, 0], [0, 1]], dtype="uint8")), separators=(",", ":")) + "\n"
+    mots = "1 1 1 2 2 " + mask["counts"] + "\n"
+    mots += "1 100 2 2 2 " + encode_coco_rle(__import__("numpy").array([[0, 0], [0, 1]], dtype="uint8"))["counts"] + "\n"
     (cam / "gt" / "gt_mots.txt").write_text(mots, encoding="utf-8")
     (cam / "gt" / "gt_pose.json").write_text(json.dumps([
-        {"frame_id": 1, "track_id": 1, "class": "player", "bbox": [0, 0, 1, 1], "keypoints": [[0, 0, 2]] * 17},
-        {"frame_id": 1, "track_id": 100, "class": "ball", "bbox": [1, 1, 1, 1], "keypoints": None},
+        {"frame_id": 1, "track_id": 1, "class_id": 1, "class_name": "player", "class": "player", "bbox": [0, 0, 1, 1], "keypoints": [[0, 0, 2]] * 17},
+        {"frame_id": 1, "track_id": 100, "class_id": 2, "class_name": "ball", "class": "ball", "bbox": [1, 1, 1, 1], "keypoints": None},
     ]), encoding="utf-8")
     (root / "episode_manifest.json").write_text(json.dumps({
         "schema_version": 1, "episode_id": "episode_01",
@@ -121,7 +121,7 @@ def _write_real_public_fixture(root: Path):
                        "relative_path": "FutsalMOT_episode_01_C01", "frame_count": 1,
                        "image_width": 2, "image_height": 2,
                        "modalities": ["mot", "pose_tracking", "mots"]}],
-        "public_classes": ["player", "ball"],
+        "public_classes": ["player", "ball"], "class_id_policy": {"player": 1, "ball": 2},
         "track_id_policy": {"players": "L0..L4=1..5,R0..R4=6..10", "ball": 100},
     }), encoding="utf-8")
     (root / "render_summary.json").write_text(json.dumps({"status": "success"}), encoding="utf-8")

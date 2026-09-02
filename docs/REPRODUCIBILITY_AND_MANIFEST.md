@@ -99,20 +99,20 @@ CLI `--seed` 优先级：**CLI > 配置文件 > 默认值**。运行时打印 ro
 <dataset_root>/<episode_id>/
 ├── meta.json / frames.jsonl / provenance/
 ├── episode_manifest.json
-└── <camera>/
-    ├── camera.json / seqinfo.ini
+└── FutsalMOT_<episode_id>_C01/
+    ├── seqinfo.ini
     ├── img1/000001.jpg             # RGB JPEG，quality=95
     └── gt/
         ├── gt.txt                  # MOT：9 列
-        ├── gt_mots.txt             # MOTS：6 字段 + COCO 压缩 RLE JSON
+        ├── gt_mots.txt             # MOTS：6 字段 + COCO compressed RLE counts
         └── gt_pose.json             # COCO 17 点；足球 keypoints=null
 ```
 
 规范为单 episode、每相机连续六位帧号 JPG。MOT 每行字段依次为
 `frame,track_id,x,y,w,h,mark,class_id,visibility`，共 9 列；球员 `class_id=1`，
-足球 `track_id=100/class_id=100`，球员 ID 为 `L0..L4=1..5`、`R0..R4=6..10`。
-MOTS 每行依次为 `frame_id track_id class_id height width rle_json`，RLE 使用 COCO
-列优先压缩字符串。Pose、MOT、MOTS 的身份集合一致，球员含 COCO 17 个关键点，足球
+足球 `track_id=100`，类别定义为 `player=1 / ball=2`，球员 ID 为 `L0..L4=1..5`、`R0..R4=6..10`。
+MOTS 每行依次为 `frame_id track_id class_id height width compressed_RLE`，最后一列只写 COCO
+列优先 compressed RLE 的 counts 字符串。Pose、MOT、MOTS 的 `(frame_id, track_id, class_id)` 集合一致，球员含 COCO 17 个关键点，足球
 记录保留但 `keypoints` 必须为 `null`。`episode_manifest.json` 使用批准的最小 schema：
 `schema_version` 为数值 `1`，根字段为 `episode_id`、`trajectory_id`、`sequences`、
 `track_id_policy` 和 `public_classes: ["player", "ball"]`；不要求根级 `frame_count` 或
@@ -134,7 +134,8 @@ MOTS 每行依次为 `frame_id track_id class_id height width rle_json`，RLE �
     "image_height": 1080,
     "modalities": ["mot", "pose_tracking", "mots"]
   }],
-  "track_id_policy": {"players": "L0..L4=1..5,R0..R4=6..10", "ball": 100},
+   "track_id_policy": {"players": "L0..L4=1..5,R0..R4=6..10", "ball": 100},
+   "class_id_policy": {"player": 1, "ball": 2},
   "public_classes": ["player", "ball"]
 }
 ```

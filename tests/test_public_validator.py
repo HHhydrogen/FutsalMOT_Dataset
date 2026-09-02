@@ -10,9 +10,9 @@ from grf_ue_bridge.workflows.task_audit import main as audit_main
 
 def _rle(height, width, start=0, length=1):
     import numpy as np
-    mask = np.zeros((height, width), dtype=np.uint8)
-    flat = mask.T.reshape(-1)
+    flat = np.zeros(height * width, dtype=np.uint8)
     flat[start:start + length] = 1
+    mask = flat.reshape((width, height)).T
     return encode_coco_rle(mask)
 
 
@@ -32,16 +32,16 @@ def _make_public_episode(root: Path):
     for frame_id in (1, 2):
         mot.extend([
             f"{frame_id},1,0,0,2,2,1,1,1",
-            f"{frame_id},100,1,2,1,1,1,100,1",
+            f"{frame_id},100,1,2,1,1,1,2,-1",
         ])
         mots.extend([
-            f"{frame_id} 1 1 3 4 {json.dumps(_rle(3, 4, 0, 4), separators=(',', ':'))}",
-            f"{frame_id} 100 100 3 4 {json.dumps(_rle(3, 4, 4, 1), separators=(',', ':'))}",
+            f"{frame_id} 1 1 3 4 {_rle(3, 4, 0, 4)['counts']}",
+            f"{frame_id} 100 2 3 4 {_rle(3, 4, 4, 1)['counts']}",
         ])
         pose.extend([
-            {"frame_id": frame_id, "track_id": 1, "class": "player",
+             {"frame_id": frame_id, "track_id": 1, "class_id": 1, "class_name": "player", "class": "player",
              "bbox": [0, 0, 2, 2], "keypoints": [[1.0, 1.0, 2]] * 17},
-            {"frame_id": frame_id, "track_id": 100, "class": "ball",
+             {"frame_id": frame_id, "track_id": 100, "class_id": 2, "class_name": "ball", "class": "ball",
              "bbox": [2, 1, 1, 1], "keypoints": None},
         ])
     (cam / "gt" / "gt.txt").write_text("\n".join(mot) + "\n", encoding="utf-8")
@@ -56,6 +56,7 @@ def _make_public_episode(root: Path):
                        "modalities": ["mot", "pose_tracking", "mots"]}],
         "public_classes": ["player", "ball"],
         "track_id_policy": {"players": "L0..L4=1..5,R0..R4=6..10", "ball": 100},
+        "class_id_policy": {"player": 1, "ball": 2},
     }), encoding="utf-8")
 
 
@@ -114,7 +115,7 @@ def test_public_validator_rejects_ball_keypoints_and_bad_rle(tmp_path):
     pose[-1]["keypoints"] = []
     pose_path.write_text(json.dumps(pose), encoding="utf-8")
     mots_path = tmp_path / "FutsalMOT_episode_01_C01" / "gt" / "gt_mots.txt"
-    mots_path.write_text(mots_path.read_text(encoding="utf-8").replace('"size":[3,4]', '"size":[9,9]', 1), encoding="utf-8")
+    mots_path.write_text(mots_path.read_text(encoding="utf-8").replace(" 048", " 0", 1), encoding="utf-8")
 
     result = validate_public_episode(tmp_path)
 

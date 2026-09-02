@@ -56,10 +56,7 @@ def _json(path: Path, errors: List[str]) -> Any:
         return None
 
 
-def _read_rle(value: Any, height: int, width: int) -> int:
-    if not isinstance(value, dict) or value.get("size") != [height, width]:
-        raise ValueError("RLE 尺寸不匹配")
-    counts = value.get("counts")
+def _read_rle(counts: Any, height: int, width: int) -> int:
     if not isinstance(counts, str):
         raise ValueError("RLE counts 不是字符串")
     runs: List[int] = []
@@ -99,7 +96,7 @@ def _seqinfo(path: Path, errors: List[str]) -> Dict[str, str]:
         return {}
 
 
-def _validate_sequence(cam: Path, manifest_seq: dict, errors: List[str]) -> Tuple[Set[Tuple[int, int]], Dict[str, Any]]:
+def _validate_sequence(cam: Path, manifest_seq: dict, errors: List[str]) -> Tuple[Set[Tuple[int, int, int]], Dict[str, Any]]:
     name = cam.name
     width = manifest_seq.get("image_width")
     height = manifest_seq.get("image_height")
@@ -199,14 +196,14 @@ def _validate_sequence(cam: Path, manifest_seq: dict, errors: List[str]) -> Tupl
             stats["gt_pose_records"] = len(records) if isinstance(records, list) else 0
         except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
             pass
-    stats["annotations_frames"] = max((frame for frame, _ in mot_set), default=0)
+    stats["annotations_frames"] = max((frame for frame, *_ in mot_set), default=0)
     if not (mot_set == mots_set == pose_set):
         errors.append(f"{name}: MOT、MOTS、Pose 的 (frame_id, track_id) 集合不一致")
     return mot_set, stats
 
 
-def _validate_mot(path: Path, name: str, width: int, height: int, frame_count: int, errors: List[str]) -> Set[Tuple[int, int]]:
-    result: Set[Tuple[int, int]] = set()
+def _validate_mot(path: Path, name: str, width: int, height: int, frame_count: int, errors: List[str]) -> Set[Tuple[int, int, int]]:
+    result: Set[Tuple[int, int, int]] = set()
     if not path.exists():
         errors.append(f"{name}: 缺少 gt/gt.txt")
         return result
@@ -226,17 +223,21 @@ def _validate_mot(path: Path, name: str, width: int, height: int, frame_count: i
         frame, track = _strict_int(fields[0].strip()), _strict_int(fields[1].strip())
         x, y, w, h = map(float, fields[2:6])
         cls = _strict_int(fields[7].strip())
-        expected_cls = 100 if track == 100 else 1
-        if frame < 1 or frame > frame_count or track not in set(range(1, 11)) | {100} or cls != expected_cls or w <= 0 or h <= 0 or x < 0 or y < 0 or x + w > width or y + h > height:
+        expected_cls = 2 if track == 100 else 1
+        visibility = float(fields[8].strip())
+        if (frame < 1 or frame > frame_count or track not in set(range(1, 11)) | {100} or
+                cls != expected_cls or w <= 0 or h <= 0 or x < 0 or y < 0 or
+                x + w > width or y + h > height or
+                not (visibility == -1 or 0.0 <= visibility <= 1.0)):
             errors.append(f"{name}: MOT 第 {line_no} 行 ID/class/bbox 非法")
         if (frame, track) in result:
             errors.append(f"{name}: MOT 第 {line_no} 行 frame/track 重复")
-        result.add((frame, track))
+        result.add((frame, track, cls))
     return result
 
 
-def _validate_mots(path: Path, name: str, width_limit: int, height_limit: int, frame_count: int, errors: List[str]) -> Set[Tuple[int, int]]:
-    result: Set[Tuple[int, int]] = set()
+def _validate_mots(path: Path, name: str, width_limit: int, height_limit: int, frame_count: int, errors: List[str]) -> Set[Tuple[int, int, int]]:
+    result: Set[Tuple[int, int, int]] = set()
     if not path.exists():
         errors.append(f"{name}: 缺少 gt/gt_mots.txt")
         return result
@@ -254,21 +255,20 @@ def _validate_mots(path: Path, name: str, width_limit: int, height_limit: int, f
             frame, track, cls, height, width = (_strict_int(value) for value in fields[:5])
             if frame < 1 or frame > frame_count or height != height_limit or width != width_limit or height <= 0 or width <= 0:
                 raise ValueError("帧号或尺寸非法")
-            rle = json.loads(fields[5])
-            area = _read_rle(rle, height, width)
-            if frame < 1 or track not in set(range(1, 11)) | {100} or cls != (100 if track == 100 else 1) or area < 0:
+            area = _read_rle(fields[5], height, width)
+            if frame < 1 or track not in set(range(1, 11)) | {100} or cls != (2 if track == 100 else 1) or area < 0:
                 raise ValueError("ID/class/面积非法")
         except (ValueError, TypeError, json.JSONDecodeError, UnicodeError) as exc:
             errors.append(f"{name}: MOTS 第 {line_no} 行非法: {exc}")
             continue
         if (frame, track) in result:
             errors.append(f"{name}: MOTS 第 {line_no} 行 frame/track 重复")
-        result.add((frame, track))
+        result.add((frame, track, cls))
     return result
 
 
-def _validate_pose(path: Path, name: str, width: int, height: int, frame_count: int, errors: List[str]) -> Set[Tuple[int, int]]:
-    result: Set[Tuple[int, int]] = set()
+def _validate_pose(path: Path, name: str, width: int, height: int, frame_count: int, errors: List[str]) -> Set[Tuple[int, int, int]]:
+    result: Set[Tuple[int, int, int]] = set()
     if not path.exists():
         errors.append(f"{name}: 缺少 gt/gt_pose.json")
         return result
@@ -284,12 +284,15 @@ def _validate_pose(path: Path, name: str, width: int, height: int, frame_count: 
         valid_identity = isinstance(frame, int) and not isinstance(frame, bool) and 1 <= frame <= frame_count and isinstance(track, int) and not isinstance(track, bool) and track in set(range(1, 11)) | {100}
         if not valid_identity:
             errors.append(f"{name}: Pose 第 {index} 条 frame_id/track_id 非法")
-        if valid_identity and (frame, track) in result:
+        class_id = record.get("class_id")
+        if valid_identity and (frame, track, class_id) in result:
             errors.append(f"{name}: Pose 第 {index} 条 frame/track 重复")
         if valid_identity:
-            result.add((frame, track))
+            result.add((frame, track, class_id))
         is_ball = track == 100
-        if record.get("class") != ("ball" if is_ball else "player"):
+        expected_class_name = "ball" if is_ball else "player"
+        expected_class_id = 2 if is_ball else 1
+        if record.get("class_name", record.get("class")) != expected_class_name or record.get("class_id") != expected_class_id:
             errors.append(f"{name}: Pose 第 {index} 条 class 非法")
         points = record.get("keypoints")
         if is_ball:
@@ -331,6 +334,8 @@ def validate_public_episode(episode_dir: Path) -> ValidationResult:
     expected_policy = {"players": "L0..L4=1..5,R0..R4=6..10", "ball": 100}
     if manifest.get("track_id_policy") != expected_policy:
         errors.append("manifest track_id_policy 不匹配")
+    if manifest.get("class_id_policy") != {"player": 1, "ball": 2}:
+        errors.append("manifest class_id_policy 不匹配")
     sequences = manifest.get("sequences")
     if not isinstance(sequences, list) or not sequences:
         errors.append("manifest sequences 为空或非法")

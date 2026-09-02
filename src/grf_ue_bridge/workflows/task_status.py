@@ -7,6 +7,8 @@ from typing import Callable, Dict
 
 from grf_ue_bridge.config import models as m
 
+RGB_SUFFIXES = {".png", ".jpg", ".jpeg"}
+
 
 def _count(path: Path, pattern: str) -> int:
     if not path.is_dir():
@@ -17,6 +19,13 @@ def _count(path: Path, pattern: str) -> int:
         return 0
 
 
+def _count_rgb(path: Path) -> int:
+    if not path.is_dir():
+        return 0
+    try:
+        return sum(1 for p in path.rglob("*") if p.is_file() and p.suffix.lower() in RGB_SUFFIXES)
+    except OSError:
+        return 0
 def _lines(path: Path) -> int:
     if not path.is_file():
         return 0
@@ -44,9 +53,9 @@ def collect_status(resolved: m.ResolvedTask) -> Dict:
     }
     for cam in cams:
         st["cameras"][cam.name] = {
-            "render_rgb": _count(cam / "render", "*.png"),
+            "render_rgb": _count_rgb(cam / "render"),
             "object_id_exr": _count(cam / "render_mask", "*.exr"),
-            "img1": _count(cam / "img1", "*.png"),
+            "img1": _count(cam / "img1", "*.jpg"),
             "mask": _count(cam / "mask", "*.png"),
             "annotations": _lines(cam / "annotations.jsonl"),
             "det": _count(cam / "labels" / "det", "*.txt"),

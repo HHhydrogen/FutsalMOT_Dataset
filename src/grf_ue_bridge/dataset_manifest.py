@@ -30,6 +30,8 @@ from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 from pydantic import BaseModel, Field
 
+RGB_SUFFIXES = {".png", ".jpg", ".jpeg"}
+PUBLIC_RGB_SUFFIX = ".jpg"
 MANIFEST_SCHEMA = "futsalmot_dataset_manifest"
 FINGERPRINT_SCHEMA = "futsalmot_dataset_fingerprint_v1"
 CHECKSUM_PROFILES = ("metadata", "final", "all")
@@ -242,7 +244,7 @@ def profile_file_paths(
     if profile in ("final", "all"):
         for cam in cameras:
             for sub, suffix in (
-                ("img1", ".png"),
+                ("img1", PUBLIC_RGB_SUFFIX),
                 ("mask", ".png"),
                 ("labels/det", ".txt"),
                 ("labels/seg", ".txt"),
@@ -354,22 +356,22 @@ def _collect_artifact_stats(cam_dir: Path) -> Tuple[ArtifactCounts, ArtifactByte
     rmask = cam_dir / "render_mask"
     ann = cam_dir / "annotations.jsonl"
 
-    def _add_dir(d: Path, suffix: str) -> Tuple[int, int]:
+    def _add_dir(d: Path, suffix: str, suffixes=None) -> Tuple[int, int]:
         n = s = 0
         if d.is_dir():
-            for p in d.rglob(f"*{suffix}"):
-                if p.is_file():
+            for p in d.rglob("*"):
+                if p.is_file() and (p.suffix == suffix or (suffixes and p.suffix.lower() in suffixes)):
                     n += 1
                     s += p.stat().st_size
         return n, s
 
-    n, s = _add_dir(img1, ".png"); counts.rgb_final = n; bytes_.rgb_final = s
+    n, s = _add_dir(img1, PUBLIC_RGB_SUFFIX); counts.rgb_final = n; bytes_.rgb_final = s
     n, s = _add_dir(mask, ".png"); counts.instance_mask = n; bytes_.instance_mask = s
     n, s = _add_dir(det, ".txt"); counts.yolo_detect_files = n
     n, s2 = _add_dir(seg, ".txt"); counts.yolo_segment_files = n
     n, s3 = _add_dir(pose, ".txt"); counts.yolo_pose_files = n
     bytes_.labels = s + s2 + s3
-    n, s = _add_dir(render, ".png"); counts.raw_rgb = n; bytes_.raw_rgb = s
+    n, s = _add_dir(render, ".png", RGB_SUFFIXES); counts.raw_rgb = n; bytes_.raw_rgb = s
     n, s = _add_dir(rmask, ".exr"); counts.raw_object_id_exr = n; bytes_.raw_object_id_exr = s
     if ann.is_file():
         counts.annotation_frames = _count_annotation_frames(cam_dir)

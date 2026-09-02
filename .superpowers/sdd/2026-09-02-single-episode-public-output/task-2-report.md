@@ -26,6 +26,18 @@
 
 额外验证：`git diff --check` 通过。
 
+修复复核命令：
+
+`uv run pytest tests/test_jpeg_contract.py tests/test_render_export.py tests/test_camera_projection.py tests/test_dataset_manifest.py tests/test_dataset_regression.py tests/test_audit_fixes.py -q`
+
+结果：`97 passed in 8.91s`
+
+最终覆盖命令：
+
+`uv run pytest tests/test_render_export.py tests/test_render_preset.py tests/test_camera_projection.py tests/test_dataset_manifest.py tests/test_dataset_regression.py tests/test_audit_fixes.py tests/test_jpeg_contract.py -q`
+
+结果：`132 passed in 8.75s`
+
 ## 提交
 
 提交：见最终提交记录。

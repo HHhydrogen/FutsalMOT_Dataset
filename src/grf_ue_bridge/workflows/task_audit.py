@@ -35,6 +35,7 @@ TRACK_MAP["BALL"] = 100
 MASK_MAP = {f"L{i}": i + 1 for i in range(5)}
 MASK_MAP.update({f"R{i}": i + 6 for i in range(5)})
 MASK_MAP["BALL"] = 11
+RGB_SUFFIXES = {".png", ".jpg", ".jpeg"}
 
 
 def _is_finite(v) -> bool:
@@ -171,16 +172,19 @@ def check_camera(
     det_dir, seg_dir = cam_dir / "labels" / "det", cam_dir / "labels" / "seg"
     gt_txt = cam_dir / "gt" / "gt.txt"
 
-    img1_files = sorted(img1_dir.glob("*.png")) if img1_dir.exists() else []
+    img1_files = sorted(img1_dir.glob("*.jpg")) if img1_dir.exists() else []
     mask_files = sorted(mask_dir.glob("*.png")) if mask_dir.exists() else []
-    render_files = sorted(render_dir.rglob("*.png")) if render_dir.exists() else []
+    render_files = sorted(
+        p for p in render_dir.rglob("*")
+        if p.is_file() and p.suffix.lower() in RGB_SUFFIXES
+    ) if render_dir.exists() else []
     exr_files = sorted(rmask_dir.rglob("*.exr")) if rmask_dir.exists() else []
     det_files = sorted(det_dir.glob("*.txt")) if det_dir.exists() else []
     seg_files = sorted(seg_dir.glob("*.txt")) if seg_dir.exists() else []
 
-    st["render_rgb_png"] = len(render_files)
+    st["render_rgb"] = len(render_files)
     st["render_mask_exr"] = len(exr_files)
-    st["img1_png"] = len(img1_files)
+    st["img1_jpg"] = len(img1_files)
     st["mask_png"] = len(mask_files)
     st["det_txt"] = len(det_files)
     st["seg_txt"] = len(seg_files)
@@ -213,7 +217,7 @@ def check_camera(
     exr_nums = set(_frame_numbers(exr_files))
     miss_render = sorted(set(keep_indices) - render_nums)
     miss_exr = sorted(set(keep_indices) - exr_nums)
-    # 仅当 render/ 仍有 PNG 时才校验其完整性（img1 已保证 RGB 完整性；
+    # 仅当 render/ 仍有 RGB 文件时才校验其完整性（img1 已保证 RGB 完整性；
     # zero-waste 删除 render/ PNG 后 render_files 为空，跳过）
     if mask_enabled and render_files and miss_render:
         errors.append(f"{cam_id}: render/ 缺少目标帧 {miss_render[:10]}...")

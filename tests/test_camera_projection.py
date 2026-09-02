@@ -21,6 +21,7 @@ from render_preset import (
 import json
 
 import pytest
+from PIL import Image
 
 
 def _camera_at_origin():
@@ -211,6 +212,14 @@ class TestC5ResolutionAutomation:
             encoding="utf-8",
         )
         validate_render_vs_calibration(render, cam)  # 不抛错
+
+    def test_validate_render_vs_calibration_jpeg_only(self, tmp_path):
+        render = tmp_path / "render"
+        render.mkdir()
+        Image.new("RGB", (1920, 1080), "black").save(render / "0000.jpg")
+        cam = tmp_path / "camera.json"
+        cam.write_text(json.dumps({"image_width": 1920, "image_height": 1080}), encoding="utf-8")
+        validate_render_vs_calibration(render, cam)
 
 
 def _write_fake_png(path, width, height):

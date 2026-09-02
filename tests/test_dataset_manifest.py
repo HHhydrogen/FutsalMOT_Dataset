@@ -61,7 +61,7 @@ def _make_episode(
             json.dumps({"frame_index": 1, "objects": []}) + "\n", encoding="utf-8"
         )
         (cd / "img1").mkdir()
-        (cd / "img1" / "000001.png").write_bytes(b"RGBDATA" + bytes([seed % 256]))
+        (cd / "img1" / "000001.jpg").write_bytes(b"RGBDATA" + bytes([seed % 256]))
         (cd / "mask").mkdir()
         (cd / "mask" / "000001.png").write_bytes(b"MASK" + bytes([seed % 256]))
         (cd / "labels" / "det").mkdir(parents=True)
@@ -150,18 +150,18 @@ class TestIntegrityChecks:
     def test_delete_file_fails_missing(self, tmp_path):
         ep = _make_episode(tmp_path, "epA", 1001)
         build_manifest(tmp_path, ["epA"], dataset_id="d")
-        (ep / "Cam_02" / "img1" / "000001.png").unlink()
+        (ep / "Cam_02" / "img1" / "000001.jpg").unlink()
         v = verify_manifest(tmp_path)
         assert v.exit_code == 1
-        assert any("epA/Cam_02/img1/000001.png" in p for p in v.missing)
+        assert any("epA/Cam_02/img1/000001.jpg" in p for p in v.missing)
 
     def test_add_file_warns_and_strict_fails(self, tmp_path):
         ep = _make_episode(tmp_path, "epA", 1001)
         build_manifest(tmp_path, ["epA"], dataset_id="d")
-        (ep / "Cam_01" / "img1" / "000099.png").write_bytes(b"EXTRA")
+        (ep / "Cam_01" / "img1" / "000099.jpg").write_bytes(b"EXTRA")
         v = verify_manifest(tmp_path)  # 默认：extra 仅警告
         assert v.exit_code == 0
-        assert any("epA/Cam_01/img1/000099.png" in x for x in v.extra)
+        assert any("epA/Cam_01/img1/000099.jpg" in x for x in v.extra)
         vs = verify_manifest(tmp_path, strict_extra=True)  # strict：失败
         assert vs.exit_code == 1
 
@@ -229,6 +229,13 @@ class TestChecksumProfiles:
         m = build_manifest(tmp_path, ["epA"], dataset_id="d", checksum_profile="all")
         assert m.episodes[0].artifact_counts.raw_rgb == 2  # 2 相机 × 1 render
         assert m.episodes[0].artifact_counts.raw_object_id_exr == 2
+
+    def test_public_img1_profile_requires_jpeg(self, tmp_path):
+        ep = _make_episode(tmp_path, "epA", 1001)
+        (ep / "Cam_01" / "img1" / "legacy.png").write_bytes(b"legacy")
+        files = profile_file_paths(ep, "final")
+        assert any(p.name == "000001.jpg" for p in files)
+        assert not any(p.name == "legacy.png" for p in files)
 
 
 class TestHashUtil:

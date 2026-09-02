@@ -457,6 +457,22 @@ def _clear_dir(path: Path) -> None:
             p.unlink()
 
 
+def _remove_rgb_files(path: Path) -> int:
+    """递归删除 render/ 下的 RGB 源文件，返回删除数量。"""
+    removed = 0
+    if not path.is_dir():
+        return removed
+    for p in path.rglob("*"):
+        if not p.is_file() or p.suffix.lower() not in {".png", ".jpg", ".jpeg"}:
+            continue
+        try:
+            p.unlink()
+            removed += 1
+        except OSError:
+            pass
+    return removed
+
+
 # ── CV GT deterministic preset 应用（render_preset.py 的 UE 侧执行）────────
 
 def _set_config_overrides(obj, overrides: dict, label: str) -> None:
@@ -1637,15 +1653,7 @@ class _AsyncRenderPipeline:
                 # Zero-waste（C6-P1.7）：img1 是唯一 RGB 物理副本。
                 # 复制成功后删除 render/ 的 RGB 源文件（不保留重复 RGB）。
                 if copied == expected and render_dir.is_dir():
-                    removed = 0
-                    for rp in render_dir.iterdir():
-                        if not rp.is_file() or rp.suffix.lower() not in {".png", ".jpg", ".jpeg"}:
-                            continue
-                        try:
-                            rp.unlink()
-                            removed += 1
-                        except OSError:
-                            pass
+                    removed = _remove_rgb_files(render_dir)
                     if removed:
                         print(f"  [zero-waste] {cam_id}: render/ 已删除 {removed} 张重复 RGB PNG（img1 为唯一副本）")
             entry["ok"] = entry["ok"] and (copied == expected)

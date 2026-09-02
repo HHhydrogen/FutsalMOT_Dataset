@@ -34,6 +34,8 @@ from annotation_utils import (  # noqa: E402
     entity_id_to_mask_id,
     entity_id_to_track_id,
 )
+
+RGB_SUFFIXES = {".png", ".jpg", ".jpeg"}
 from dataset_export import build_mot_gt  # noqa: E402
 from instance_mask import (  # noqa: E402
     det_xyxy_to_yolo_norm,
@@ -56,12 +58,14 @@ def _camera_dirs(annotation_dir: Path) -> List[Path]:
     return sorted(d.parent for d in annotation_dir.rglob("camera.json"))
 
 
-def _frame_numbers(dir_path: Path) -> set:
-    """从目录里的 PNG 文件名解析帧号集合。"""
+def _frame_numbers(dir_path: Path, suffixes=RGB_SUFFIXES) -> set:
+    """从目录里的 RGB 文件名解析帧号集合。"""
     if not dir_path.exists():
         return set()
     nums = set()
-    for p in dir_path.glob("*.png"):
+    for p in dir_path.iterdir():
+        if not p.is_file() or p.suffix.lower() not in suffixes:
+            continue
         digits = "".join(ch for ch in p.stem if ch.isdigit())
         if digits:
             nums.add(int(digits))
@@ -175,7 +179,7 @@ def _validate_camera(cam_dir: Path) -> List[str]:
     ann_frames = {int(f.get("frame_index")) for f in frames if isinstance(f.get("frame_index"), int)}
     img1_dir, mask_dir = cam_dir / "img1", cam_dir / "mask"
     img_frames = _frame_numbers(img1_dir)
-    mask_frames = _frame_numbers(mask_dir)
+    mask_frames = _frame_numbers(mask_dir, {".png"})
     has_mask = mask_dir.exists()
     has_img = img1_dir.exists()
 
@@ -203,13 +207,13 @@ def _validate_camera(cam_dir: Path) -> List[str]:
     for fi in sorted(ann_frames):
         # 2. RGB 分辨率 == mask 分辨率 == camera 分辨率
         if has_img:
-            img_png = img1_dir / f"{fi:06d}.png"
-            if not img_png.exists():
-                errors.append(f"{label} img1/{fi:06d}.png 缺失")
+            img_path = img1_dir / f"{fi:06d}.jpg"
+            if not img_path.exists():
+                errors.append(f"{label} img1/{fi:06d}.jpg 缺失")
             else:
-                sz = _png_size(img_png)
+                sz = _png_size(img_path)
                 if sz != (width, height):
-                    errors.append(f"{label} img1/{fi:06d}.png 分辨率 {sz} != camera {width}x{height}")
+                    errors.append(f"{label} img1/{fi:06d}.jpg 分辨率 {sz} != camera {width}x{height}")
         quantized = None
         mask_path = mask_dir / f"{fi:06d}.png" if has_mask else None
         if has_mask:

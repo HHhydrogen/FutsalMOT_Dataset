@@ -7,6 +7,7 @@ from PIL import Image
 from render_episode import (
     copy_mask_frames,
     copy_rendered_frames,
+    _remove_rgb_files,
     find_mask_files,
     map_rendered_to_annotation,
     recover_render_to_img1,
@@ -75,6 +76,18 @@ class TestCopyRenderedFrames:
         assert copy_rendered_frames(render_dir, img1, [0]) == 1
         assert (img1 / "000001.jpg").read_bytes() == original
 
+    def test_replaces_existing_destination_atomically(self, tmp_path):
+        render_dir = tmp_path / "render"
+        img1 = tmp_path / "img1"
+        render_dir.mkdir()
+        img1.mkdir()
+        Image.new("RGB", (2, 1), (10, 20, 30)).save(render_dir / "000000.jpg")
+        (img1 / "000001.jpg").write_bytes(b"stale")
+
+        assert copy_rendered_frames(render_dir, img1, [0]) == 1
+        assert Image.open(img1 / "000001.jpg").format == "JPEG"
+        assert not (img1 / "000001.jpg.tmp").exists()
+
     def test_png_legacy_recovery_converts_to_rgb_jpeg(self, tmp_path):
         render_dir = tmp_path / "render"
         img1 = tmp_path / "img1"
@@ -86,6 +99,27 @@ class TestCopyRenderedFrames:
         assert output.mode == "RGB"
         assert output.format == "JPEG"
         assert not (img1 / "000001.png").exists()
+
+    def test_nested_rgb_outputs_are_discovered(self, tmp_path):
+        render_dir = tmp_path / "render"
+        img1 = tmp_path / "img1"
+        (render_dir / "shot").mkdir(parents=True)
+        Image.new("RGB", (2, 1), "black").save(render_dir / "shot" / "000000.jpeg")
+        assert copy_rendered_frames(render_dir, img1, [0]) == 1
+
+    def test_nested_rgb_outputs_are_removed(self, tmp_path):
+        render_dir = tmp_path / "render"
+        nested = render_dir / "shot"
+        nested.mkdir(parents=True)
+        for suffix in ("png", "jpg", "jpeg"):
+            (nested / f"000000.{suffix}").write_bytes(b"x")
+        (nested / "keep.exr").write_bytes(b"x")
+
+        assert _remove_rgb_files(render_dir) == 3
+        assert not list(render_dir.rglob("*.png"))
+        assert not list(render_dir.rglob("*.jpg"))
+        assert not list(render_dir.rglob("*.jpeg"))
+        assert (nested / "keep.exr").exists()
 
     def test_subdir_scan(self, tmp_path):
         # 渲染输出可能在子目录（MRQ 会建 shot 子目录），递归扫描应能找到

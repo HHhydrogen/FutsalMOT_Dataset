@@ -247,6 +247,19 @@ def png_dimensions(path) -> Tuple[int, int]:
     return width, height
 
 
+def image_dimensions(path) -> Tuple[int, int]:
+    """读取 PNG/JPEG 图像尺寸；PNG 使用标准库，JPEG 使用 Pillow。"""
+    path = Path(path)
+    if path.suffix.lower() == ".png":
+        return png_dimensions(path)
+    if path.suffix.lower() in {".jpg", ".jpeg"}:
+        from PIL import Image
+
+        with Image.open(path) as image:
+            return image.size
+    raise ValueError(f"不支持的 RGB 文件类型: {path}")
+
+
 def validate_render_vs_calibration(render_dir, camera_json_path) -> None:
     """后处理阶段 fail-fast：实际渲染输出分辨率 == camera.json calibration 分辨率。
 
@@ -263,10 +276,13 @@ def validate_render_vs_calibration(render_dir, camera_json_path) -> None:
     render_dir = Path(render_dir)
     if not render_dir.is_dir():
         return  # 无渲染输出可检查
-    pngs = sorted(render_dir.rglob("*.png"))
-    if not pngs:
+    images = sorted(
+        p for p in render_dir.rglob("*")
+        if p.is_file() and p.suffix.lower() in {".png", ".jpg", ".jpeg"}
+    )
+    if not images:
         return
-    w, h = png_dimensions(pngs[0])
+    w, h = image_dimensions(images[0])
     cam = json.loads(Path(camera_json_path).read_text(encoding="utf-8"))
     intr = cam.get("intrinsics") or {}
     cal_w = int(cam.get("image_width") or intr.get("width") or 0)

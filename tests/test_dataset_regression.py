@@ -62,7 +62,7 @@ def _make_camera(root: Path, frames: int = 2) -> Path:
     for fi in range(1, frames + 1):
         m = np.zeros((H, W), dtype=np.uint8)
         m[4:24, 4:24] = 1
-        _write_png(cam / "img1" / f"{fi:06d}.png", m, rgb=True)
+        Image.new("RGB", (W, H), "black").save(str(cam / "img1" / f"{fi:06d}.jpg"))
         _write_png(cam / "mask" / f"{fi:06d}.png", m)
     return cam
 
@@ -88,7 +88,7 @@ class TestDatasetRegression:
             root = Path(tmp)
             cam = _make_camera(root)
             annotate_masks_dir(root)
-            Image.fromarray(np.zeros((32, 64, 3), dtype=np.uint8)).save(str(cam / "img1" / "000001.png"))
+            Image.fromarray(np.zeros((32, 64, 3), dtype=np.uint8)).save(str(cam / "img1" / "000001.jpg"))
             assert validate_dataset_regression(root) == 1
 
     def test_frame_count_mismatch_fails(self):

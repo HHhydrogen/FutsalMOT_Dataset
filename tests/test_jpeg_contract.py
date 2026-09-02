@@ -7,7 +7,7 @@ from PIL import Image
 from grf_ue_bridge.config.models import ResolvedTask
 from grf_ue_bridge.workflows.task_audit import check_camera, write_reports
 from grf_ue_bridge.workflows.task_status import collect_status
-from grf_ue_bridge.workflows.artifact_cleanup import collect_transient
+from grf_ue_bridge.workflows.artifact_cleanup import apply_cleanup, collect_transient, plan_cleanup
 
 
 def _camera(root: Path) -> Path:
@@ -28,6 +28,7 @@ def _camera(root: Path) -> Path:
 
 def test_task_status_counts_public_jpeg_and_all_transient_rgb(tmp_path):
     cam = _camera(tmp_path)
+    (cam / "render_mask").mkdir()
     resolved = ResolvedTask(
         task_id="task", episode_name="episode", source_task_file="task.json",
         repo_root=str(tmp_path), ue_project_root=str(tmp_path), dataset_root=str(tmp_path),
@@ -91,3 +92,37 @@ def test_cleanup_collects_all_yolo_rgb_suffixes(tmp_path):
     transient = collect_transient(tmp_path, ["Cam_01"])
 
     assert all(str(yolo / f"000001.{suffix}") in transient for suffix in ("png", "jpg", "jpeg"))
+
+
+def test_cleanup_preserves_public_outputs_and_removes_render_after_public_validation(tmp_path, monkeypatch):
+    cam = _camera(tmp_path)
+    (cam / "render_mask").mkdir()
+    (cam / "render_mask" / "000000.exr").write_bytes(b"exr")
+    (cam / "gt").mkdir()
+    (tmp_path / "episode_manifest.json").write_text(json.dumps({"schema_version": "futsalmot_public_episode_v1"}), encoding="utf-8")
+    (tmp_path / "render_summary.json").write_text(json.dumps({"status": "success"}), encoding="utf-8")
+    (tmp_path / "pose_session.json").write_text(json.dumps({"capture_complete": True}), encoding="utf-8")
+    public = tmp_path / "Cam_01" / "gt"
+    for name in ("gt_pose.json", "gt_mots.txt"):
+        (public / name).write_text("canonical", encoding="utf-8")
+    monkeypatch.setattr(
+        "grf_ue_bridge.public_validator.validate_public_episode",
+        lambda _: type("Result", (), {"ok": True, "errors": []})(),
+    )
+    report = plan_cleanup(tmp_path, ["Cam_01"])
+    assert str(cam / "render_mask" / "000000.exr") in report["would_delete"]
+    assert str(cam / "img1" / "000001.jpg") not in report["would_delete"]
+    result = apply_cleanup(tmp_path, ["Cam_01"])
+    assert result["ok"]
+    assert not (cam / "render_mask").exists()
+    assert (cam / "img1" / "000001.jpg").exists()
+    assert (public / "gt_pose.json").exists()
+
+
+def test_cleanup_blocks_when_public_validation_fails(tmp_path, monkeypatch):
+    _camera(tmp_path)
+    (tmp_path / "episode_manifest.json").write_text(json.dumps({"schema_version": "futsalmot_public_episode_v1"}), encoding="utf-8")
+    monkeypatch.setattr("grf_ue_bridge.public_validator.validate_public_episode", lambda _: type("Result", (), {"ok": False, "errors": ["bad public output"]})())
+    result = apply_cleanup(tmp_path, ["Cam_01"])
+    assert not result["ok"]
+    assert result["reason"] == "validation_gate_failed"

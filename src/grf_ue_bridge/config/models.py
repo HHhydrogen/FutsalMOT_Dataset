@@ -95,6 +95,7 @@ class YoloPoseTaskConfig(BaseModel):
 class PostprocessTaskConfig(BaseModel):
     """后处理参数（属于 task）。"""
 
+    public_output: bool = Field(True, description="是否生成规范化公开 episode 输出")
     include_ball: bool = True
     workers: int = Field(4, ge=1, le=32, description="并行 worker 数")
     chunk_size: int = Field(50, ge=0, description="帧分块大小（0=自动）")

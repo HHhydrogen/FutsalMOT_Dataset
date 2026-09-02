@@ -5,10 +5,63 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Callable
 
 from grf_ue_bridge.config import models as m
+
+
+def _public_sequence_configs(resolved: m.ResolvedTask, dataset: Path) -> list[dict]:
+    """把 resolved task 的 UE sequence 配置转换为公开 writer 输入。"""
+    configs = []
+    for item in (resolved.ue_profile.get("sequences") or []):
+        camera = item.get("camera_dir") or item.get("camera_path")
+        if camera is None:
+            camera_name = item.get("camera_actor") or item.get("camera") or item.get("name")
+            camera = dataset / str(camera_name)
+        configs.append({
+            "sequence_name": item.get("sequence_name") or item.get("name") or Path(camera).name,
+            "camera_dir": Path(camera),
+            "frame_rate": item.get("frame_rate") or item.get("fps") or resolved.export_profile.get("playback_fps", 30),
+        })
+    if not configs:
+        configs = [
+            {"sequence_name": p.name, "camera_dir": p,
+             "frame_rate": resolved.export_profile.get("playback_fps", 30)}
+            for p in sorted(dataset.iterdir()) if p.is_dir() and (p / "camera.json").is_file()
+        ] if dataset.is_dir() else []
+    return configs
+
+
+def _run_public_postprocess(resolved: m.ResolvedTask, pp: dict, dataset: Path,
+                            mapping: Path, skip_validate: bool,
+                            print_fn: Callable[[str], None]) -> int:
+    """生成并校验单 episode 的公开产物。"""
+    from grf_ue_bridge.public_episode import write_public_episode
+
+    try:
+        mapping_dict = json.loads(mapping.read_text(encoding="utf-8"))
+        manifest = write_public_episode(
+            dataset,
+            mapping=mapping_dict,
+            sequence_configs=_public_sequence_configs(resolved, dataset),
+            jpeg_quality=int(pp.get("jpeg_quality", 95)),
+        )
+    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        print_fn(f"ERROR: public 输出失败: {exc}")
+        return 1
+    print_fn(f"public episode 输出完成（{len(manifest.get('sequences', []))} camera）")
+    if skip_validate:
+        return 0
+    from grf_ue_bridge.public_validator import validate_public_episode
+    result = validate_public_episode(dataset)
+    print_fn(f"validate-public 完成（exit={result.exit_code}）")
+    if not result.ok:
+        for error in result.errors:
+            print_fn(f"  ERROR: {error}")
+        return result.exit_code or 1
+    return 0
 
 
 def _cryptomatte_camera(
@@ -62,6 +115,15 @@ def run_postprocess(
     print_fn(f"  dataset: {dataset}")
     print_fn(f"  yolo_pose enabled: {pose_enabled}")
     print_fn(f"  debug enabled: {debug_enabled}")
+
+    if skip_cryptomatte and skip_annotate and skip_validate and not skip_pose and not skip_debug:
+        return 0
+
+    # 公开输出是默认契约；legacy 链路通过 public_output=false 保留。
+    if pp.get("public_output", True):
+        return _run_public_postprocess(
+            resolved, pp, dataset, mapping, skip_validate, print_fn
+        )
 
     # 1) Cryptomatte EXR → mask
     if not skip_cryptomatte:

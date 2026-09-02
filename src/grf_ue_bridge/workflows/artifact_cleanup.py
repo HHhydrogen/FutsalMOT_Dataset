@@ -85,6 +85,15 @@ def collect_transient(dataset_episode_dir: Path, cams, profile="research_minimal
 def _validation_gate(dataset_episode_dir: Path) -> list:
     """返回阻止 cleanup 的原因列表（空 = 可通过）。"""
     problems = []
+    if (dataset_episode_dir / "episode_manifest.json").is_file():
+        try:
+            from grf_ue_bridge.public_validator import validate_public_episode
+            result = validate_public_episode(dataset_episode_dir)
+            if not result.ok:
+                return [f"public validation failed: {error}" for error in result.errors]
+            return []
+        except Exception as exc:
+            return [f"public validation exception: {exc}"]
     rs_path = dataset_episode_dir / "render_summary.json"
     if rs_path.exists():
         try:

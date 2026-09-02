@@ -75,6 +75,8 @@ class ArtifactCounts(BaseModel):
     mot_sequences: int = 0      # gt/gt.txt 数
     raw_rgb: int = 0            # render/*.png/*.jpg/*.jpeg
     raw_object_id_exr: int = 0  # render_mask/*.exr
+    public_pose_records: int = 0  # gt/gt_pose.json 记录数
+    public_mots_records: int = 0  # gt/gt_mots.txt 行数
 
 
 class ArtifactBytes(BaseModel):
@@ -237,24 +239,34 @@ def profile_file_paths(
             p = cam / name
             if p.is_file():
                 out.append(p)
-        gt = cam / "gt" / "gt.txt"
-        if gt.is_file():
-            out.append(gt)
+        for name in ("gt.txt", "gt_pose.json", "gt_mots.txt"):
+            gt = cam / "gt" / name
+            if gt.is_file():
+                out.append(gt)
 
     if profile in ("final", "all"):
+        public_manifest = episode_dir / "episode_manifest.json"
+        if public_manifest.is_file():
+            out.append(public_manifest)
         for cam in cameras:
-            for sub, suffix in (
-                ("img1", PUBLIC_RGB_SUFFIX),
-                ("mask", ".png"),
-                ("labels/det", ".txt"),
-                ("labels/seg", ".txt"),
-                ("labels_pose", ".txt"),
-            ):
+            for sub, suffix in (("img1", PUBLIC_RGB_SUFFIX),):
                 d = cam / sub
                 if d.is_dir():
                     out.extend(sorted(
                         p for p in d.iterdir() if p.is_file() and p.suffix == suffix
                     ))
+            for name in ("gt.txt", "gt_pose.json", "gt_mots.txt"):
+                p = cam / "gt" / name
+                if p.is_file():
+                    out.append(p)
+            if not public_manifest.is_file():
+                for sub, suffix in (
+                    ("mask", ".png"), ("labels/det", ".txt"),
+                    ("labels/seg", ".txt"), ("labels_pose", ".txt"),
+                ):
+                    d = cam / sub
+                    if d.is_dir():
+                        out.extend(sorted(p for p in d.iterdir() if p.is_file() and p.suffix == suffix))
     if profile == "all":
         for cam in cameras:
             for sub in ("render", "render_mask"):
@@ -378,6 +390,18 @@ def _collect_artifact_stats(cam_dir: Path) -> Tuple[ArtifactCounts, ArtifactByte
         bytes_.annotations = ann.stat().st_size
     if (cam_dir / "gt" / "gt.txt").is_file():
         counts.mot_sequences = 1
+    pose_json = cam_dir / "gt" / "gt_pose.json"
+    if pose_json.is_file():
+        try:
+            counts.public_pose_records = len(json.loads(pose_json.read_text(encoding="utf-8")))
+        except (OSError, TypeError, ValueError):
+            pass
+    mots = cam_dir / "gt" / "gt_mots.txt"
+    if mots.is_file():
+        try:
+            counts.public_mots_records = sum(1 for line in mots.read_text(encoding="utf-8").splitlines() if line.strip())
+        except OSError:
+            pass
     return counts, bytes_
 
 
@@ -467,6 +491,8 @@ def collect_episode(
             mot_sequences=counts.mot_sequences + c.mot_sequences,
             raw_rgb=counts.raw_rgb + c.raw_rgb,
             raw_object_id_exr=counts.raw_object_id_exr + c.raw_object_id_exr,
+            public_pose_records=counts.public_pose_records + c.public_pose_records,
+            public_mots_records=counts.public_mots_records + c.public_mots_records,
         )
         bytes_ = ArtifactBytes(
             rgb_final=bytes_.rgb_final + b.rgb_final,
@@ -697,6 +723,8 @@ def build_manifest(
             mot_sequences=totals.mot_sequences + e.artifact_counts.mot_sequences,
             raw_rgb=totals.raw_rgb + e.artifact_counts.raw_rgb,
             raw_object_id_exr=totals.raw_object_id_exr + e.artifact_counts.raw_object_id_exr,
+            public_pose_records=totals.public_pose_records + e.artifact_counts.public_pose_records,
+            public_mots_records=totals.public_mots_records + e.artifact_counts.public_mots_records,
         )
 
     dup_seed = _duplicate_seed_groups(entries)

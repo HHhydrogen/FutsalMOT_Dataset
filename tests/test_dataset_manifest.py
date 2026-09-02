@@ -237,6 +237,16 @@ class TestChecksumProfiles:
         assert any(p.name == "000001.jpg" for p in files)
         assert not any(p.name == "legacy.png" for p in files)
 
+    def test_public_manifest_counts_jpg_and_canonical_files(self, tmp_path):
+        ep = _make_episode(tmp_path, "epA", 1001)
+        (ep / "Cam_01" / "gt" / "gt_pose.json").write_text("[]", encoding="utf-8")
+        (ep / "Cam_01" / "gt" / "gt_mots.txt").write_text("", encoding="utf-8")
+        manifest = build_manifest(tmp_path, ["epA"], dataset_id="d")
+        assert manifest.episodes[0].artifact_counts.rgb_final == 2
+        files = profile_file_paths(ep, "final")
+        assert any(p.name == "000001.jpg" for p in files)
+        assert any(p.name == "gt.txt" for p in files)
+
 
 class TestHashUtil:
     def test_sha256_file_streaming_matches_bytes(self, tmp_path):

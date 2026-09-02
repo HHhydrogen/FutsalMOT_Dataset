@@ -131,6 +131,30 @@ class TestTaskStatusAudit:
                                 "--skip-cryptomatte", "--skip-annotate", "--skip-validate"])
         assert r.exit_code == 0, r.output
 
+    def test_postprocess_defaults_to_public_writer(self, tmp_path, pin_repo_root, monkeypatch):
+        tf = _make_task_dir(tmp_path)
+        mapping_path = pin_repo_root / "ue"
+        mapping_path.mkdir()
+        (mapping_path / "actor_mapping.example.json").write_text(json.dumps(
+            {f"L{i}": f"Player_L{i}" for i in range(5)} |
+            {f"R{i}": f"Player_R{i}" for i in range(5)} | {"BALL": "Ball_01"}
+        ), encoding="utf-8")
+        calls = []
+
+        def write_public_episode(*args, **kwargs):
+            calls.append((args, kwargs))
+            return {"episode_id": "episode_cli_t1"}
+
+        monkeypatch.setattr("grf_ue_bridge.public_episode.write_public_episode", write_public_episode)
+        monkeypatch.setattr(
+            "grf_ue_bridge.public_validator.validate_public_episode",
+            lambda path: type("Result", (), {"ok": True, "exit_code": 0})(),
+        )
+        r = runner.invoke(app, ["task", "postprocess", str(tf), "--skip-validate"])
+        assert r.exit_code == 0, r.output
+        assert calls
+        assert calls[0][1]["mapping"] == {f"L{i}": f"Player_L{i}" for i in range(5)} | {f"R{i}": f"Player_R{i}" for i in range(5)} | {"BALL": "Ball_01"}
+
 
 class TestActiveTask:
     def test_active_cycle(self, tmp_path, pin_repo_root):

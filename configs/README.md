@@ -22,7 +22,7 @@ Config v3 的用户层只允许任务字段：`schema`/`version`、`episode_id`�
   "version": 3,
   "episode_id": "0001",
   "simulation": {"scenario": "5_vs_5", "seed": 42, "steps": 300},
-  "cameras": {"C01": "CineCam_01", "C02": "CineCam_02"},
+  "cameras": {"C03": "FrontCamera", "C07": "RearCamera"},
   "output": {
     "fps": 30,
     "resolution": [1920, 1080],
@@ -64,6 +64,17 @@ uv run grf-ue task resolve configs/episode_0001.json --local-config configs/loca
 
 4. 后续：`grf-ue task export` → `grf-ue task ue-command`（UE Console 运行）→
    `grf-ue task postprocess` / `audit`（见根 README）。
+
+### v3 的公开契约行为
+
+`cameras` 是显式的 `public camera ID -> UE Camera Actor` 映射。上例中 `C03 -> FrontCamera`、
+`C07 -> RearCamera`，resolver 生成对应的 `FutsalMOT_<episode_id>_C03` 和
+`FutsalMOT_<episode_id>_C07`；不得通过 actor 名称或列表顺序推断 public ID，也不得复用 UE actor。
+
+`episode_manifest.json` 和 `task status` 按 resolved task 的 `annotations`、`classes`、camera mapping、
+sequence names、FPS、分辨率和期望帧数动态声明能力，不硬编码全模态或全类别。cleanup 是独立的
+validation-gated 操作，默认 dry-run；`render_summary.json` 总是门禁，只有请求 `pose` 时才要求
+`pose_session.json`。公开 GT 的文件结构和字段格式保持不变。
 
 ## Config v2（legacy 兼容）
 

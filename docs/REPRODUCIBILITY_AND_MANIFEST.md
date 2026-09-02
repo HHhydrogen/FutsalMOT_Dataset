@@ -103,7 +103,7 @@ Config v3 的用户层配置只描述单 episode 的期望数据，不包含机�
   "version": 3,
   "episode_id": "0001",
   "simulation": {"scenario": "5_vs_5", "seed": 42, "steps": 300},
-  "cameras": {"C01": "CineCam_01", "C02": "CineCam_02"},
+  "cameras": {"C03": "FrontCamera", "C07": "RearCamera"},
   "output": {
     "fps": 30,
     "resolution": [1920, 1080],
@@ -162,7 +162,7 @@ split 或 assembler。
 <dataset_root>/<episode_id>/
 ├── meta.json / frames.jsonl / provenance/
 ├── episode_manifest.json
-└── FutsalMOT_<episode_id>_C01/
+└── FutsalMOT_<episode_id>_C03/
     ├── seqinfo.ini
     ├── img1/000001.jpg             # RGB JPEG，quality=95
     └── gt/
@@ -178,10 +178,10 @@ MOTS 每行依次为 `frame_id track_id class_id height width compressed_RLE`，
 列优先 compressed RLE 的 counts 字符串。Pose、MOT、MOTS 的 `(frame_id, track_id, class_id)` 集合一致，球员含 COCO 17 个关键点，足球
 记录保留但 `keypoints` 必须为 `null`。`episode_manifest.json` 使用批准的最小 schema：
 `schema_version` 为数值 `1`，根字段为 `episode_id`、`trajectory_id`、`sequences`、
-`track_id_policy` 和 `public_classes: ["player", "ball"]`；不要求根级 `frame_count` 或
-`dimensions`。每个 sequence 使用 `sequence_name`、`camera_id`（如 `C01`）、
+`track_id_policy` 和按 resolved task 生成的 `public_classes`；不要求根级 `frame_count` 或
+`dimensions`。每个 sequence 使用 `sequence_name`、`camera_id`（如 `C03`）、
 `relative_path`、`frame_count`、`image_width`、`image_height` 和
-`modalities: ["mot", "pose_tracking", "mots"]`。固定策略为：
+`modalities`（按 `output.annotations` 映射，`pose` 对应 `pose_tracking`）。固定策略为：
 
 ```json
 {
@@ -189,9 +189,9 @@ MOTS 每行依次为 `frame_id track_id class_id height width compressed_RLE`，
   "episode_id": "episode_01",
   "trajectory_id": "episode_01",
   "sequences": [{
-    "sequence_name": "FutsalMOT_episode_01_C01",
-    "camera_id": "C01",
-    "relative_path": "FutsalMOT_episode_01_C01",
+    "sequence_name": "FutsalMOT_episode_01_C03",
+    "camera_id": "C03",
+    "relative_path": "FutsalMOT_episode_01_C03",
     "frame_count": 300,
     "image_width": 1920,
     "image_height": 1080,
@@ -223,8 +223,8 @@ uv run grf-ue task cleanup configs/episode_0001.json --local-config configs/loca
 uv run grf-ue task cleanup configs/episode_0001.json --local-config configs/local.machine.json --apply
 ```
 
-public validation gate 仅在 `episode_manifest.json` 存在时应用。无论是否存在 manifest，缺少
-`render_summary.json` 或 `pose_session.json` 都会阻止 cleanup；文件存在但状态未通过时也会
+public validation gate 仅在 `episode_manifest.json` 存在时应用。`render_summary.json` 总是门禁；只有
+`output.annotations` 包含 `pose` 时才要求 `pose_session.json`，mot-only 或 mot+mots 不因缺少 Pose 文件而阻止 cleanup。文件存在但状态未通过时也会
 阻止 cleanup。若 `audit/soak_audit_report.json` 存在且报告失败，则阻止 cleanup；其他 audit
 报告不属于此 cleanup gate。cleanup 的删除 allowlist 具体为每个相机目录下 `render/`、
 `render_mask/`、`debug/` 中的文件，`mask/` 中的 PNG，episode 根目录的

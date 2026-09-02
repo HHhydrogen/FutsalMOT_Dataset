@@ -72,6 +72,13 @@ episode、seed、steps、fps、resolution、cameras、annotations、classes、ex
 public sequence names 摘要。不得在 v3 混入 v2 的路径、`export`、`ue`、`postprocess` 或
 `audit` 字段。
 
+v3 的 `cameras` 是显式的 public camera ID 到 UE Camera Actor 映射，例如
+`C03 -> FrontCamera`、`C07 -> RearCamera`；resolver 生成对应的
+`FutsalMOT_<episode_id>_C03` 与 `FutsalMOT_<episode_id>_C07`，不从 actor 名称或顺序推断，且 actor 不得重复。
+manifest/status 按 resolved task 的 annotations/classes、相机、FPS、分辨率和期望帧数动态声明能力。
+cleanup 是独立的 validation gate：`render_summary.json` 对所有公开渲染任务必需，只有请求 `pose`
+时才检查 `pose_session.json`；mot-only 与 mot+mots 不要求 Pose 文件。公开 GT 文件结构和格式不变。
+
 P2 脚本**在 Unreal Editor 内**运行，绝不在 `.venv` 中运行；配置了 Unreal MCP 时优先
 通过 `FutsalMOTTools` 执行真实 Unreal Python：
 

@@ -30,7 +30,7 @@ Config v3 task 只提交任务意图；本机路径使用未入库的 `configs/l
   "version": 3,
   "episode_id": "0001",
   "simulation": {"scenario": "5_vs_5", "seed": 42, "steps": 300},
-  "cameras": {"C01": "CineCam_01", "C02": "CineCam_02"},
+  "cameras": {"C03": "FrontCamera", "C07": "RearCamera"},
   "output": {
     "fps": 30,
     "resolution": [1920, 1080],
@@ -76,8 +76,9 @@ uv run grf-ue task resolve configs/episode_0001.json --local-config configs/loca
 `actor_mapping`、`postprocess`、`audit`、`artifact_policy`，以及绝对的 `repo_root`、
 `dataset_root`、`ue_project_root`、`trajectory_output` 和 `dataset_episode_dir`，并保存
 `config_v3` 摘要。命令摘要包含 episode、seed/steps、FPS、resolution、每个 camera key 与
-UE actor、expected frames、annotations、classes 和 public sequence names；例如 `C01`
-生成 `FutsalMOT_<episode_id>_C01`。
+UE actor、expected frames、annotations、classes 和 public sequence names；例如 `C03 -> FrontCamera`
+生成 `FutsalMOT_<episode_id>_C03`，`C07 -> RearCamera` 生成 `FutsalMOT_<episode_id>_C07`。
+camera ID 来自 task 的显式 mapping，不从 actor 名称或顺序推断；同一 UE actor 不得被多个 public ID 复用。
 
 v3 的派生关系是唯一来源：`output.fps` 同时决定导出/回放/MRQ FPS；resolution 决定标注、
 渲染和相机尺寸；camera mapping 决定 sequence、annotation actor 和 camera count；
@@ -127,7 +128,7 @@ MOTS、Pose 和 `episode_manifest.json`，不会生成重复的 PNG mask、YOLO�
 ├── meta.json / frames.jsonl / provenance/     # 轨迹（task export）
 ├── render_summary.json
 ├── episode_manifest.json                      # 公开单 episode 清单
-└── FutsalMOT_<episode_id>_C01/
+└── FutsalMOT_<episode_id>_C03/
     ├── seqinfo.ini
     ├── img1/000001.jpg                         # RGB，JPEG quality=95
     └── gt/
@@ -149,10 +150,10 @@ MOTS 的 6 个字段为 `frame_id track_id class_id height width compressed_RLE`
 使用相同的 `(frame_id, track_id, class_id)` 集合，足球
 记录的 `keypoints` 为 `null`；球员记录包含 COCO 17 点。`episode_manifest.json` 的批准最小
 schema 为：根字段包含数值 `schema_version: 1`、`episode_id`、`trajectory_id`、`sequences`、
-`track_id_policy` 和 `public_classes: ["player", "ball"]`；不要求根 `frame_count` 或
-`dimensions`。sequence 字段包含 `sequence_name`、`camera_id`（如 `C01`）、
+`track_id_policy` 和按 resolved task 生成的 `public_classes`；不要求根 `frame_count` 或
+`dimensions`。sequence 字段包含 `sequence_name`、`camera_id`（如 `C03`）、
 `relative_path`、`frame_count`、`image_width`、`image_height` 和
-`modalities: ["mot", "pose_tracking", "mots"]`。固定 `track_id_policy` 为
+`modalities`（按 `output.annotations` 映射，`pose` 对应 `pose_tracking`）。固定 `track_id_policy` 为
 `{"players": "L0..L4=1..5,R0..R4=6..10", "ball": 100}`，`class_id_policy` 为
 `{"player": 1, "ball": 2}`。
 
@@ -172,8 +173,8 @@ uv run grf-ue task cleanup configs/episode_0001.json --dry-run
 uv run grf-ue task cleanup configs/episode_0001.json --apply
 ```
 
-`--apply` 的 public validation 仅在 `episode_manifest.json` 存在时应用。无论是否存在
-manifest，缺少 `render_summary.json` 或 `pose_session.json` 都会阻止清理；文件存在但状态
+`--apply` 的 public validation 仅在 `episode_manifest.json` 存在时应用。`render_summary.json` 是所有
+请求公开渲染任务的门禁；只有 v3 `output.annotations` 包含 `pose` 时，缺少 `pose_session.json` 或状态
 未通过时也会阻止清理。若 `audit/soak_audit_report.json` 存在且报告失败，则阻止清理；其他
 audit 报告不属于此 cleanup gate。实际删除 allowlist 仅包括每个相机目录下的 `render/`、
 `render_mask/`、`debug/` 中的文件，`mask/` 中的 PNG，episode 根目录的
@@ -284,13 +285,6 @@ grf-ue
 在 Config v2 legacy task 的 `postprocess.yolo_pose` 块开启（默认关闭，不影响原 pipeline）。
 Config v3 使用 `output.annotations` 控制 Pose：
 
-```json
-"postprocess": {
-  ...
-  "yolo_pose": { "enabled": true }
-}
-```
-
 启用后流程自动变为：`task export` → `task ue-command`（UE 运行，额外导出
 `pose_keypoints.jsonl`）→ `task postprocess`（annotate-masks → **annotate-pose** →
 validate-annotations → **validate-pose**）。
@@ -339,13 +333,6 @@ yolo pose train model=yolo11n-pose.pt data=<dataset_root>/<episode_id>/futsal_po
 
 在 `postprocess.debug` 块开启（仅 legacy `public_output=false` 链路），`task postprocess` 末尾自动为每个 camera
 **全量渲染三套 debug 图集**并**各拼接一个 mp4**：
-
-```json
-"postprocess": {
-  ...
-  "debug": { "enabled": true }
-}
-```
 
 ```text
 <camera>/debug/{frame:06d}_bbox.png        # bbox overlay（绿=球员 橙=球）

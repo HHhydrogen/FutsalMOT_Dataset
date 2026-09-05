@@ -1,269 +1,176 @@
-# FutsalMOT Dataset — GRF-UE Bridge
+# FutsalMOT GRF-UE 数据集代码
 
-用 Google Research Football (GRF) 生成足球比赛轨迹 → Unreal Engine Level Sequence 回放 →
-RGB + Instance-ID Mask 渲染 → 像素级 CV 标注（MOT / YOLO det / YOLO seg）。
+本仓库是 FutsalMOT 项目的 Python 数据集代码仓库，包名为 `grf-ue-bridge`。它把 Google Research Football 的 5v5 轨迹导出为 JSONL，再由 Unreal Engine 5.8 导入、创建 Level Sequence、渲染 RGB 和 Instance-ID Mask，最后生成 MOT、YOLO 和 COCO17 姿态标注。
 
-本项目以**数据集任务（dataset task）**为统一入口：**一个自包含配置（单 config）**描述一次
-完整的「导出 → UE 导入/渲染 → 后处理 → 审计」流程——导出参数、UE 相机/渲染参数与
-机器路径（`dataset_root`/`ue_project_root`）都写在同一文件里，直接入库。
+本目录位于外层 UE 仓库的 `Content/FutsalMOT/code/`，但拥有独立的 Git 历史和远程仓库。外层通过 submodule gitlink 引用本仓库 commit；修改本仓库时必须在本目录执行 Git 命令，内层 commit 完成后再回到外层更新 gitlink。
 
-```
-GRF 轨迹（P1, .venv）──→ JSONL ──→ UE Level Sequence + 渲染（Unreal Editor）──→ 标注数据集（G:）
-     ↑ task export                ↑ ue/run_task.py                         ↑ task postprocess / audit
-     └───────────────────────────── 同一 resolved task ───────────────────────────────┘
-```
+## 两个运行环境
 
-## 快速开始（task 工作流）
+| 阶段 | 环境 | 代码入口 | 允许依赖 | 主要输出 |
+| --- | --- | --- | --- | --- |
+| P1 轨迹和后处理 | Python 3.9、`uv` 虚拟环境 | `src/grf_ue_bridge/cli.py`，命令为 `grf-ue` | GRF、NumPy、OpenEXR、Pillow、OpenCV 等 | episode 轨迹、Mask、MOT、YOLO、审计和 manifest |
+| P2 导入和渲染 | Unreal Editor 内置 Python | `ue/run_task.py` | `unreal` 和 UE 侧纯 Python 模块 | Level Sequence、RGB、Cryptomatte EXR、Runtime Pose |
 
-> **单 config（唯一用法）**：一个 task 文件包含全部参数与机器路径（真实路径入库），
-> 所有产出（轨迹 + 相机数据）都落到 `<dataset_root>/<episode_name>/` 下**自包含**，
-> 代码根 `outputs/` 不再产生新数据。
+JSON/JSONL 文件是两个环境之间的磁盘接口。UE 脚本不能在 P1 `.venv` 中运行；P1 的 OpenEXR/NumPy 后处理也不能在 UE Python 中运行。`ue/` 中的 `camera_projection.py`、`annotation_utils.py`、`dataset_export.py`、`player_motion.py` 和 `pose_bones.py` 是纯 Python 模块，可被对应的两侧脚本复用；`instance_mask.py` 和 `cryptomatte.py` 依赖 NumPy/Pillow 或 OpenEXR，只在 P1 使用。
 
-### 1. 使用或新建单 config
+## 环境准备
 
-仓库内已提交的自包含单 config（`configs/*.json`）可直接运行（机器路径已入库）：
-冒烟/demo 用 `configs/pose_smoke_3frames_1cam.json`（yolo_pose 已启用）。
-
-新 episode：复制 `configs/example.json` 到新文件名，替换占位符并改参数。
-**每个参数的说明与填写指南见 [`configs/README.md`](configs/README.md)**（含 `example.json`
-完整模板、各字段默认值与一致性校验规则）。
-
-### 2. 验证并解析
+源码和锁文件将 Python 限制为 3.9：`.python-version` 为 `3.9`，`pyproject.toml` 要求 `>=3.9,<3.10`，`uv.lock` 也固定为 3.9 系列。安装和测试：
 
 ```powershell
-uv run grf-ue task validate configs/my_dataset.json
-uv run grf-ue task resolve configs/my_dataset.json
+cd D:\projects\FustalMOT_UEDataset\Content\FutsalMOT\code
+uv sync
+uv run pytest
 ```
 
-### 3. 导出轨迹（产出到 dataset_root）
+主要运行依赖包括 `gfootball>=2.10.2`、`gym<0.26`、`numpy`、`opencv-python`、`openexr`、`pillow`、`pydantic`、`six>=1.17.0` 和 `typer`；开发依赖为 `pytest`。`.external/` 下的外部仓库不由 Git 跟踪，版本锁定记录在 `external_sources.lock.json`：
+
+- `google-research-football`：`3d9e754720a95621bba6475c4d3b0d56fe919014`
+- `GRF_MARL`：`6cf67a509dc204f5f413adaa57619652580c80f1`
+
+现有 `configs/*.json` 是单文件任务配置，包含 `dataset_root` 和 `ue_project_root` 的机器绝对路径。换机器时必须检查这些路径；不要假设配置中的盘符在其他环境存在。
+
+## 推荐流程
+
+以下流程假定目标 task 的路径和 UE 资产前置条件已经在当前机器上成立。完整字段定义见 `docs/DATA_CONTRACT.md`，当前限制和验收要求见 `docs/VALIDATION_AND_LIMITATIONS.md`。
+
+### 1. 校验和导出轨迹
 
 ```powershell
-uv run grf-ue task export configs/my_dataset.json
+uv run grf-ue task validate configs/pose_smoke_3frames_1cam.json
+uv run grf-ue task resolve configs/pose_smoke_3frames_1cam.json
+uv run grf-ue task export configs/pose_smoke_3frames_1cam.json
 ```
 
-产出：`<dataset_root>/<episode_name>/{meta.json, frames.jsonl, provenance/}`。
+`task validate` 只读检查 task schema、格式、相机数、按 `num_steps * target_fps/10` 计算的预期帧数和部分时长条件。`task resolve` 将单文件 task 解析为运行时契约，并写入被忽略的 `.futsalmot/runtime/<task_id>/resolved-task.json`。`task export` 调用 GRF 并在 `<dataset_root>/<episode_name>/` 写入 `meta.json`、`frames.jsonl` 和 `provenance/`。
 
-### 4. UE 运行
+`task export` 内部会在需要时为时间缩放采集更多 GRF 源步，再按 task 的 `target_fps` 产生数据集帧。GRF 运行器强制使用 `representation="raw"`、`action_set="v2"`、左队名义控制 1 名球员并发送 `action_builtin_ai` 动作，因此实际轨迹是双方内置 AI 对局，而不是用户控制球员的交互轨迹。
+
+### 2. 在 UE 中创建 Sequence、导出标注并提交 MRQ
 
 ```powershell
-uv run grf-ue task ue-command configs/my_dataset.json
+uv run grf-ue task ue-command configs/pose_smoke_3frames_1cam.json
 ```
 
-把输出命令复制到 **Unreal Editor Python Console**（`py ".../ue/run_task.py" --resolved-task ...`）。
-MRQ 渲染异步，完成后写 `render_summary.json`；相机数据写入同一 `<dataset_root>/<episode_name>/`。
+该命令保存 resolved task 并输出类似下面的 UE Python Console 命令：
 
-### 5. 后处理 + 审计
+```python
+py "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/ue/run_task.py" --resolved-task "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/.futsalmot/runtime/pose_smoke_3frames_1cam/resolved-task.json" --mode full
+```
+
+在 UE Editor Python 环境中，`run_task.py` 支持以下模式：
+
+| 模式 | 实际行为 |
+| --- | --- |
+| `sequence` | 读取 episode 和 Actor mapping，创建或覆盖配置的 Level Sequence |
+| `annotations` | 导出相机标定和几何 AABB 标注；若显式启用 Pose，使用旧的逐帧 `pose_export.py` |
+| `full` | 创建 Sequence、导出几何标注；若启用 YOLO Pose 则准备 Runtime Pose Recorder，然后异步提交 RGB/Mask MRQ |
+| `render` | 不创建 Sequence，只使用已有 Sequence 导出并提交渲染 |
+| `pose-finalize` | 渲染结束后读取 Runtime Pose SaveGame，生成 Pose 和 COCO17 文件 |
+
+`full` 不等待 MRQ 完成。MRQ 完成回调或非阻塞 watchdog 会把 RGB 对齐复制到 `img1/`，统计或保留 Object-ID EXR，并写 `render_summary.json`。执行期间必须保持 Editor 继续 tick；不要在 UE 主线程中用 `sleep` 或阻塞等待。
+
+如果 task 的 `postprocess.yolo_pose.enabled` 为 `true`，MRQ 完成后还必须运行：
+
+```python
+py "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/ue/run_task.py" --resolved-task "D:/.../resolved-task.json" --mode pose-finalize
+```
+
+该步骤只从第一个配置相机的 5 个 Recorder slot 导出世界骨骼数据，因为 Runtime Pose 与相机无关。它会先删除旧的 `pose_capture.jsonl` 和 `pose_session.json`，只有捕获帧数完整且结构合法时才写入正式 Pose 文件。
+
+`FutsalMOTMCP` 插件的 `run_python_file` 可在真实 UE Python 环境执行项目内脚本，`run_python_code` 适合短诊断。工具接口当前不接收 `run_task.py` 的命令行参数，因此需要参数时以 `task ue-command` 生成的命令为准，或由调用方为 `C5_RESOLVED_TASK`、`C5_RUN_MODE` 等环境变量准备好运行上下文。两种方式都必须确认脚本实际在 UE Editor 内执行。
+
+### 3. P1 后处理和验收
 
 ```powershell
-uv run grf-ue task postprocess configs/my_dataset.json
-uv run grf-ue task audit configs/my_dataset.json
-uv run grf-ue task status configs/my_dataset.json
+uv run grf-ue task postprocess configs/pose_smoke_3frames_1cam.json
+uv run grf-ue task audit configs/pose_smoke_3frames_1cam.json --validation-level quick
+uv run grf-ue task manifest configs/pose_smoke_3frames_1cam.json
+uv run grf-ue task cleanup configs/pose_smoke_3frames_1cam.json
 ```
 
-### 输出布局（自包含，全在 dataset_root）
-
-```text
-<dataset_root>/<episode_name>/
-├── meta.json / frames.jsonl / provenance/     # 轨迹（task export）
-├── render_summary.json
-├── CineCam_01/…{camera.json, img1/, mask/, render/, render_mask/, labels/, gt/}
-└── …（每相机）
-```
-
-### 可选：active task
-
-```powershell
-uv run grf-ue task activate configs/my_dataset.json
-uv run grf-ue task status            # 之后可省 task 参数
-uv run grf-ue task deactivate
-```
-
-每次使用 active task 都会打印其来源，避免隐藏状态；显式 task 参数始终优先。
-
-## 单 config 结构
-
-```text
-configs/     # 每个数据集任务一个自包含 JSON（导出 + UE + 机器路径，入库）
-├── example.json                  # 完整参数模板（占位符路径）
-├── README.md                     # 参数详解与填写指南
-└── pose_smoke_3frames_1cam.json  # 冒烟/demo：3 步 × 1 相机 = 3 帧，yolo_pose 已启用
-```
-
-- 导出参数在 `export` 块（scenario / seed / num_steps / fps / 场地尺寸）。
-- UE 参数在 `ue` 块（actor_mapping / sequences / ball_rolling / annotation_export）。
-- 机器路径 `dataset_root` / `ue_project_root` 必填且直接入库；`repo_root` 自动探测。
-- 所有产出统一落 `<dataset_root>/<episode_name>/`（轨迹 + 相机数据自包含）。
-- **每个字段的含义、默认值与一致性规则见 [`configs/README.md`](configs/README.md)**。
+`task postprocess` 按顺序运行 Cryptomatte EXR -> `mask/`、`annotate-masks`、标注验证，以及可选的 YOLO Pose 和 debug 可视化。`task audit` 写入 episode 下的 `audit/soak_audit_report.json` 和 `.md`，检查相机、帧数、RGB、Mask、同步、ID 映射、标定、渲染完成标记和可选 Pose。`task manifest` 写入 episode 级 `dataset_manifest.json` 和 `checksums/` 中的校验文件。`task cleanup` 默认只做 dry-run；只有显式 `--apply` 才会删除已列入清理集合的临时产物。当前清理门禁和配置限制见 `docs/VALIDATION_AND_LIMITATIONS.md`。
 
 ## CLI 总览
 
-```text
-grf-ue
-├── task            # 推荐入口
-│   ├── validate / resolve / export / ue-command
-│   ├── postprocess / audit / status
-│   └── activate / deactivate
-├── monitor <task>  # 渲染期间资源/目录增长监控
-├── measure -- <cmd>  # 命令墙钟 + 进程树峰值 RSS
-├── benchmark       # 后处理性能基准（透传参数）
-├── export --config --output [--seed]   # Legacy（deprecated）
-├── validate / validate-annotations / annotate-masks
-├── annotate-pose / validate-pose / pose-overlay   # YOLO Pose（COCO 17 点）
-├── debug / annotate-overlay / make-video          # debug 全量图集 + 视频
-├── cryptomatte-to-mask
-└── build-manifest / verify-manifest    # 数据集 manifest
-```
+推荐以 `task` 子命令为主：
 
-## 架构
+| 命令 | 作用 |
+| --- | --- |
+| `task validate` | 只读校验单文件 task |
+| `task resolve` | 写入 resolved task |
+| `task export` | 运行 GRF 并导出 episode |
+| `task ue-command` | 输出 UE `run_task.py` 命令 |
+| `task postprocess` | Cryptomatte、Mask、MOT/YOLO、Pose 和 debug 后处理 |
+| `task audit` | episode 完整性和跨相机一致性审计 |
+| `task motion-quality` | 对 `frames.jsonl` 做运动质量分析 |
+| `task manifest` | 写 episode 级 manifest |
+| `task status` | 只读显示当前产物数量 |
+| `task cleanup` | dry-run 或应用临时产物清理 |
+| `task activate` / `deactivate` | 设置或清除默认 active task |
 
-### P1：导出（`src/grf_ue_bridge/`）
-
-- `config/` — dataset task（单 config）与 resolved task 的模型、加载与解析。
-- `grf_runner.py` — 运行 GRF；root seed 经 SHA-256 派生 `game_engine_random_seed`
-  **真正传入引擎**（见 `docs/REPRODUCIBILITY_AND_MANIFEST.md`）。
-- `exporter.py` — 写 `meta.json` + `frames.jsonl` + `provenance/` 配置快照。
-- `workflows/` — `task_export` / `task_postprocess` / `task_audit` / `task_status`。
-- `tools/` — `resource_monitor` / `process_measure` / `benchmark_postprocess`。
-- `mask_annotator.py` / `cryptomatte.py` / `annotation_validator.py` — 标注链路。
-- `pose_annotator.py` / `pose_validator.py` — YOLO Pose 标注与校验（见下）。
-- `dataset_manifest.py` — 数据集索引 / 校验和 / fingerprint / 去重。
-
-### P2：Unreal（`ue/`）
-
-- `run_task.py` — **统一 UE 入口**：读同一 resolved task，调用既有导入/渲染逻辑；
-  不再隐式读取根目录配置。
-- `import_grf_episode.py` — Sequence 创建 / 标注导出 / 渲染（`--config` 为 legacy 模式）。
-- `render_episode.py` — MRQ 异步渲染 RGB + Object ID EXR、watchdog、`render_summary`。
-  渲染前**首帧 spawn 状态烘焙**（把 actor 设到第 0 帧并保存关卡，修复 MRQ 首帧因
-  possessable 未被 Sequence 接管而渲成关卡默认位置的问题）。
-- `pose_bones.py` / `pose_export.py` — COCO 17 点 ↔ UE 骨骼映射与关键点导出（见下）。
-- `recover_render.py` — 从已有 `render/` 恢复 `img1/`（`--resolved-task`）。
-
-### 数据契约（与 P2 共享）
-
-`<dataset_root>/<episode_name>/` 含 `meta.json`（schema、时序、场地、实体、`randomness` 种子体系）与
-`frames.jsonl`（每帧 `step/time_seconds/score/ball/players`），坐标为米 `[x,y,z]`。
-
-## CV 标注链路（mask-primary）
-
-1. UE 渲染：RGB → `img1/`，Object ID EXR → `render_mask/`（Cryptomatte）。
-2. `grf-ue task postprocess` → cryptomatte → `mask/*.png`（mask_id 1~11）→
-   mask-primary bbox / 分割 / MOT / YOLO。
-3. bbox 的 primary GT 来自 Instance-ID Mask 可见像素；几何投影 bbox 保留在
-   `geometry_bbox_*` 作 fallback。
-
-详见 [`docs/architecture/INSTANCE_MASK_PIPELINE.md`](docs/architecture/INSTANCE_MASK_PIPELINE.md)。
-
-## YOLO Pose（COCO 17 点人体关键点）
-
-在 mask-primary 流程之上，为每个球员生成 Ultralytics YOLO Pose 标签（17 点，每行
-`class xc yc w h x1 y1 v1 ... x17 y17 v17` 共 **56 字段**）。
-
-### 开启
-
-在 task 配置的 `postprocess.yolo_pose` 块开启（默认关闭，不影响原 pipeline）：
-
-```json
-"postprocess": {
-  ...
-  "yolo_pose": { "enabled": true }
-}
-```
-
-启用后流程自动变为：`task export` → `task ue-command`（UE 运行，额外导出
-`pose_keypoints.jsonl`）→ `task postprocess`（annotate-masks → **annotate-pose** →
-validate-annotations → **validate-pose**）。
-
-### COCO 17 点定义与顺序（严禁改动）
+直接命令仍存在，用于局部操作或兼容旧流程：
 
 ```text
-0 nose  1 left_eye  2 right_eye  3 left_ear  4 right_ear
-5 left_shoulder  6 right_shoulder  7 left_elbow  8 right_elbow
-9 left_wrist  10 right_wrist  11 left_hip  12 right_hip
-13 left_knee  14 right_knee  15 left_ankle  16 right_ankle
+grf-ue export
+grf-ue validate
+grf-ue build-manifest
+grf-ue verify-manifest
+grf-ue validate-annotations
+grf-ue annotate-masks
+grf-ue cryptomatte-to-mask
+grf-ue annotate-pose
+grf-ue validate-pose
+grf-ue annotate-overlay
+grf-ue pose-overlay
+grf-ue make-video
+grf-ue debug
+grf-ue monitor
+grf-ue measure
+grf-ue benchmark
 ```
 
-可见性：`v=0` 无效 / `v=1` 被遮挡（其他球员 / 球，基于 Instance-ID Mask 邻域判定；
-`occlusion_trace=true` 时额外包含自遮挡 / 非 mask 几何，默认关闭）/ `v=2` 可见。
-bbox 复用 mask-primary bbox（与 YOLO det 完全一致）。
+直接 `export` 读取的是只含 `ExportConfig` 字段的旧式 JSON；包含 `schema`、`dataset_root`、`ue`、`postprocess` 和 `audit` 的单文件配置应使用 `task` 工作流。
 
-### 输出
+## 代码分层
 
 ```text
-<episode_root>/<camera>/labels_pose/000001.txt   # YOLO Pose 标签
-<episode_root>/yolo_pose/                        # 可训练暂存（images 硬链接 + labels）
-<episode_root>/futsal_pose.yaml                  # dataset YAML（kpt_shape [17,3]）
+src/grf_ue_bridge/
+  cli.py                         Typer CLI
+  config/models.py               task、resolved task 和导出配置模型
+  config/loader.py               单文件 JSON 加载
+  config/resolver.py             路径解析、active task、resolved task
+  grf_runner.py                  GRF 环境和快照采集
+  exporter.py                    meta.json、frames.jsonl、provenance
+  interpolate.py                 目标帧率插值和时间缩放重采样
+  cryptomatte.py                 EXR -> Instance-ID Mask
+  mask_annotator.py              Mask -> bbox、MOT、YOLO
+  pose_annotator.py              3D Pose -> YOLO Pose
+  annotation_validator.py        CV 标注验证
+  pose_validator.py              YOLO Pose 验证
+  dataset_manifest.py            SHA-256、fingerprint、manifest
+  workflows/                     task export/postprocess/audit/cleanup/status
+  tools/                         监控、计时和性能基准
+
+ue/
+  run_task.py                    UE 正式统一入口
+  scene_apply.py                 Actor 变换和查找
+  import_grf_episode.py          旧式导入和 Sequence 创建实现
+  annotation_exporter.py         UE 相机标定和几何标注
+  render_episode.py              异步 MRQ RGB/Mask 渲染
+  pose_render.py                 C4 Recorder 准备和专用 Pose 渲染
+  pose_capture_export.py         SaveGame -> pose_capture.jsonl
+  build_coco17.py                Runtime Pose -> COCO17 3D/2D
+  pose_bones.py                  COCO17 与 UE 骨骼映射
+  instance_mask.py               P1 Mask 纯函数，不在 UE 中导入
+  archive_c4_diag/               历史诊断脚本，非正式入口
 ```
 
-### 常用命令
+## 当前事实与限制
 
-```powershell
-uv run grf-ue task postprocess configs/my_dataset.json      # 含 annotate-pose + validate-pose
-uv run grf-ue validate-pose <dataset_root>/<episode_name>   # 单独校验
-uv run grf-ue pose-overlay <dataset_root>/<episode_name>/<camera> --frames 1,2,3  # 可视化验证
-uv run grf-ue annotate-pose <dataset_root>/<episode_name>   # 单独重跑 pose 标签
-```
-
-### 用 Ultralytics 训练
-
-```bash
-yolo pose train model=yolo11n-pose.pt data=<dataset_root>/<episode_name>/futsal_pose.yaml
-```
-
-> `futsal_pose.yaml` 的 `train`/`val` 指向 episode 内 `yolo_pose/` 的 `images/` 目录，
-> 标签在 `labels/` 同级目录（Ultralytics 自动按 `images→labels` 发现），无需改格式。
-> 骨骼映射与脸部偏移说明见 [`docs/design/2026-08-11-yolo-pose-export.md`](docs/design/2026-08-11-yolo-pose-export.md)。
-
-## debug 可视化（bbox / 彩色 mask / pose 关节点 + 自动拼视频）
-
-在 `postprocess.debug` 块开启（默认关闭），`task postprocess` 末尾自动为每个 camera
-**全量渲染三套 debug 图集**并**各拼接一个 mp4**：
-
-```json
-"postprocess": {
-  ...
-  "debug": { "enabled": true }
-}
-```
-
-```text
-<camera>/debug/{frame:06d}_bbox.png        # bbox overlay（绿=球员 橙=球）
-<camera>/debug/{frame:06d}_mask_color.png  # 彩色 Instance-ID Mask（仅查看）
-<camera>/debug/pose/{frame:06d}.png        # pose 关节点：只画点+骨架连线（YOLO 风格，无文字）
-<camera>/video_bbox.mp4 / video_mask.mp4 / video_pose.mp4
-```
-
-- pose 关节点颜色：绿=可见(v=2)、橙=遮挡(v=1)、红=无效(v=0)；连线为 COCO 骨架（16 条边）。
-- 也可手动全量执行：`uv run grf-ue debug <dataset_root>/<episode_name>`；
-  单 camera 局部执行：`annotate-overlay`（bbox/彩色 mask）、`pose-overlay`（关节点）、
-  `make-video`（img1 原图/bbox 视频）。
-- 参数说明见 [`configs/README.md`](configs/README.md) 的 `debug` 块。
-
-## 可复现性与 Manifest
-
-- Seed：root seed → 子 seed（`futsalmot_seed_v1`），`game_engine_random_seed` 真正传入 GRF；
-  同 seed 独立进程 `frames.jsonl` 完全一致。
-- Manifest：`build-manifest` / `verify-manifest`，checksum profile（metadata/final/all）、
-  稳定 fingerprint、重复轨迹检测。
-
-详见 [`docs/REPRODUCIBILITY_AND_MANIFEST.md`](docs/REPRODUCIBILITY_AND_MANIFEST.md)。
-
-## 开发
-
-```powershell
-uv run pytest tests/          # 默认套件（不含 GRF 集成）
-uv run pytest -m grf_integration -q   # 真实 GRF seed 复现集成测试
-uv build
-```
-
-## 常见问题
-
-| 现象 | 解决 |
-|------|------|
-| `task validate` 报「解析失败」 | 检查 `configs/*.json` 的 schema/version、`dataset_root`/`ue_project_root` 与 export/ue 块是否完整 |
-| UE 找不到 actor | 检查 `ue` 块的 `actor_mapping` 指向的 JSON 与关卡标签一致 |
-| 球陷进地面 / 倒着滚 | 调 `ue` 块 `ball_rolling` 的 `BALL_Z_OFFSET_CM` / `roll_sign` |
-| 渲染未写 `img1/` | 检查 `render_summary.json` 状态；用 `ue/recover_render.py --resolved-task ...` 恢复 |
-| **首帧渲成关卡默认位置**（后续帧正常） | MRQ/PIE 第 0 帧 possessable actor 尚未被 Sequence 接管——`render_episode.py` 已做**首帧 spawn 状态烘焙**（提交渲染前把 actor 设到第 0 帧并保存关卡）；确认 UE 控制台打印 `[MRQ] 首帧 spawn 状态已烘焙` |
-| pose 控制台报 `unreal.ETraceTypeQuery` / `无法读取球员骨骼名` | 是旧版代码：`run_task.py` 已带强制 reload，**重跑同一命令即可**（新代码 probe 解析骨骼、遮挡 trace 全防御，不崩溃） |
-| pose-overlay 里关键点错位 | 用 `--keypoint-names` 核对；脸部五点调 `postprocess.yolo_pose.head_offsets_cm`；若因动画姿势，把 mesh 动画置空或确认导出/渲染姿势一致 |
+- `ue/run_task.py --mode full` 是当前正式 P2 总入口；它使用 Runtime Pose Recorder，不调用旧的逐帧 `pose_export.py`。
+- `ue/run_task.py --mode annotations` 在启用 Pose 时仍会调用 Legacy `pose_export.py`，不能把它与 Runtime Pose 结果混为同一来源。
+- Actor mapping 默认文件是 `ue/actor_mapping.example.json`，映射为 `L0..L4 -> Player_L0..Player_L4`、`R0..R4 -> Player_R0..Player_R4`、`BALL -> Ball_01`。代码的 Actor 查找在精确大小写不敏感匹配失败后还会使用包含匹配，因此错误标签可能匹配到非预期 Actor。
+- 当前资产已经位于 `/Game/FutsalMOT/Blueprints/Pose/...`，但部分旧的构建、Smoke 和诊断脚本仍写着 `/Game/FutsalMOT/Blueprints/` 根路径。除 `run_task.py` 正式路径外，不能默认这些脚本可直接重建当前资产。
+- `configs/*.json` 是实际入库的机器相关配置，不是所有文件都能在任意机器直接通过 `task validate`；必须先核对路径、预期相机数和预期帧数。
+- 二进制 UE 资产、当前 Editor 中的 Actor 状态、Blueprint 编译结果和 MRQ 实际输出，必须在 UE Editor 中单独验收。

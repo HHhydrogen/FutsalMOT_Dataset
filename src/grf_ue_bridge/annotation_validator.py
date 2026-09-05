@@ -36,6 +36,7 @@ from annotation_utils import (  # noqa: E402
     BBOX_SOURCE_NOT_VISIBLE,
     entity_id_to_mask_id,
 )
+from .validation_result import CheckStatus, ValidationResult
 
 # bbox_source 合法取值（None = legacy 几何，无 mask 数据时保留）
 _BBOX_SOURCES = (
@@ -48,7 +49,14 @@ _BBOX_SOURCES = (
 _QUICK_MASK_SAMPLE = 10
 
 
-def _validate_camera(cam_dir: Path, validation_level: str = "full") -> List[str]:
+def _validate_camera(
+    cam_dir: Path,
+    validation_level: str = "full",
+    require_mot: bool = True,
+    require_mask: bool = True,
+    require_yolo_det: bool = True,
+    require_yolo_seg: bool = True,
+) -> List[str]:
     """验证单个 camera 子目录。返回错误列表（空表示通过）。
 
     validation_level：full=完整逐帧重算；quick=结构检查 + 抽样重算 mask 帧。
@@ -63,23 +71,30 @@ def _validate_camera(cam_dir: Path, validation_level: str = "full") -> List[str]
         return errors
     try:
         cam = json.loads(cam_json_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as e:
+    except (OSError, UnicodeError, json.JSONDecodeError) as e:
         errors.append(f"[{cam_label}] camera.json 不是合法 JSON: {e}")
+        return errors
+    if not isinstance(cam, dict):
+        errors.append(f"[{cam_label}] camera.json 顶层必须是 JSON 对象")
         return errors
 
     intr = cam.get("intrinsics")
     if not isinstance(intr, dict):
         errors.append(f"[{cam_label}] camera.json 缺少 intrinsics")
-        return errors
+        intr = {}
     for key in ("width", "height", "fx", "fy", "cx", "cy"):
         if not isinstance(intr.get(key), (int, float)):
             errors.append(f"[{cam_label}] intrinsics.{key} 缺失或非数字")
     extr = cam.get("extrinsics")
     if not isinstance(extr, dict):
         errors.append(f"[{cam_label}] camera.json 缺少 extrinsics")
+        extr = {}
 
-    width = int(intr.get("width", 0))
-    height = int(intr.get("height", 0))
+    try:
+        width = int(intr.get("width", 0))
+        height = int(intr.get("height", 0))
+    except (TypeError, ValueError, OverflowError):
+        width = height = 0
     if width <= 0 or height <= 0:
         errors.append(f"[{cam_label}] 图像尺寸非法: {width}x{height}")
 
@@ -176,13 +191,15 @@ def _validate_camera(cam_dir: Path, validation_level: str = "full") -> List[str]
                     _check_bbox(errors, obj, label, width, height)
 
     # ── Instance-ID Mask 校验（存在 mask/ 时生效）────────────────
-    if (cam_dir / "mask").exists():
+    if require_mask and (cam_dir / "mask").exists():
         sample = None if validation_level != "quick" else _QUICK_MASK_SAMPLE
         _validate_mask_dir(errors, cam_label, cam_dir, width, height, sample_frames=sample)
 
     # ── YOLO 标签校验（行数须与 instance_mask 可见对象一致，不可见对象不得进入）──
-    _validate_yolo(errors, cam_label, cam_dir, "det", yolo_counts_by_frame)
-    _validate_yolo(errors, cam_label, cam_dir, "seg", yolo_counts_by_frame)
+    if require_yolo_det:
+        _validate_yolo(errors, cam_label, cam_dir, "det", yolo_counts_by_frame)
+    if require_yolo_seg:
+        _validate_yolo(errors, cam_label, cam_dir, "seg", yolo_counts_by_frame)
 
     # ── MOT gt.txt / seqinfo.ini ─────────────────────────────────
     gt_path = cam_dir / "gt" / "gt.txt"
@@ -194,43 +211,70 @@ def _validate_camera(cam_dir: Path, validation_level: str = "full") -> List[str]
                     errors.append(f"[{cam_label}] gt.txt 第 {line_no} 行字段数 != 9: {line.strip()!r}")
                     continue
                 frame_f, tid, x, y, w, h, conf, cls, vis = parts
-                for idx, val in enumerate((frame_f, tid, x, y, w, h, conf, cls, vis)):
+                values = (frame_f, tid, x, y, w, h, conf, cls, vis)
+                valid_numeric = True
+                for idx, val in enumerate(values):
                     try:
-                        float(val)
+                        parsed = float(val)
                     except ValueError:
                         errors.append(f"[{cam_label}] gt.txt 第 {line_no} 行第 {idx + 1} 列不是数字: {val!r}")
-                try:
-                    if int(frame_f) < 1:
-                        errors.append(f"[{cam_label}] gt.txt 第 {line_no} 行 frame < 1")
-                    if int(tid) < 1:
-                        errors.append(f"[{cam_label}] gt.txt 第 {line_no} 行 track_id < 1")
-                    if int(w) <= 0 or int(h) <= 0:
-                        errors.append(f"[{cam_label}] gt.txt 第 {line_no} 行 bbox 宽/高非正")
-                    if int(x) < 0 or int(y) < 0:
-                        errors.append(f"[{cam_label}] gt.txt 第 {line_no} 行 x/y 为负")
-                    if width > 0 and int(x) + int(w) > width:
-                        errors.append(f"[{cam_label}] gt.txt 第 {line_no} 行 x+w 超出图像宽")
-                    if height > 0 and int(y) + int(h) > height:
-                        errors.append(f"[{cam_label}] gt.txt 第 {line_no} 行 y+h 超出图像高")
-                    # 交叉校验：不可见对象（not_visible / visible_pixel_count==0）不得进入 MOT
-                    f_i, t_i = int(frame_f), int(tid)
-                    gt_obj = frame_track_objects.get(f_i, {}).get(t_i)
-                    if gt_obj is not None and (
-                        gt_obj.get("in_frame") is False
-                        or gt_obj.get("bbox_source") == BBOX_SOURCE_NOT_VISIBLE
-                        or gt_obj.get("visible_pixel_count") == 0
-                    ):
+                        valid_numeric = False
+                        continue
+                    if not math.isfinite(parsed):
                         errors.append(
-                            f"[{cam_label}] gt.txt 第 {line_no} 行不可见对象进入 MOT: "
-                            f"frame={frame_f} track={tid}（bbox_source={gt_obj.get('bbox_source')!r}, "
-                            f"visible_pixel_count={gt_obj.get('visible_pixel_count')!r}）"
+                            f"[{cam_label}] gt.txt 第 {line_no} 行第 {idx + 1} 列不是有限数字: {val!r}"
                         )
-                except ValueError:
-                    pass
-    else:
+                        valid_numeric = False
+                if not valid_numeric:
+                    continue
+
+                integer_values = {}
+                valid_integers = True
+                for idx in (0, 1, 2, 3, 4, 5, 7):
+                    try:
+                        integer_values[idx] = int(values[idx])
+                    except (ValueError, OverflowError):
+                        errors.append(
+                            f"[{cam_label}] gt.txt 第 {line_no} 行第 {idx + 1} 列不是整数: {values[idx]!r}"
+                        )
+                        valid_integers = False
+                if not valid_integers:
+                    continue
+
+                frame_i = integer_values[0]
+                track_i = integer_values[1]
+                x_i = integer_values[2]
+                y_i = integer_values[3]
+                w_i = integer_values[4]
+                h_i = integer_values[5]
+                if frame_i < 1:
+                    errors.append(f"[{cam_label}] gt.txt 第 {line_no} 行 frame < 1")
+                if track_i < 1:
+                    errors.append(f"[{cam_label}] gt.txt 第 {line_no} 行 track_id < 1")
+                if w_i <= 0 or h_i <= 0:
+                    errors.append(f"[{cam_label}] gt.txt 第 {line_no} 行 bbox 宽/高非正")
+                if x_i < 0 or y_i < 0:
+                    errors.append(f"[{cam_label}] gt.txt 第 {line_no} 行 x/y 为负")
+                if width > 0 and x_i + w_i > width:
+                    errors.append(f"[{cam_label}] gt.txt 第 {line_no} 行 x+w 超出图像宽")
+                if height > 0 and y_i + h_i > height:
+                    errors.append(f"[{cam_label}] gt.txt 第 {line_no} 行 y+h 超出图像高")
+                # 交叉校验：不可见对象（not_visible / visible_pixel_count==0）不得进入 MOT
+                gt_obj = frame_track_objects.get(frame_i, {}).get(track_i)
+                if gt_obj is not None and (
+                    gt_obj.get("in_frame") is False
+                    or gt_obj.get("bbox_source") == BBOX_SOURCE_NOT_VISIBLE
+                    or gt_obj.get("visible_pixel_count") == 0
+                ):
+                    errors.append(
+                        f"[{cam_label}] gt.txt 第 {line_no} 行不可见对象进入 MOT: "
+                        f"frame={frame_f} track={tid}（bbox_source={gt_obj.get('bbox_source')!r}, "
+                        f"visible_pixel_count={gt_obj.get('visible_pixel_count')!r}）"
+                    )
+    elif require_mot:
         errors.append(f"[{cam_label}] 缺少 gt/gt.txt（如需 MOT 导出）")
 
-    if not (cam_dir / "seqinfo.ini").exists():
+    if require_mot and not (cam_dir / "seqinfo.ini").exists():
         errors.append(f"[{cam_label}] 缺少 seqinfo.ini")
 
     return errors
@@ -279,8 +323,11 @@ def _read_mask_config(cam_dir: Path) -> dict:
     cfg_path = cam_dir / "mask_config.json"
     if cfg_path.exists():
         try:
-            return json.loads(cfg_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
+            value = json.loads(cfg_path.read_text(encoding="utf-8"))
+            if not isinstance(value, dict):
+                raise ValueError("顶层必须是 JSON 对象")
+            return value
+        except (json.JSONDecodeError, OSError, UnicodeError):
             pass
     return {}
 
@@ -305,10 +352,18 @@ def _validate_mask_dir(
     )
 
     mask_dir = cam_dir / "mask"
-    decode = _read_mask_config(cam_dir)
+    try:
+        decode = _read_mask_config(cam_dir)
+    except ValueError as exc:
+        errors.append(f"[{cam_label}] mask_config.json 结构非法: {exc}")
+        return
     channel = decode.get("mask_channel", "r")
-    id_scale = float(decode.get("id_scale", 1.0))
-    id_offset = float(decode.get("id_offset", 0.0))
+    try:
+        id_scale = float(decode.get("id_scale", 1.0))
+        id_offset = float(decode.get("id_offset", 0.0))
+    except (TypeError, ValueError, OverflowError) as exc:
+        errors.append(f"[{cam_label}] mask_config.json 解码参数非法: {exc}")
+        return
 
     mask_frames = _frame_numbers(mask_dir)
     if not mask_frames:
@@ -338,15 +393,22 @@ def _validate_mask_dir(
     for li in sampled_idx:
         try:
             frame = json.loads(lines[li])
-        except json.JSONDecodeError:
+        except (UnicodeError, json.JSONDecodeError):
             continue  # 行级 JSON 错误由主循环报告
+        if not isinstance(frame, dict):
+            errors.append(f"[{cam_label}] annotations.jsonl 第 {li + 1} 行不是 JSON 对象")
+            continue
         fi = frame.get("frame_index")
         if not isinstance(fi, int):
             continue
         mask_path = mask_dir / f"{fi:06d}.png"
         if not mask_path.exists():
             continue
-        mask_img = load_mask_array(mask_path, channel)
+        try:
+            mask_img = load_mask_array(mask_path, channel)
+        except Exception as exc:
+            errors.append(f"[{cam_label}] mask {fi:06d}.png 读取/解码失败: {exc}")
+            continue
         mh, mw = mask_img.shape
         if (mw, mh) != (width, height):
             errors.append(
@@ -360,7 +422,18 @@ def _validate_mask_dir(
             errors.append(
                 f"[{cam_label}] mask {fi} 含非法实例 ID 值: {illegal[:10]}"
             )
-        for obj in frame.get("objects", []):
+        objects = frame.get("objects", [])
+        if not isinstance(objects, list):
+            errors.append(
+                f"[{cam_label}] annotations.jsonl 第 {li + 1} 行 objects 必须是列表"
+            )
+            continue
+        for oi, obj in enumerate(objects):
+            if not isinstance(obj, dict):
+                errors.append(
+                    f"[{cam_label}] annotations.jsonl 第 {li + 1} 行 objects[{oi}] 不是对象"
+                )
+                continue
             entity_id = obj.get("entity_id")
             mask_id = obj.get("mask_id")
             try:
@@ -463,6 +536,8 @@ def _frame_instance_counts(objects: List[dict]) -> Tuple[int, int]:
     n_players = 0
     n_balls = 0
     for obj in objects:
+        if not isinstance(obj, dict):
+            continue
         if obj.get("bbox_source") != BBOX_SOURCE_INSTANCE_MASK:
             continue
         if obj.get("class") == "ball":
@@ -553,13 +628,33 @@ def _validate_camera_task(task: tuple) -> List[str]:
 
     模块级函数（可 pickle，Windows spawn 安全）。返回错误列表。
     """
-    cam_str, validation_level = task
+    (
+        cam_str,
+        validation_level,
+        require_mot,
+        require_mask,
+        require_yolo_det,
+        require_yolo_seg,
+    ) = task
     cam_dir = Path(cam_str)
-    errors = _validate_camera(cam_dir, validation_level=validation_level)
+    errors = _validate_camera(
+        cam_dir,
+        validation_level=validation_level,
+        require_mot=require_mot,
+        require_mask=require_mask,
+        require_yolo_det=require_yolo_det,
+        require_yolo_seg=require_yolo_seg,
+    )
     if validation_level != "quick":
         try:
             from .dataset_regression import _validate_camera as _reg_camera
-            errors += _reg_camera(cam_dir)
+            errors += _reg_camera(
+                cam_dir,
+                require_mot=require_mot,
+                require_mask=require_mask,
+                require_yolo_det=require_yolo_det,
+                require_yolo_seg=require_yolo_seg,
+            )
         except Exception as e:
             errors.append(f"[{cam_dir.name}] DATASET REGRESSION: 执行异常: {e}")
     return errors
@@ -576,6 +671,10 @@ def validate_annotation_dir(
     annotation_dir: Path,
     workers: int = 0,
     validation_level: str = "full",
+    require_mot: bool = True,
+    require_mask: bool = True,
+    require_yolo_det: bool = True,
+    require_yolo_seg: bool = True,
 ) -> int:
     """验证一个标注输出目录。
 
@@ -586,6 +685,8 @@ def validate_annotation_dir(
     帧数、分辨率、MOT/YOLO 重新派生比对、多连通域 quality gate 复验），作为最终验收。
 
     workers：0=自动，1=串行，>1=相机级多进程并行（结果与串行一致）。
+    require_mot：是否要求每个 camera 都存在有效 gt/gt.txt 和 seqinfo.ini；关闭时只
+                 跳过缺失文件，已存在 gt/gt.txt 仍会验证。
     validation_level：
       full  —— 完整语义：逐帧 mask 重算、重新派生并比较 MOT/YOLO、完整检查全部帧
                 （默认，保持现有行为）。
@@ -596,26 +697,108 @@ def validate_annotation_dir(
     Returns:
         0 表示通过，1 表示失败。
     """
+    return validate_annotation_result(
+        annotation_dir,
+        workers=workers,
+        validation_level=validation_level,
+        require_mot=require_mot,
+        require_mask=require_mask,
+        require_yolo_det=require_yolo_det,
+        require_yolo_seg=require_yolo_seg,
+    ).exit_code
+
+
+def validate_annotation_result(
+    annotation_dir: Path,
+    workers: int = 0,
+    validation_level: str = "full",
+    require_mot: bool = True,
+    require_mask: bool = True,
+    require_yolo_det: bool = True,
+    require_yolo_seg: bool = True,
+) -> ValidationResult:
+    """验证标注目录并返回结构化结果，同时保留旧 CLI 的打印行为。"""
     if validation_level not in ("full", "quick"):
         raise ValueError(f"未知 validation_level: {validation_level!r}（可选 full/quick）")
+
     errors: List[str] = []
     camera_dirs = sorted(d.parent for d in annotation_dir.rglob("camera.json"))
     if not camera_dirs:
         errors.append(f"目录 {annotation_dir} 下没有 camera 子目录（缺少 camera.json）")
+
     nworkers = _resolve_workers(workers, len(camera_dirs))
     if nworkers <= 1 or len(camera_dirs) <= 1:
-        for cam_dir in camera_dirs:
-            errors += _validate_camera_task((str(cam_dir), validation_level))
+        camera_errors = [
+            _validate_camera_task(
+                (
+                    str(cam_dir),
+                    validation_level,
+                    require_mot,
+                    require_mask,
+                    require_yolo_det,
+                    require_yolo_seg,
+                )
+            )
+            for cam_dir in camera_dirs
+        ]
     else:
-        tasks = [(str(cam_dir), validation_level) for cam_dir in camera_dirs]
+        tasks = [
+            (
+                str(cam_dir),
+                validation_level,
+                require_mot,
+                require_mask,
+                require_yolo_det,
+                require_yolo_seg,
+            )
+            for cam_dir in camera_dirs
+        ]
         with ProcessPoolExecutor(max_workers=nworkers) as ex:
-            results = list(ex.map(_validate_camera_task, tasks))
-        for cam_errors in results:
-            errors += cam_errors
-    # 端到端回归（重新派生 bbox/MOT/YOLO 并与落盘产物比对）已包含在
-    # _validate_camera_task 的逐 camera 校验中（full 级别）；quick 级别跳过。
-    _report(errors)
-    if not errors:
+            camera_errors = list(ex.map(_validate_camera_task, tasks))
+    for cam_errors in camera_errors:
+        errors += cam_errors
+
+    result = ValidationResult(errors=list(errors))
+    mot_missing = any(
+        not (cam_dir / "gt" / "gt.txt").exists() for cam_dir in camera_dirs
+    )
+    mot_sidecar_missing = any(
+        not (cam_dir / "seqinfo.ini").exists() for cam_dir in camera_dirs
+    )
+    mot_errors = [
+        error
+        for error in errors
+        if "gt.txt" in error or "seqinfo.ini" in error
+    ]
+    if mot_errors:
+        result.add_check(
+            "mot_export",
+            status=CheckStatus.FAILED,
+            required=require_mot,
+            message=mot_errors[0],
+        )
+    elif (mot_missing or mot_sidecar_missing) and not require_mot:
+        result.add_check(
+            "mot_export",
+            status=CheckStatus.SKIPPED,
+            required=False,
+            message="未配置 MOT 导出，且 gt/gt.txt 或 seqinfo.ini 不完整",
+        )
+    else:
+        result.add_check(
+            "mot_export",
+            status=CheckStatus.PASSED,
+            required=require_mot,
+        )
+
+    result.add_check(
+        "annotation",
+        status=CheckStatus.FAILED if result.errors else CheckStatus.PASSED,
+        required=True,
+        message=result.errors[0] if result.errors else None,
+    )
+    result.finalize()
+    _report(result.errors)
+    if not result.errors:
         print(f"ANNOTATION VALIDATOR: {annotation_dir} PASSED all checks")
-        return 0
-    return 1
+    return result

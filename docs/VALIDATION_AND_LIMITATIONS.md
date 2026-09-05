@@ -57,7 +57,7 @@ uv run grf-ue validate-annotations <dataset_episode_dir> --validation-level quic
 - mask 值只能是背景 `0` 或实体 `1..11`。
 - 不可见对象不能泄漏到 MOT、YOLO Detect 或 YOLO Segment。
 
-如果 `gt/gt.txt` 不存在，当前 `annotation_validator.py` 会报告错误，错误信息是“如需 MOT 导出”。这与 `annotation_export.export_mot=false`、`postprocess.formats=["json"]` 的配置能力存在实际冲突：关闭 MOT 的 smoke task 仍可能在默认 `task postprocess` 验证阶段失败。不要把 `export_mot=false` 描述为已经被完整 postprocess 验证器支持。
+`validate-annotations` 的 standalone 默认仍要求 MOT，保持旧 CLI 行为。`task postprocess`、`task audit` 和 `task cleanup` 则从 resolved task 统一解析 requirement：当 `annotation_export.export_mot=false` 且 `postprocess.formats` 未选择 `mot` 时，缺失 `gt/gt.txt` 和 `seqinfo.ini` 是 `skipped`，不会阻断 JSON-only task；若 MOT 被要求，缺失或非法文件仍失败。即使 MOT 未要求，已有的 `gt/gt.txt` 仍会校验其内容。
 
 ### Pose 验证
 
@@ -78,18 +78,18 @@ uv run grf-ue task audit configs/<task>.json --validation-level quick
 uv run grf-ue task audit configs/<task>.json --validation-level full
 ```
 
-`task audit` 检查：
+`task audit` 由 resolved task 的 render、instance mask、MOT、YOLO 和 Runtime Pose 开关决定 required checks；未启用功能写为 `skipped`，不会因文件缺失失败。它检查：
 
 - 相机目录数量和每相机标注帧数。
 - `img1/`、`mask/`、`render/`、`render_mask/`、MOT/YOLO 文件的缺帧、重复帧和零字节文件。
 - 使用 `source_step`、`source_step_seconds` 和 Sequence `playback_fps` 推导的渲染帧覆盖。
 - 跨相机的 `frame_index`、时间、源步、episode ID、track ID 和 mask ID 同步。
 - 相机内参、外参、分辨率和相机位置重复情况。
-- `render_summary.json` 的 status 和每相机状态。
-- 若存在且未跳过，Runtime Pose/COCO17 完整性。
+- 被要求时的 `render_summary.json` status 和每相机状态。
+- 被要求时的 Runtime Pose/COCO17 完整性；Pose disabled 时不根据残留 `pose_session.json` 反推 requirement。
 - 可选的 `validate-annotations`。
 
-报告字段由 `src/grf_ue_bridge/workflows/task_audit.py` 实际写出：`passed`、`exit_code`、`errors`、`warnings`，以及 `cameras`、`sync`、`mapping`、`calibration`、`render_summary`、`pose_coco17` 等检查结果。报告 Markdown 和 JSON 都是生成物，不是本仓库的技术文档。
+报告的 canonical 字段是 `passed`、`exit_code`、`errors`、`warnings` 和 `checks`。errors 或 required failed check 使报告失败；warnings-only 与 skipped checks 保持通过。原有 `cameras`、`sync`、`mapping`、`calibration`、`render_summary`、`pose_coco17` 等 detail sections 及其 local `ok` 字段继续保留。报告 Markdown 和 JSON 都是生成物，不是本仓库的技术文档。
 
 当 episode 的 `dataset_manifest.json` 标记 `cleanup_status="applied"` 且 artifact profile 为 `research_minimal` 时，`task audit` 会跳过已经被清理的 mask/render/pose 原始产物，只审计 canonical 产物。这是清理后的特殊路径，不能用来证明原始渲染文件仍然存在。
 
@@ -121,16 +121,9 @@ uv run grf-ue task cleanup configs/<task>.json
 uv run grf-ue task cleanup configs/<task>.json --apply
 ```
 
-默认是 dry-run。`--apply` 只有在 `_validation_gate` 通过时才会删除已知临时路径。当前代码的门禁要求：
+默认是 dry-run，绝不删除文件。`--apply` 只有在 `_validation_gate` 通过时才会删除既有临时路径，并在 gate blocked 时以非零退出。gate 与 task requirement 一致：只在 task 要求 Render 时检查 `render_summary.status == "success"`，只在 task 要求 Runtime Pose 时检查 `pose_session.capture_complete == true`。Pose disabled task 缺少 `pose_session.json` 是 skipped，不会阻止 cleanup。
 
-- `render_summary.json` 存在且 `status == "success"`。
-- `pose_session.json` 存在且 `capture_complete == true`。
-- 如果存在 audit JSON，则检查其中的 `ok == false` 或 `failed_checks`。
-
-这造成两个当前限制：
-
-1. 不启用 Runtime Pose 的任务通常没有 `pose_session.json`，即使 RGB 和标注完整也会被 cleanup 拒绝。
-2. `task_audit.py` 生成的是 `passed`、`exit_code`、`errors`、`warnings`，不是 cleanup 门禁主要读取的 `ok`、`failed_checks`。因此 audit 失败字段与 cleanup 的读取契约不完全一致，不能声称 audit 一定会阻止 cleanup。
+存在 audit JSON 时，cleanup 优先读取 canonical `passed/exit_code/errors/warnings/checks`：`passed=false`、errors、nonzero exit 或 required failed check 一定阻止 `--apply`；warnings-only 不阻止。没有 canonical 字段时才只读兼容旧 `ok/failed_checks`，格式混合、缺失或无法解析时 fail safe 拒绝 cleanup，避免错误删除。
 
 清理集合当前包括相机下的 `render/`、`render_mask/`、`debug/`、`mask/*.png`，episode 根的 `pose_capture.jsonl`，以及 `yolo_pose/images/`、`yolo_det/images/`、`yolo_seg/images/` 下的 PNG。canonical 的 `img1/`、相机标定、annotations、MOT、COCO17、YOLO labels、provenance、audit 和 manifest 不在删除集合中。
 
@@ -143,7 +136,6 @@ uv run grf-ue task cleanup configs/<task>.json --apply
 - 配置中的 `game_duration` 在 `ExportConfig`/`grf_runner.py` 中表示单个 GRF 回合的引擎帧数；`resolver.validate_task()` 的源时长检查却把它按秒比较。这是当前单位不一致，不能把 task validate 的时长结果当作完整的 GRF 回合覆盖证明。
 - `target_fps=30` 时输出帧数是 `num_steps * 3`。若 `audit.expected_frames_per_camera` 仍按原始 `num_steps` 或其他旧值填写，`task validate` 会拒绝该 task。本次在当前仓库逐个执行 `task validate`（排除占位模板 `example.json`）时，被拒绝的文件为 `c5_smoke_1280.json`、`c5_smoke_1920.json`、`c6p0_visual_1p0.json`、`c6p0_visual_1p5.json`、`c6p0_visual_1p75.json` 和 `c6p0_visual_2p0.json`；其余当前配置通过该静态校验。不要把所有 `configs/*.json` 统称为当前机器上可直接执行的有效配置。
 - `ue_project_root` 和 `dataset_root` 由 task 保存为机器绝对路径；resolver 对 UE 项目路径主要做字符串和 resolved task 结构处理，实际目录、`.uproject`、地图和资产仍需单独检查。
-- `export_mot=false` 与当前 annotation validator 对 `gt/gt.txt` 的无条件要求存在冲突，JSON-only smoke 配置需要显式跳过验证或修复实现后才能作为完整流程使用。
 
 ### Pose 覆盖字段
 

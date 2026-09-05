@@ -73,7 +73,7 @@ def _make_minimal_dataset(ds_root: Path, ep: str, cam_count: int = 1) -> Path:
         (cam / "render_mask" / "000000.exr").write_bytes(b"E")
         (cam / "labels" / "det" / "000001.txt").write_text("x\n", encoding="utf-8")
         (cam / "labels" / "seg" / "000001.txt").write_text("x\n", encoding="utf-8")
-        (cam / "gt" / "gt.txt").write_text("1,1,1,1,1,1,1,1,1,1\n", encoding="utf-8")
+        (cam / "gt" / "gt.txt").write_text("1,1,1,1,1,1,1,1,1\n", encoding="utf-8")
     return ep_dir
 
 

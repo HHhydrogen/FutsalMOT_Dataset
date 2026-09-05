@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Callable
 
 from grf_ue_bridge.config import models as m
+from grf_ue_bridge.task_requirements import resolve_task_requirements
 
 
 def _cryptomatte_camera(
@@ -49,6 +50,7 @@ def run_postprocess(
 ) -> int:
     """按 resolved task 执行后处理，返回退出码（0=成功）。"""
     pp = resolved.postprocess
+    requirements = resolve_task_requirements(resolved)
     dataset = Path(resolved.dataset_episode_dir)
     traj = Path(resolved.trajectory_output)
     mapping = Path(resolved.actor_mapping)
@@ -62,6 +64,11 @@ def run_postprocess(
     print_fn(f"  dataset: {dataset}")
     print_fn(f"  yolo_pose enabled: {pose_enabled}")
     print_fn(f"  debug enabled: {debug_enabled}")
+    if not requirements.requires_mot:
+        print_fn(
+            "  MOT requirement disabled: missing gt/gt.txt will be skipped; "
+            "an existing MOT file will still be validated"
+        )
 
     # 1) Cryptomatte EXR → mask
     if not skip_cryptomatte:
@@ -112,7 +119,15 @@ def run_postprocess(
         from grf_ue_bridge.annotation_validator import validate_annotation_dir
 
         level = pp.get("validation_level", "full")
-        rc = validate_annotation_dir(dataset, workers=pp.get("workers", 4), validation_level=level)
+        rc = validate_annotation_dir(
+            dataset,
+            workers=pp.get("workers", 4),
+            validation_level=level,
+            require_mot=requirements.requires_mot,
+            require_mask=requirements.requires_instance_mask,
+            require_yolo_det=requirements.requires_yolo_det,
+            require_yolo_seg=requirements.requires_yolo_seg,
+        )
         print_fn(f"validate-annotations({level}) 完成（exit={rc}）")
         if rc != 0:
             return rc

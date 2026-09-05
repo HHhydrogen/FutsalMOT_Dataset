@@ -22,6 +22,9 @@ import json
 import shutil
 from pathlib import Path
 
+from grf_ue_bridge.task_requirements import resolve_task_requirements
+from grf_ue_bridge.validation_result import validation_result_from_report
+
 # 每 camera 下 transient 的相对路径（相对 cam_dir）
 _TRANSIENT_CAM_RELS = {
     "render": None,          # render/* （FinalImage + BurnIn）
@@ -79,26 +82,37 @@ def collect_transient(dataset_episode_dir: Path, cams, profile="research_minimal
     return to_delete
 
 
-def _validation_gate(dataset_episode_dir: Path) -> list:
+def _validation_gate(dataset_episode_dir: Path, resolved=None) -> list:
     """返回阻止 cleanup 的原因列表（空 = 可通过）。"""
     problems = []
+    requirements = resolve_task_requirements(resolved) if resolved is not None else None
+    requires_render = requirements.requires_render if requirements else True
+    requires_pose = requirements.requires_pose if requirements else True
     rs_path = dataset_episode_dir / "render_summary.json"
-    if rs_path.exists():
+    if not requires_render:
+        pass
+    elif rs_path.exists():
         try:
             rs = json.loads(rs_path.read_text(encoding="utf-8"))
-            if rs.get("status") != "success":
+            if not isinstance(rs, dict):
+                problems.append("render_summary.json 顶层必须是 JSON 对象")
+            elif rs.get("status") != "success":
                 problems.append(f"render_summary.status != success ({rs.get('status')})")
-        except Exception as e:
+        except (OSError, UnicodeError, json.JSONDecodeError) as e:
             problems.append(f"render_summary.json 解析失败: {e}")
     else:
         problems.append("缺少 render_summary.json（渲染未成功/未完成）")
     ps_path = dataset_episode_dir / "pose_session.json"
-    if ps_path.exists():
+    if not requires_pose:
+        pass
+    elif ps_path.exists():
         try:
             ps = json.loads(ps_path.read_text(encoding="utf-8"))
-            if not ps.get("capture_complete"):
+            if not isinstance(ps, dict):
+                problems.append("pose_session.json 顶层必须是 JSON 对象")
+            elif not ps.get("capture_complete"):
                 problems.append("pose_session.capture_complete != true")
-        except Exception as e:
+        except (OSError, UnicodeError, json.JSONDecodeError) as e:
             problems.append(f"pose_session.json 解析失败: {e}")
     else:
         problems.append("缺少 pose_session.json（Runtime Pose 未导出）")
@@ -107,17 +121,18 @@ def _validation_gate(dataset_episode_dir: Path) -> list:
     if audit_path.exists():
         try:
             ar = json.loads(audit_path.read_text(encoding="utf-8"))
-            if ar.get("ok") is False or ar.get("failed_checks"):
-                problems.append("audit 未通过（soak_audit_report ok=false）")
-        except Exception:
-            pass
+            result = validation_result_from_report(ar)
+            if not result.passed:
+                problems.extend(f"audit 未通过: {error}" for error in result.errors)
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            problems.append(f"audit 报告读取失败: {exc}")
     return problems
 
 
-def plan_cleanup(dataset_episode_dir, cams, profile="research_minimal", dry_run=True):
+def plan_cleanup(dataset_episode_dir, cams, profile="research_minimal", dry_run=True, resolved=None):
     """计算 cleanup 计划。返回 dict 报告。"""
     dataset_episode_dir = Path(dataset_episode_dir)
-    gate_problems = _validation_gate(dataset_episode_dir)
+    gate_problems = _validation_gate(dataset_episode_dir, resolved=resolved)
     to_delete = collect_transient(dataset_episode_dir, cams, profile)
 
     delete_bytes = sum(to_delete.values())
@@ -146,10 +161,10 @@ def plan_cleanup(dataset_episode_dir, cams, profile="research_minimal", dry_run=
     return report
 
 
-def apply_cleanup(dataset_episode_dir, cams, profile="research_minimal"):
+def apply_cleanup(dataset_episode_dir, cams, profile="research_minimal", resolved=None):
     """执行 cleanup。返回结果 dict。先过 validation gate，失败则拒绝。"""
     dataset_episode_dir = Path(dataset_episode_dir)
-    gate_problems = _validation_gate(dataset_episode_dir)
+    gate_problems = _validation_gate(dataset_episode_dir, resolved=resolved)
     if gate_problems:
         return {"ok": False, "reason": "validation_gate_failed",
                 "gate_problems": gate_problems, "deleted_files": 0, "deleted_bytes": 0}

@@ -254,6 +254,7 @@ def validate_annotations(
         annotation_dir.resolve(),
         workers=workers,
         validation_level=validation_level,
+        require_mot=True,
     )
     if exit_code != 0:
         typer.echo("ANNOTATION VALIDATION FAILED", err=True)
@@ -643,6 +644,7 @@ def cryptomatte_to_mask(
 
 from grf_ue_bridge.config import paths as _cfg_paths
 from grf_ue_bridge.config import resolver as _resolver
+from grf_ue_bridge.task_requirements import resolve_task_requirements
 
 task_app = typer.Typer(help="基于 dataset task 配置的工作流（推荐入口）")
 app.add_typer(task_app, name="task")
@@ -785,9 +787,7 @@ def task_audit(
 
     _task_file, resolved = _resolve_runtime(task)
     audit_cfg = resolved.audit
-    # instance_mask 是否启用（决定 audit 是否校验 mask/render_mask）
-    ue_ann = (resolved.ue_profile.get("annotation_export") or {}) if resolved.ue_profile else {}
-    mask_enabled = bool((ue_ann.get("instance_mask") or {}).get("enabled", True))
+    requirements = resolve_task_requirements(resolved)
     # research_minimal 已 cleanup（dataset_manifest.cleanup_status=applied）→ mask/render/pose 属有意删除的 transient，
     # audit 不应再要求它们存在（只校验 canonical）。
     manifest_path = Path(resolved.dataset_episode_dir) / "dataset_manifest.json"
@@ -803,6 +803,7 @@ def task_audit(
         mask_enabled = False
         pose_skip = True
     else:
+        mask_enabled = requirements.requires_instance_mask
         pose_skip = False
     rc = audit_main([
         "--input", resolved.dataset_episode_dir,
@@ -812,6 +813,11 @@ def task_audit(
         "--validation-level", validation_level,
         "--mask-enabled", "true" if mask_enabled else "false",
         "--pose-skip", "true" if pose_skip else "false",
+        "--render-required", "true" if requirements.requires_render else "false",
+        "--mot-required", "true" if requirements.requires_mot else "false",
+        "--yolo-det-required", "true" if requirements.requires_yolo_det else "false",
+        "--yolo-seg-required", "true" if requirements.requires_yolo_seg else "false",
+        "--pose-required", "true" if requirements.requires_pose else "false",
     ])
     if rc != 0:
         raise typer.Exit(rc)
@@ -871,20 +877,21 @@ def task_cleanup(
     profile = (resolved.artifact_policy or {}).get("profile", "research_minimal")
 
     if not apply:
-        rep = plan_cleanup(ep_dir, cams, profile, dry_run=True)
+        rep = plan_cleanup(ep_dir, cams, profile, dry_run=True, resolved=resolved)
         typer.echo(json.dumps(rep, indent=2, ensure_ascii=False))
         typer.echo("\n(DRY-RUN 未删除任何文件；加 --apply 真正执行)")
         return
-    result = apply_cleanup(ep_dir, cams, profile)
+    result = apply_cleanup(ep_dir, cams, profile, resolved=resolved)
     typer.echo(json.dumps(result, indent=2, ensure_ascii=False))
-    if result.get("ok"):
-        # apply 后写 dataset_manifest（cleanup_status=applied），供 audit 感知已清理
-        from grf_ue_bridge.workflows.artifact_cleanup import build_manifest
-        manifest = build_manifest(ep_dir, resolved.model_dump(), cams)
-        manifest["cleanup_status"] = "applied"
-        (ep_dir / "dataset_manifest.json").write_text(
-            json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
-        typer.echo(f"Manifest written (cleanup_status=applied): {ep_dir / 'dataset_manifest.json'}")
+    if not result.get("ok"):
+        raise typer.Exit(1)
+    # apply 后写 dataset_manifest（cleanup_status=applied），供 audit 感知已清理
+    from grf_ue_bridge.workflows.artifact_cleanup import build_manifest
+    manifest = build_manifest(ep_dir, resolved.model_dump(), cams)
+    manifest["cleanup_status"] = "applied"
+    (ep_dir / "dataset_manifest.json").write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+    typer.echo(f"Manifest written (cleanup_status=applied): {ep_dir / 'dataset_manifest.json'}")
 
 
 @task_app.command("manifest")

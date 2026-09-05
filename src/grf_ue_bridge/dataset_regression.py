@@ -12,8 +12,8 @@
 RGB/mask/annotation 全链路一致。
 
 入口：
-  - `validate_dataset_regression(annotation_dir) -> int`（0=通过，1=失败，打印报告）
-  - `collect_dataset_regression_errors(annotation_dir) -> List[str]`（供 validate_annotation_dir 合并）
+  - `validate_dataset_regression(annotation_dir, require_mot=True) -> int`（0=通过，1=失败，打印报告）
+  - `collect_dataset_regression_errors(annotation_dir, require_mot=True) -> List[str]`（供 validate_annotation_dir 合并）
   两者由 `grf-ue validate-annotations` 统一触发。
 """
 
@@ -73,8 +73,11 @@ def _read_mask_config(cam_dir: Path) -> dict:
     cfg_path = cam_dir / "mask_config.json"
     if cfg_path.exists():
         try:
-            return json.loads(cfg_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
+            value = json.loads(cfg_path.read_text(encoding="utf-8"))
+            if not isinstance(value, dict):
+                raise ValueError("顶层必须是 JSON 对象")
+            return value
+        except (json.JSONDecodeError, OSError, UnicodeError):
             pass
     return {}
 
@@ -93,10 +96,12 @@ def _png_size(path: Path) -> Optional[Tuple[int, int]]:
 # ── 从 annotations 重新派生期望产物 ──────────────────────────────────────
 
 def _expected_yolo_det_lines(objects: Sequence[dict], width: int, height: int,
-                             include_ball: bool) -> List[str]:
+                              include_ball: bool) -> List[str]:
     """与 mask_annotator._write_yolo_labels 相同的 det 行生成公式。"""
     lines: List[str] = []
     for obj in objects:
+        if not isinstance(obj, dict):
+            continue
         if obj.get("bbox_source") != BBOX_SOURCE_INSTANCE_MASK:
             continue
         if not obj.get("in_frame") or not obj.get("bbox_xyxy"):
@@ -114,6 +119,8 @@ def _expected_yolo_seg_lines(objects: Sequence[dict], width: int, height: int,
     """与 mask_annotator._write_yolo_labels 相同的 seg 行生成公式。"""
     lines: List[str] = []
     for obj in objects:
+        if not isinstance(obj, dict):
+            continue
         if obj.get("bbox_source") != BBOX_SOURCE_INSTANCE_MASK:
             continue
         if not obj.get("in_frame") or not obj.get("bbox_xyxy"):
@@ -140,7 +147,13 @@ def _read_lines(path: Path) -> List[str]:
 
 # ── 逐 camera 回归校验 ──────────────────────────────────────────────────
 
-def _validate_camera(cam_dir: Path) -> List[str]:
+def _validate_camera(
+    cam_dir: Path,
+    require_mot: bool = True,
+    require_mask: bool = True,
+    require_yolo_det: bool = True,
+    require_yolo_seg: bool = True,
+) -> List[str]:
     errors: List[str] = []
     label = f"[{cam_dir.name}]"
 
@@ -151,10 +164,14 @@ def _validate_camera(cam_dir: Path) -> List[str]:
         return errors
     try:
         cam = json.loads(cam_json_path.read_text(encoding="utf-8"))
+        if not isinstance(cam, dict):
+            return errors
         intr = cam.get("intrinsics") or {}
+        if not isinstance(intr, dict):
+            return errors
         width = int(intr.get("width", 0))
         height = int(intr.get("height", 0))
-    except (json.JSONDecodeError, OSError, ValueError, TypeError):
+    except (json.JSONDecodeError, OSError, UnicodeError, ValueError, TypeError, OverflowError):
         return errors
     if width <= 0 or height <= 0:
         return errors
@@ -164,9 +181,28 @@ def _validate_camera(cam_dir: Path) -> List[str]:
         with open(ann_path, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
-                if line:
-                    frames.append(json.loads(line))
-    except (json.JSONDecodeError, OSError):
+                if not line:
+                    continue
+                frame = json.loads(line)
+                if not isinstance(frame, dict):
+                    errors.append(f"{label} annotations.jsonl 行顶层必须是 JSON 对象")
+                    continue
+                objects = frame.get("objects", [])
+                if not isinstance(objects, list):
+                    errors.append(f"{label} annotations.jsonl objects 必须是列表")
+                    frame["objects"] = []
+                else:
+                    valid_objects = []
+                    for oi, obj in enumerate(objects):
+                        if not isinstance(obj, dict):
+                            errors.append(
+                                f"{label} annotations.jsonl objects[{oi}] 不是对象"
+                            )
+                            continue
+                        valid_objects.append(obj)
+                    frame["objects"] = valid_objects
+                frames.append(frame)
+    except (json.JSONDecodeError, OSError, UnicodeError):
         return errors
     if not frames:
         errors.append(f"{label} annotations.jsonl 为空")
@@ -176,7 +212,7 @@ def _validate_camera(cam_dir: Path) -> List[str]:
     img1_dir, mask_dir = cam_dir / "img1", cam_dir / "mask"
     img_frames = _frame_numbers(img1_dir)
     mask_frames = _frame_numbers(mask_dir)
-    has_mask = mask_dir.exists()
+    has_mask = require_mask and mask_dir.exists()
     has_img = img1_dir.exists()
 
     # ── 1. 帧数全链路：annotation == img1 == mask ───────────────────
@@ -193,10 +229,20 @@ def _validate_camera(cam_dir: Path) -> List[str]:
     if has_mask and not has_img:
         errors.append(f"{label} mask/ 存在但缺 img1/（RGB 未渲染，mask-primary 数据集不完整）")
 
-    decode = _read_mask_config(cam_dir)
+    try:
+        decode = _read_mask_config(cam_dir)
+    except ValueError as exc:
+        if has_mask:
+            errors.append(f"{label} mask_config.json 结构非法: {exc}")
+        decode = {}
     channel = decode.get("mask_channel", "r")
-    id_scale = float(decode.get("id_scale", 1.0))
-    id_offset = float(decode.get("id_offset", 0.0))
+    try:
+        id_scale = float(decode.get("id_scale", 1.0))
+        id_offset = float(decode.get("id_offset", 0.0))
+    except (TypeError, ValueError, OverflowError) as exc:
+        if has_mask:
+            errors.append(f"{label} mask_config.json 解码参数非法: {exc}")
+        return errors
     frames_by_index = {int(f["frame_index"]): f for f in frames if isinstance(f.get("frame_index"), int)}
 
     # 逐帧：分辨率 / mask 非全背景 / 逐对象 mask 派生比对
@@ -216,7 +262,11 @@ def _validate_camera(cam_dir: Path) -> List[str]:
             if not mask_path.exists():
                 errors.append(f"{label} mask/{fi:06d}.png 缺失")
             else:
-                mask_img = load_mask_array(mask_path, channel)
+                try:
+                    mask_img = load_mask_array(mask_path, channel)
+                except Exception as exc:
+                    errors.append(f"{label} mask/{fi:06d}.png 读取/解码失败: {exc}")
+                    continue
                 mh, mw = mask_img.shape
                 if (mw, mh) != (width, height):
                     errors.append(f"{label} mask/{fi:06d}.png 分辨率 {mw}x{mh} != camera {width}x{height}")
@@ -233,15 +283,20 @@ def _validate_camera(cam_dir: Path) -> List[str]:
 
     # ── 4. MOT / YOLO 重新派生比对 ─────────────────────────────────
     per_frame_objects = [f.get("objects", []) for f in frames]
-    include_ball_mot = any(",100," in ln for ln in _read_lines(cam_dir / "gt" / "gt.txt"))
-    expected_mot = build_mot_gt(per_frame_objects, width, height, include_ball_mot)
-    actual_mot = _read_lines(cam_dir / "gt" / "gt.txt")
-    if expected_mot != actual_mot:
-        errors.append(f"{label} MOT gt.txt 与从 annotations 重新派生不一致（不可见对象不应出现、bbox 应一致）")
+    gt_path = cam_dir / "gt" / "gt.txt"
+    if not gt_path.exists():
+        if require_mot:
+            errors.append(f"{label} 缺少 gt/gt.txt（如需 MOT 导出）")
+    else:
+        include_ball_mot = any(",100," in ln for ln in _read_lines(gt_path))
+        expected_mot = build_mot_gt(per_frame_objects, width, height, include_ball_mot)
+        actual_mot = _read_lines(gt_path)
+        if expected_mot != actual_mot:
+            errors.append(f"{label} MOT gt.txt 与从 annotations 重新派生不一致（不可见对象不应出现、bbox 应一致）")
 
     include_ball_yolo = False
     det_dir, seg_dir = cam_dir / "labels" / "det", cam_dir / "labels" / "seg"
-    if det_dir.exists():
+    if require_yolo_det and det_dir.exists():
         for p in sorted(det_dir.glob("*.txt")):
             if any(ln.startswith("1 ") for ln in _read_lines(p)):
                 include_ball_yolo = True
@@ -256,7 +311,7 @@ def _validate_camera(cam_dir: Path) -> List[str]:
                     f"{label} YOLO det/{fi:06d}.txt 与从 annotations 重新派生不一致"
                     f"（期望 {len(expected)} 行，实际 {len(actual)} 行）"
                 )
-    if seg_dir.exists():
+    if require_yolo_seg and seg_dir.exists():
         for fi in sorted(ann_frames):
             seg_path = seg_dir / f"{fi:06d}.txt"
             expected = _expected_yolo_seg_lines(frames_by_index[fi].get("objects", []), width, height,
@@ -368,20 +423,44 @@ def _check_seg_gate(errors: List[str], olabel: str, obj: dict, binary, width: in
 
 # ── 统一入口 ────────────────────────────────────────────────────────────
 
-def collect_dataset_regression_errors(annotation_dir: Path) -> List[str]:
+def collect_dataset_regression_errors(
+    annotation_dir: Path,
+    require_mot: bool = True,
+    require_mask: bool = True,
+    require_yolo_det: bool = True,
+    require_yolo_seg: bool = True,
+) -> List[str]:
     """返回全部回归错误列表（供 validate_annotation_dir 合并）。"""
     errors: List[str] = []
     camera_dirs = _camera_dirs(annotation_dir)
     if not camera_dirs:
         errors.append(f"目录 {annotation_dir} 下没有 camera 子目录（缺少 camera.json）")
     for cam_dir in camera_dirs:
-        errors += _validate_camera(cam_dir)
+        errors += _validate_camera(
+            cam_dir,
+            require_mot=require_mot,
+            require_mask=require_mask,
+            require_yolo_det=require_yolo_det,
+            require_yolo_seg=require_yolo_seg,
+        )
     return errors
 
 
-def validate_dataset_regression(annotation_dir: Path) -> int:
+def validate_dataset_regression(
+    annotation_dir: Path,
+    require_mot: bool = True,
+    require_mask: bool = True,
+    require_yolo_det: bool = True,
+    require_yolo_seg: bool = True,
+) -> int:
     """端到端回归校验。返回 0（通过）或 1（失败）。"""
-    errors = collect_dataset_regression_errors(annotation_dir)
+    errors = collect_dataset_regression_errors(
+        annotation_dir,
+        require_mot=require_mot,
+        require_mask=require_mask,
+        require_yolo_det=require_yolo_det,
+        require_yolo_seg=require_yolo_seg,
+    )
     if not errors:
         print(f"DATASET REGRESSION: {annotation_dir} PASSED")
         return 0

@@ -126,6 +126,8 @@ class TestTaskStatusAudit:
         assert "episode_cli_t1" in r.output
         assert "Pipeline State:" in r.output
         assert "export:" in r.output
+        assert "Schema version:" in r.output
+        assert "Current step:" in r.output
 
     def test_audit_passes_minimal(self, tmp_path, pin_repo_root):
         tf = _make_task_dir(tmp_path)
@@ -144,6 +146,51 @@ class TestTaskStatusAudit:
         state_path = pin_repo_root / ".futsalmot" / "runtime" / "cli_t1" / "pipeline_state.json"
         state = json.loads(state_path.read_text(encoding="utf-8"))
         assert state["steps"]["postprocess"]["status"] == "COMPLETED"
+
+    def test_resume_dry_run_does_not_execute_workflow(self, tmp_path, pin_repo_root, monkeypatch):
+        tf = _make_task_dir(tmp_path)
+        from grf_ue_bridge import pipeline_state
+
+        path = pipeline_state.state_path(pin_repo_root, "cli_t1")
+        state = pipeline_state.create_state("cli_t1")
+        pipeline_state.update_step(state, "export", pipeline_state.StepStatus.COMPLETED)
+        pipeline_state.update_step(state, "render", pipeline_state.StepStatus.FAILED,
+                                   error_message="render_summary missing")
+        pipeline_state.save_state(state, path)
+        called = []
+        monkeypatch.setattr("grf_ue_bridge.workflows.task_export.run_export",
+                            lambda *args, **kwargs: called.append("export") or 0)
+
+        r = runner.invoke(app, ["task", "resume", str(tf), "--dry-run"])
+
+        assert r.exit_code == 0, r.output
+        assert "export: skip" in r.output
+        assert "render: retry" in r.output
+        assert called == []
+
+    def test_resume_dry_run_does_not_create_state(self, tmp_path, pin_repo_root):
+        tf = _make_task_dir(tmp_path)
+        state_path = pin_repo_root / ".futsalmot" / "runtime" / "cli_t1" / "pipeline_state.json"
+
+        r = runner.invoke(app, ["task", "resume", str(tf), "--dry-run"])
+
+        assert r.exit_code == 0, r.output
+        assert not state_path.exists()
+
+    def test_running_state_blocks_new_postprocess_without_force(self, tmp_path, pin_repo_root):
+        tf = _make_task_dir(tmp_path)
+        from grf_ue_bridge import pipeline_state
+
+        path = pipeline_state.state_path(pin_repo_root, "cli_t1")
+        state = pipeline_state.create_state("cli_t1")
+        pipeline_state.update_step(state, "postprocess", pipeline_state.StepStatus.RUNNING)
+        pipeline_state.save_state(state, path)
+
+        r = runner.invoke(app, ["task", "postprocess", str(tf), "--skip-cryptomatte",
+                                "--skip-annotate", "--skip-validate"])
+
+        assert r.exit_code != 0
+        assert "Existing running pipeline state detected" in r.output
 
 
 class TestActiveTask:

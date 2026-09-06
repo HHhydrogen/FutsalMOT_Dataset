@@ -16,6 +16,7 @@ from grf_ue_bridge.pipeline_state import (
     mark_failed,
     resume_plan,
     recover_running_step,
+    ensure_start_allowed,
     save_state,
     state_path,
     update_step,
@@ -159,3 +160,59 @@ def test_resume_plan_has_all_fixed_steps():
 
     assert list(resume_plan(state)) == list(FIXED_STEPS)
     assert set(resume_plan(state).values()) == {"execute"}
+
+
+def test_load_rejects_unsupported_future_version(tmp_path):
+    path = tmp_path / "pipeline_state.json"
+    state = create_state("task-1").to_dict()
+    state["version"] = 999
+    path.write_text(json.dumps(state), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Unsupported pipeline state version: 999"):
+        load_state(path)
+
+
+@pytest.mark.parametrize(
+    "mutation, message",
+    [
+        (lambda state: state.pop("steps"), "steps"),
+        (lambda state: state["steps"].__setitem__("render", {"status": "BROKEN"}), "status"),
+    ],
+)
+def test_load_rejects_malformed_state(tmp_path, mutation, message):
+    path = tmp_path / "pipeline_state.json"
+    state = create_state("task-1").to_dict()
+    mutation(state)
+    path.write_text(json.dumps(state), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=message):
+        load_state(path)
+
+
+def test_running_state_blocks_new_execution_unless_forced():
+    state = create_state("task-1")
+    update_step(state, "export", StepStatus.RUNNING)
+
+    with pytest.raises(ValueError, match="Existing running pipeline state detected"):
+        ensure_start_allowed(state)
+    ensure_start_allowed(state, force=True)
+
+
+def test_status_fields_are_validated(tmp_path):
+    path = tmp_path / "pipeline_state.json"
+    # 仅验证 malformed overall state 在 load 时不被静默修正。
+    data = create_state("task-1").to_dict()
+    data["state"] = "BROKEN"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(ValueError, match="overall"):
+        load_state(path)
+
+
+def test_load_rejects_inconsistent_overall_state(tmp_path):
+    path = tmp_path / "pipeline_state.json"
+    data = create_state("task-1").to_dict()
+    data["state"] = "COMPLETED"
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="inconsistent"):
+        load_state(path)

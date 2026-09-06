@@ -98,6 +98,23 @@ def print_status(resolved: m.ResolvedTask, st: Dict, print_fn: Callable[[str], N
     print_fn(f"  cameras: {st['camera_count']}  render_summary: {st['render_summary']}")
     pipeline = st.get("pipeline", {})
     print_fn(f"Pipeline State: {pipeline.get('state', 'UNKNOWN')}")
+    print_fn(f"  Schema version: {pipeline.get('version', 'UNKNOWN')}")
+    print_fn(f"  Last update: {pipeline.get('updated_at', 'UNKNOWN')}")
+    current = next((step for step in FIXED_STEPS
+                    if pipeline.get("steps", {}).get(step, {}).get("status") == "RUNNING"), None)
+    failed = next((step for step in FIXED_STEPS
+                   if pipeline.get("steps", {}).get(step, {}).get("status") == "FAILED"), None)
+    print_fn(f"  Current step: {current or 'none'}")
+    print_fn(f"  Failed step: {failed or 'none'}")
+    if failed:
+        print_fn("  Resume suggestion: retry " + failed)
+    elif current:
+        print_fn("  Resume suggestion: inspect " + current + " before retry")
+    else:
+        pending = next((step for step in FIXED_STEPS
+                        if pipeline.get("steps", {}).get(step, {}).get("status") == "PENDING"), None)
+        if pending:
+            print_fn("  Resume suggestion: run " + pending)
     for step in FIXED_STEPS:
         detail = pipeline.get("steps", {}).get(step, {"status": "PENDING"})
         status = detail.get("status", "PENDING")

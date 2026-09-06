@@ -22,6 +22,7 @@ class StepStatus(str, Enum):
 
 FIXED_STEPS = ("export", "ue_sequence", "render", "postprocess", "audit", "cleanup")
 _VALID_STATUSES = {status.value for status in StepStatus}
+CURRENT_VERSION = 1
 
 
 def _now() -> str:
@@ -75,19 +76,31 @@ def state_path(repo_root: Path, task_id: str) -> Path:
 def _validate(data: Any) -> PipelineState:
     if not isinstance(data, dict) or data.get("schema") != "futsalmot_pipeline_state":
         raise ValueError("invalid pipeline state schema")
-    if data.get("version") != 1 or not isinstance(data.get("task_id"), str):
+    version = data.get("version")
+    if not isinstance(version, int) or isinstance(version, bool):
+        raise ValueError("invalid pipeline state version")
+    if version > CURRENT_VERSION:
+        raise ValueError(f"Unsupported pipeline state version: {version}")
+    if version != CURRENT_VERSION or not isinstance(data.get("task_id"), str) or not data["task_id"]:
         raise ValueError("invalid pipeline state version or task_id")
+    if data.get("state") not in ("PENDING", "RUNNING", "FAILED", "COMPLETED"):
+        raise ValueError("invalid pipeline state overall status")
     steps = data.get("steps")
     if not isinstance(steps, dict) or set(steps) != set(FIXED_STEPS):
         raise ValueError("pipeline state must contain all fixed steps")
     for step in FIXED_STEPS:
         if not isinstance(steps[step], dict) or steps[step].get("status") not in _VALID_STATUSES:
             raise ValueError(f"invalid pipeline state status: {step}")
-    if not isinstance(data.get("history", []), list):
+    if not isinstance(data.get("updated_at"), str) or not isinstance(data.get("history", []), list):
         raise ValueError("invalid pipeline state history")
+    expected_state = _overall(steps)
+    if data["state"] != expected_state:
+        raise ValueError(
+            f"inconsistent pipeline state overall status: {data['state']} != {expected_state}"
+        )
     return PipelineState(
         schema=data["schema"], version=data["version"], task_id=data["task_id"],
-        state=_overall(steps), steps=steps, updated_at=data.get("updated_at", _now()),
+        state=expected_state, steps=steps, updated_at=data["updated_at"],
         history=list(data.get("history", [])),
     )
 
@@ -153,6 +166,12 @@ def resume_plan(state: PipelineState) -> Dict[str, str]:
         StepStatus.RUNNING.value: "unknown",
     }
     return {step: actions[state.steps[step]["status"]] for step in FIXED_STEPS}
+
+
+def ensure_start_allowed(state: PipelineState, force: bool = False) -> None:
+    """阻止并发启动；force 只由显式 CLI 选项启用。"""
+    if state.state == "RUNNING" and not force:
+        raise ValueError("Existing running pipeline state detected.")
 
 
 def recover_running_step(state: PipelineState, step: str, artifact_state: str) -> str:

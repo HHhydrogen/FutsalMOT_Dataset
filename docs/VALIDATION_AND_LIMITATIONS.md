@@ -123,7 +123,7 @@ uv run grf-ue task cleanup configs/<task>.json --apply
 
 默认是 dry-run，绝不删除文件。`--apply` 只有在 `_validation_gate` 通过时才会删除既有临时路径，并在 gate blocked 时以非零退出。gate 与 task requirement 一致：只在 task 要求 Render 时检查 `render_summary.status == "success"`，只在 task 要求 Runtime Pose 时检查 `pose_session.capture_complete == true`。Pose disabled task 缺少 `pose_session.json` 是 skipped，不会阻止 cleanup。
 
-存在 audit JSON 时，cleanup 优先读取 canonical `passed/exit_code/errors/warnings/checks`：`passed=false`、errors、nonzero exit 或 required failed check 一定阻止 `--apply`；warnings-only 不阻止。没有 canonical 字段时才只读兼容旧 `ok/failed_checks`，格式混合、缺失或无法解析时 fail safe 拒绝 cleanup，避免错误删除。
+cleanup 必须先读取 canonical audit JSON：缺少 audit 报告直接 fail safe 阻止 `--apply`。canonical `passed/exit_code/errors/warnings/checks` 中，`passed=false`、errors、nonzero exit 或 required failed check 一定阻止 `--apply`；warnings-only 不阻止。仅有 `{"passed": true}` 的最小成功报告可兼容读取；其它 canonical 字段缺失、格式混合或无法解析时 fail safe 拒绝 cleanup。没有 canonical 字段时才只读兼容旧 `ok/failed_checks`，避免错误删除。
 
 清理集合当前包括相机下的 `render/`、`render_mask/`、`debug/`、`mask/*.png`，episode 根的 `pose_capture.jsonl`，以及 `yolo_pose/images/`、`yolo_det/images/`、`yolo_seg/images/` 下的 PNG。canonical 的 `img1/`、相机标定、annotations、MOT、COCO17、YOLO labels、provenance、audit 和 manifest 不在删除集合中。
 

@@ -832,9 +832,16 @@ def check_pose_coco17(
     """
     st = {"ok": True, "pose_session": False, "capture_complete": False,
           "pose_capture_rows": 0, "coco17_3d_rows": 0, "coco17_total_kp": 0, "skipped": False}
-    if skip or not required:
+    # skip 只能表示已清理的 transient；不能绕过 task 明确要求的 Pose。
+    if not required:
         st["skipped"] = True
         st["required"] = False
+        return st
+    if skip:
+        errors.append("pose: required Runtime Pose step was skipped")
+        st["required"] = True
+        st["skipped"] = False
+        st["ok"] = False
         return st
     ps_path = dataset_dir / "pose_session.json"
     if not ps_path.exists():

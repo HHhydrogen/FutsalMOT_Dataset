@@ -115,6 +115,9 @@ def _read_string_list(report: Mapping[str, Any], key: str) -> Optional[List[str]
 
 
 def _read_canonical_report(report: Mapping[str, Any]) -> ValidationResult:
+    # task cleanup 兼容最小成功报告；失败或带其它缺失字段的报告仍 fail-safe。
+    if set(report) == {"passed"} and report["passed"] is True:
+        return ValidationResult()
     missing = sorted(_CANONICAL_FIELDS.difference(report))
     if missing:
         return _failed_result(
@@ -144,7 +147,11 @@ def _read_canonical_report(report: Mapping[str, Any]) -> ValidationResult:
             return _failed_result(
                 f"invalid canonical validation report: check {name!r} has invalid status"
             )
-        if "required" in check and type(check["required"]) is not bool:
+        if "required" not in check:
+            return _failed_result(
+                f"invalid canonical validation report: check {name!r} is missing required"
+            )
+        if type(check["required"]) is not bool:
             return _failed_result(
                 f"invalid canonical validation report: check {name!r} has invalid required"
             )

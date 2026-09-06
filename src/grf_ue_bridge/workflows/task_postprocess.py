@@ -56,7 +56,7 @@ def run_postprocess(
     mapping = Path(resolved.actor_mapping)
 
     yolo_pose = pp.get("yolo_pose") or {}
-    pose_enabled = bool(yolo_pose.get("enabled", False))
+    pose_enabled = requirements.requires_pose
     debug_cfg = pp.get("debug") or {}
     debug_enabled = bool(debug_cfg.get("enabled", False))
 
@@ -133,7 +133,10 @@ def run_postprocess(
             return rc
 
     # 4) 可选 YOLO Pose（postprocess.yolo_pose.enabled）
-    if pose_enabled and not skip_pose:
+    if pose_enabled and skip_pose:
+        print_fn("required step skipped: Runtime Pose is required by task")
+        return 1
+    if pose_enabled:
         from grf_ue_bridge.pose_annotator import annotate_pose_dir
 
         print_fn("annotate-pose（YOLO Pose COCO 17 点）...")

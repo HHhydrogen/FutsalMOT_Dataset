@@ -1121,6 +1121,14 @@ def test_validation_result_from_canonical_report():
     assert result.checks == report["checks"]
 
 
+def test_validation_result_accepts_minimal_canonical_success_report():
+    result = validation_result_from_report({"passed": True})
+
+    assert result.passed is True
+    assert result.exit_code == 0
+    assert result.errors == []
+
+
 def test_validation_result_from_unfinalized_result_recomputes_failure():
     result = ValidationResult(errors=["broken"])
 
@@ -1169,6 +1177,18 @@ def _cleanup_resolved(tmp_path: Path, *, pose_enabled=False, render_enabled=True
     }
 
 
+def _write_successful_audit(root: Path):
+    audit = root / "audit"
+    audit.mkdir(exist_ok=True)
+    (audit / "soak_audit_report.json").write_text(json.dumps({
+        "passed": True,
+        "exit_code": 0,
+        "errors": [],
+        "warnings": [],
+        "checks": {},
+    }), encoding="utf-8")
+
+
 def _write_cleanup_summary(root: Path, status="success"):
     (root / "render_summary.json").write_text(
         json.dumps({"status": status, "cameras": {"Camera_01": {"ok": True}}}),
@@ -1180,6 +1200,7 @@ def test_cleanup_disabled_pose_missing_session_is_not_a_gate(tmp_path):
     root = tmp_path / "episode"
     root.mkdir()
     _write_cleanup_summary(root)
+    _write_successful_audit(root)
     assert _validation_gate(root, resolved=_cleanup_resolved(tmp_path)) == []
 
 
@@ -1218,6 +1239,19 @@ def test_cleanup_warnings_only_audit_is_non_blocking(tmp_path):
     assert _validation_gate(root, resolved=_cleanup_resolved(tmp_path)) == []
 
 
+def test_cleanup_minimal_canonical_success_audit_is_non_blocking(tmp_path):
+    root = tmp_path / "episode"
+    root.mkdir()
+    _write_cleanup_summary(root)
+    audit = root / "audit"
+    audit.mkdir()
+    (audit / "soak_audit_report.json").write_text(
+        json.dumps({"passed": True}), encoding="utf-8"
+    )
+
+    assert _validation_gate(root, resolved=_cleanup_resolved(tmp_path)) == []
+
+
 def test_cleanup_legacy_failed_audit_blocks_apply(tmp_path):
     root = tmp_path / "episode"
     root.mkdir()
@@ -1237,6 +1271,7 @@ def test_cleanup_dry_run_does_not_delete_transient(tmp_path):
     marker = camera / "frame.png"
     marker.write_bytes(b"transient")
     _write_cleanup_summary(root)
+    _write_successful_audit(root)
 
     report = plan_cleanup(root, ["Camera_01"], resolved=_cleanup_resolved(tmp_path))
 
@@ -1258,6 +1293,7 @@ def test_cleanup_enabled_pose_blocks_missing_or_incomplete_session(
     root = tmp_path / "episode"
     root.mkdir()
     _write_cleanup_summary(root)
+    _write_successful_audit(root)
     if session is not None:
         (root / "pose_session.json").write_text(
             json.dumps(session), encoding="utf-8"
@@ -1284,6 +1320,7 @@ def test_cleanup_enabled_pose_complete_allows_apply_and_keeps_canonical_files(tm
     canonical = camera / "img1" / "000001.png"
     canonical.write_bytes(b"canonical")
     _write_cleanup_summary(root)
+    _write_successful_audit(root)
     (root / "pose_session.json").write_text(
         json.dumps({"capture_complete": True}), encoding="utf-8"
     )
@@ -1324,6 +1361,156 @@ def test_cleanup_malformed_render_summary_fails_safe(tmp_path):
     assert any("render_summary" in problem for problem in result["gate_problems"])
 
 
+def test_audit_required_pose_is_not_skipped_after_cleanup_applied(tmp_path):
+    root = _write_audit_camera_fixture(tmp_path)
+    (root / "dataset_manifest.json").write_text(
+        json.dumps({"cleanup_status": "applied"}), encoding="utf-8"
+    )
+
+    rc = audit_main([
+        "--input", str(root),
+        "--expected-cameras", "1",
+        "--expected-frames-per-camera", "1",
+        "--validation-level", "none",
+        "--render-required", "false",
+        "--mask-enabled", "false",
+        "--mot-required", "false",
+        "--pose-skip", "true",
+        "--pose-required", "true",
+    ])
+
+    report = json.loads(
+        (root / "audit" / "soak_audit_report.json").read_text(encoding="utf-8")
+    )
+    assert rc == 1
+    assert report["checks"]["runtime_pose"]["status"] == "failed"
+
+
+def test_cleanup_without_audit_blocks_required_mot(tmp_path):
+    root = tmp_path / "episode"
+    root.mkdir()
+    resolved = _cleanup_resolved(tmp_path, render_enabled=False)
+    resolved["postprocess"]["formats"] = ["json", "mot"]
+    resolved["ue_profile"]["annotation_export"]["export_mot"] = True
+
+    result = apply_cleanup(root, ["Camera_01"], resolved=resolved)
+
+    assert result["ok"] is False
+    assert result["deleted_files"] == 0
+    assert any("audit" in problem for problem in result["gate_problems"])
+
+
+def test_cleanup_blocks_canonical_check_missing_required(tmp_path):
+    root = tmp_path / "episode"
+    root.mkdir()
+    _write_cleanup_summary(root)
+    audit = root / "audit"
+    audit.mkdir()
+    (audit / "soak_audit_report.json").write_text(json.dumps({
+        "passed": True,
+        "exit_code": 0,
+        "errors": [],
+        "warnings": [],
+        "checks": {"mot_export": {"status": "failed"}},
+    }), encoding="utf-8")
+
+    result = apply_cleanup(root, ["Camera_01"], resolved=_cleanup_resolved(tmp_path))
+
+    assert result["ok"] is False
+    assert result["deleted_files"] == 0
+    assert any("audit" in problem for problem in result["gate_problems"])
+
+
+def test_postprocess_required_pose_skip_is_failure(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from grf_ue_bridge import task_requirements
+    from grf_ue_bridge.workflows import task_postprocess
+
+    monkeypatch.setattr(
+        task_postprocess,
+        "resolve_task_requirements",
+        lambda resolved: task_requirements.TaskRequirements(requires_pose=True),
+    )
+    resolved = SimpleNamespace(
+        task_id="pose-skip",
+        dataset_episode_dir=str(tmp_path),
+        trajectory_output=str(tmp_path),
+        actor_mapping=str(tmp_path / "mapping.json"),
+        postprocess={"yolo_pose": {"enabled": False}},
+    )
+
+    result = task_postprocess.run_postprocess(
+        resolved,
+        skip_cryptomatte=True,
+        skip_annotate=True,
+        skip_validate=True,
+        skip_pose=True,
+        skip_debug=True,
+        print_fn=lambda message: None,
+    )
+
+    assert result == 1
+
+
+def test_postprocess_forwards_resolved_requirements_to_validator(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from grf_ue_bridge.workflows import task_postprocess
+
+    captured = {}
+
+    def fake_annotate(*args, **kwargs):
+        return 0
+
+    def fake_validate(*args, **kwargs):
+        captured.update(kwargs)
+        return 0
+
+    monkeypatch.setattr(task_postprocess, "resolve_task_requirements", lambda resolved: TaskRequirements(
+        requires_mot=False,
+        requires_instance_mask=True,
+        requires_yolo_det=True,
+        requires_yolo_seg=False,
+        requires_pose=False,
+    ))
+    monkeypatch.setattr(
+        "grf_ue_bridge.mask_annotator.annotate_masks_dir", fake_annotate
+    )
+    monkeypatch.setattr(
+        "grf_ue_bridge.annotation_validator.validate_annotation_dir", fake_validate
+    )
+    resolved = SimpleNamespace(
+        task_id="forwarding",
+        dataset_episode_dir=str(tmp_path),
+        trajectory_output=str(tmp_path),
+        actor_mapping=str(tmp_path / "mapping.json"),
+        postprocess={
+            "formats": ["json"],
+            "workers": 1,
+            "chunk_size": 1,
+            "clean_stale": True,
+            "validation_level": "quick",
+            "yolo_pose": {"enabled": False},
+        },
+    )
+
+    result = task_postprocess.run_postprocess(
+        resolved,
+        skip_cryptomatte=True,
+        skip_debug=True,
+        print_fn=lambda message: None,
+    )
+
+    assert result == 0
+    assert captured == {
+        "workers": 1,
+        "validation_level": "quick",
+        "require_mot": False,
+        "require_mask": True,
+        "require_yolo_det": True,
+        "require_yolo_seg": False,
+    }
+
+
 def test_cleanup_cli_apply_returns_nonzero_when_gate_blocks(tmp_path, pin_repo_root):
     from typer.testing import CliRunner
     from test_task_cli import _make_task_dir
@@ -1343,6 +1530,26 @@ def test_cleanup_cli_apply_returns_nonzero_when_gate_blocks(tmp_path, pin_repo_r
 
     assert result.exit_code == 1
     assert "blocked" in result.output
+
+
+def test_cleanup_cli_without_audit_blocks_required_mot(tmp_path, pin_repo_root):
+    from typer.testing import CliRunner
+    from test_task_cli import _make_task_dir
+    from grf_ue_bridge.cli import app
+
+    task_file = _make_task_dir(tmp_path, cam_count=1, frames=1)
+    task = json.loads(task_file.read_text(encoding="utf-8"))
+    task["ue"]["annotation_export"]["export_mot"] = True
+    task["postprocess"]["formats"] = ["json", "mot"]
+    task_file.write_text(json.dumps(task), encoding="utf-8")
+    (tmp_path / "ds" / "episode_cli_t1").mkdir(parents=True)
+
+    result = CliRunner().invoke(app, [
+        "task", "cleanup", str(task_file), "--apply"
+    ])
+
+    assert result.exit_code == 1
+    assert "canonical audit" in result.output
 
 
 def test_json_only_task_does_not_require_mot():

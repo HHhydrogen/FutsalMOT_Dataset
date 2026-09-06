@@ -801,7 +801,8 @@ def task_audit(
     profile = (resolved.artifact_policy or {}).get("profile", "research_minimal")
     if cleanup_applied and profile == "research_minimal":
         mask_enabled = False
-        pose_skip = True
+        # cleanup 只能解释 transient 已删除，不能改变 task 的 Pose requirement。
+        pose_skip = not requirements.requires_pose
     else:
         mask_enabled = requirements.requires_instance_mask
         pose_skip = False

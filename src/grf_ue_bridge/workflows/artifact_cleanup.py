@@ -118,7 +118,9 @@ def _validation_gate(dataset_episode_dir: Path, resolved=None) -> list:
         problems.append("缺少 pose_session.json（Runtime Pose 未导出）")
     # 若 audit 报告存在但 FAIL，阻止
     audit_path = dataset_episode_dir / "audit" / "soak_audit_report.json"
-    if audit_path.exists():
+    if not audit_path.exists():
+        problems.append("缺少 canonical audit 报告，无法确认数据完整性")
+    else:
         try:
             ar = json.loads(audit_path.read_text(encoding="utf-8"))
             result = validation_result_from_report(ar)

@@ -1243,6 +1243,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     report["render_summary"] = rsummary
     report["pose_coco17"] = pose_coco
     report["cross_camera_identity"] = cross_identity
+    try:
+        from grf_ue_bridge.workflows.audit_metrics import calculate_metrics
+        report["metrics"] = calculate_metrics(dataset_dir)
+    except Exception as exc:
+        report["metrics"] = {"errors": [f"failed to calculate audit metrics: {exc}"]}
 
     # 可选进程内验证
     validation = None

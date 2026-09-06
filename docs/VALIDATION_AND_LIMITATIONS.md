@@ -97,6 +97,8 @@ Pipeline State 是独立的执行进度记录，位置为 `.futsalmot/runtime/<t
 
 Run Manifest 位于 `.futsalmot/runtime/<task_id>/run_manifest.json`，只汇总一次运行的来源、时间、Pipeline State 和 Audit validation，以及尽力统计的 artifact 数量。`task_hash` 只基于原始 Task Spec JSON 内容；local config、resolved path 和 machine path 不参与 hash。Python/UE commit 无法获取时写 `null`，artifact 统计失败只记录 error，不阻断已有 workflow。Cleanup 在删除 transient 前写入摘要，避免删除后丢失计数。
 
+Audit report 的可选 `metrics` 是 best-effort 规模统计，不是新的质量报告系统。它统计数据集帧/图片/相机数量、MOT track/frame 摘要和 mask 非零 instance ID 数量；读取或统计失败只写入 `metrics.errors`，不改变 Audit checks、`ValidationResult`、Pipeline State 或退出码。`task status` 只读取并展示已有 metrics，不重新计算。
+
 ## Manifest 和重复检测
 
 ```powershell

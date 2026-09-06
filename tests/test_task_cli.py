@@ -127,6 +127,26 @@ class TestTaskStatusAudit:
         assert "Pipeline State:" in r.output
         assert "export:" in r.output
         assert "Run Manifest:" in r.output
+
+    def test_status_displays_audit_metrics(self, tmp_path, pin_repo_root):
+        tf = _make_task_dir(tmp_path)
+        episode = _make_minimal_dataset(tmp_path / "ds", "episode_cli_t1")
+        audit = episode / "audit"
+        audit.mkdir()
+        (audit / "soak_audit_report.json").write_text(json.dumps({
+            "passed": True,
+            "exit_code": 0,
+            "errors": [],
+            "warnings": [],
+            "checks": {},
+            "metrics": {"dataset": {"image_count": 1}},
+        }), encoding="utf-8")
+
+        r = runner.invoke(app, ["task", "status", str(tf)])
+
+        assert r.exit_code == 0, r.output
+        assert "Audit Metrics:" in r.output
+        assert "image_count" in r.output
         assert "Schema version:" in r.output
         assert "Current step:" in r.output
 
@@ -143,6 +163,27 @@ class TestTaskStatusAudit:
         assert manifest["validation"]["passed"] is True
         assert manifest["validation"]["audit_report"].endswith("soak_audit_report.json")
         assert not (tmp_path / "ds" / "episode_cli_t1" / "dataset_manifest.json").exists()
+
+    def test_cleanup_manifest_keeps_pre_delete_artifact_counts(self, tmp_path, pin_repo_root):
+        tf = _make_task_dir(tmp_path)
+        episode = _make_minimal_dataset(tmp_path / "ds", "episode_cli_t1")
+        audit = episode / "audit"
+        audit.mkdir()
+        (audit / "soak_audit_report.json").write_text(json.dumps({
+            "passed": True,
+            "exit_code": 0,
+            "errors": [],
+            "warnings": [],
+            "checks": {},
+        }), encoding="utf-8")
+
+        r = runner.invoke(app, ["task", "cleanup", str(tf), "--apply"])
+
+        assert r.exit_code == 0, r.output
+        manifest_path = pin_repo_root / ".futsalmot" / "runtime" / "cli_t1" / "run_manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        assert manifest["artifacts"]["images"]["count"] == 1
+        assert manifest["runtime"]["finished_at"]
 
     def test_postprocess_skip_all_noop(self, tmp_path, pin_repo_root):
         tf = _make_task_dir(tmp_path)

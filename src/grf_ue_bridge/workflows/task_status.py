@@ -92,6 +92,7 @@ def collect_status(resolved: m.ResolvedTask) -> Dict:
 
 def print_status(resolved: m.ResolvedTask, st: Dict, print_fn: Callable[[str], None] = print) -> None:
     """打印人类可读状态。"""
+    ds = Path(resolved.dataset_episode_dir)
     print_fn(f"Task: {resolved.task_id}  episode: {resolved.episode_name}")
     print_fn(f"  trajectory exists: {st['trajectory_exists']}  -> {resolved.trajectory_output}")
     print_fn(f"  dataset episode dir: {resolved.dataset_episode_dir}")
@@ -137,6 +138,19 @@ def print_status(resolved: m.ResolvedTask, st: Dict, print_fn: Callable[[str], N
         manifest_validation = run_manifest.get("validation") or {}
         if manifest_validation.get("passed") is not None:
             print_fn(f"  manifest validation: {'PASS' if manifest_validation['passed'] else 'FAIL'}")
+    audit_metrics = None
+    audit_path = ds / "audit" / "soak_audit_report.json"
+    if audit_path.is_file():
+        try:
+            audit_metrics = (json.loads(audit_path.read_text(encoding="utf-8")) or {}).get("metrics")
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            audit_metrics = None
+    if isinstance(audit_metrics, dict):
+        print_fn("Audit Metrics:")
+        for category, values in audit_metrics.items():
+            if category == "errors" or not isinstance(values, dict):
+                continue
+            print_fn(f"  {category}: {values}")
     for cam, c in st["cameras"].items():
         print_fn(
             f"    {cam}: render={c['render_rgb']} exr={c['object_id_exr']} "

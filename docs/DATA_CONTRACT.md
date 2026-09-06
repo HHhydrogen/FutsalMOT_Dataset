@@ -73,6 +73,8 @@ task 文件的顶层 schema 是：
 
 同一 runtime 目录还可保存 `run_manifest.json`，schema 为 `futsalmot_run_manifest` v1。Run Manifest 记录原始 task JSON hash、代码和可选 UE commit、运行时间、Pipeline State 摘要、Audit `ValidationResult.passed` 以及 best-effort artifact counts。它是运行结果摘要，不属于数据 artifact 格式，也不参与 Audit/Cleanup 的成功判定。
 
+Audit report 可选包含 `metrics` 对象。`metrics.dataset` 记录 `frame_count`、`image_count` 和 `camera_count`；存在 MOT 时可记录 `track_count`、`frame_count` 和 `avg_track_length`；存在 mask 时可记录非零 instance ID 数量。metrics 只用于分析和展示，不参与 `checks` 或 `ValidationResult.passed`。
+
 ## Episode 轨迹
 
 ### `meta.json`

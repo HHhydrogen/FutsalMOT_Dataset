@@ -110,6 +110,11 @@ class TestTaskResolveCLI:
         assert r.exit_code == 0, r.output
         assert "run_task.py" in r.output
         assert "--resolved-task" in r.output
+        state_path = pin_repo_root / ".futsalmot" / "runtime" / "cli_t1" / "pipeline_state.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        assert state["steps"]["ue_sequence"]["status"] == "COMPLETED"
+        assert state["steps"]["ue_sequence"]["completion_type"] == "command_generation"
+        assert state["steps"]["render"]["status"] == "PENDING"
 
 
 class TestTaskStatusAudit:
@@ -119,18 +124,26 @@ class TestTaskStatusAudit:
         r = runner.invoke(app, ["task", "status", str(tf)])
         assert r.exit_code == 0, r.output
         assert "episode_cli_t1" in r.output
+        assert "Pipeline State:" in r.output
+        assert "export:" in r.output
 
     def test_audit_passes_minimal(self, tmp_path, pin_repo_root):
         tf = _make_task_dir(tmp_path)
         _make_minimal_dataset(tmp_path / "ds", "episode_cli_t1")
         r = runner.invoke(app, ["task", "audit", str(tf), "--validation-level", "none"])
         assert r.exit_code == 0, r.output
+        state_path = pin_repo_root / ".futsalmot" / "runtime" / "cli_t1" / "pipeline_state.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        assert state["steps"]["audit"]["status"] == "COMPLETED"
 
     def test_postprocess_skip_all_noop(self, tmp_path, pin_repo_root):
         tf = _make_task_dir(tmp_path)
         r = runner.invoke(app, ["task", "postprocess", str(tf),
                                 "--skip-cryptomatte", "--skip-annotate", "--skip-validate"])
         assert r.exit_code == 0, r.output
+        state_path = pin_repo_root / ".futsalmot" / "runtime" / "cli_t1" / "pipeline_state.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        assert state["steps"]["postprocess"]["status"] == "COMPLETED"
 
 
 class TestActiveTask:

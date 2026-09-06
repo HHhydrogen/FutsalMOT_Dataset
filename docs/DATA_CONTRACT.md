@@ -69,6 +69,8 @@ task 文件的顶层 schema 是：
 
 `task resolve` 产生的运行时 schema 是 `futsalmot_resolved_task`，版本为 `1`。它包含绝对的 `repo_root`、`dataset_root`、`ue_project_root`、`trajectory_output`、`dataset_episode_dir`、`actor_mapping`，以及归一化后的 `export_profile`、`ue_profile`、`postprocess` 和 `audit`。该文件在 `.futsalmot/runtime/<task_id>/resolved-task.json`，属于被忽略的运行时文件，不是提交契约。
 
+同一 runtime 目录还可保存 `pipeline_state.json`，schema 为 `futsalmot_pipeline_state` v1。它记录固定步骤的执行进度和失败信息，不改变 resolved-task 或数据 artifact 格式，也不替代 Audit 的 `ValidationResult`。
+
 ## Episode 轨迹
 
 ### `meta.json`

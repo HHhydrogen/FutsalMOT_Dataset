@@ -93,6 +93,8 @@ uv run grf-ue task audit configs/<task>.json --validation-level full
 
 当 episode 的 `dataset_manifest.json` 标记 `cleanup_status="applied"` 且 artifact profile 为 `research_minimal` 时，`task audit` 会跳过已经被清理的 mask/render/pose 原始产物，只审计 canonical 产物。这是清理后的特殊路径，不能用来证明原始渲染文件仍然存在。
 
+Pipeline State 是独立的执行进度记录，位置为 `.futsalmot/runtime/<task_id>/pipeline_state.json`。`task status` 展示固定的 `export`、`ue_sequence`、`render`、`postprocess`、`audit`、`cleanup` 六步；`task resume` 对 completed 跳过、failed 重试、pending 执行、skipped 保持，`RUNNING` 一律按步骤证据处理为 unknown。Pipeline State 的 completed 不表示数据通过验证；数据正确性仍由 Audit report 的 `ValidationResult.passed` 决定。`ue_sequence` 的 completed 只表示 command generation 完成。
+
 ## Manifest 和重复检测
 
 ```powershell

@@ -119,6 +119,7 @@ uv run grf-ue task cleanup configs/pose_smoke_3frames_1cam.json
 | `task motion-quality` | 对 `frames.jsonl` 做运动质量分析 |
 | `task manifest` | 写 episode 级 manifest |
 | `task status` | 只读显示当前产物数量 |
+| `task resume` | 按 pipeline state 恢复未完成步骤 |
 | `task cleanup` | dry-run 或应用临时产物清理 |
 | `task activate` / `deactivate` | 设置或清除默认 active task |
 
@@ -142,6 +143,8 @@ grf-ue monitor
 grf-ue measure
 grf-ue benchmark
 ```
+
+Pipeline State 保存在 `.futsalmot/runtime/<task_id>/pipeline_state.json`，只记录固定六步的执行进度：`export`、`ue_sequence`、`render`、`postprocess`、`audit`、`cleanup`。`task status` 展示这些状态，`task resume` 跳过已完成步骤并重试失败步骤；`RUNNING` 被视为未知，必须根据步骤产物决定恢复。`ue_sequence=COMPLETED` 只表示 UE command 已生成，不表示 UE/MRQ/render 完成。Pipeline State 的 `COMPLETED` 也不等于数据正确，最终仍以 Audit 的 `ValidationResult.passed` 为准。
 
 直接 `export` 读取的是只含 `ExportConfig` 字段的旧式 JSON；包含 `schema`、`dataset_root`、`ue`、`postprocess` 和 `audit` 的单文件配置应使用 `task` 工作流。
 

@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Callable, Dict
 
 from grf_ue_bridge.config import models as m
+from grf_ue_bridge.pipeline_state import FIXED_STEPS, load_state, state_path, create_state
+from grf_ue_bridge.validation_result import validation_result_from_report
 
 
 def _count(path: Path, pattern: str) -> int:
@@ -42,6 +45,26 @@ def collect_status(resolved: m.ResolvedTask) -> Dict:
         "cameras": {},
         "render_summary": None,
     }
+    pipeline_path = state_path(Path(resolved.repo_root), resolved.task_id)
+    if pipeline_path.is_file():
+        try:
+            pipeline = load_state(pipeline_path).to_dict()
+        except ValueError as exc:
+            pipeline = {"state": "FAILED", "steps": {}, "error": str(exc)}
+    else:
+        pipeline = create_state(resolved.task_id).to_dict()
+        pipeline["state_available"] = False
+    st["pipeline"] = pipeline
+    audit_path = ds / "audit" / "soak_audit_report.json"
+    if audit_path.is_file():
+        try:
+            report = json.loads(audit_path.read_text(encoding="utf-8"))
+            validation = validation_result_from_report(report)
+            st["validation"] = {"passed": validation.passed, "exit_code": validation.exit_code}
+        except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+            st["validation"] = {"passed": False, "error": str(exc)}
+    else:
+        st["validation"] = None
     for cam in cams:
         st["cameras"][cam.name] = {
             "render_rgb": _count(cam / "render", "*.png"),
@@ -56,7 +79,6 @@ def collect_status(resolved: m.ResolvedTask) -> Dict:
     summary_path = ds / "render_summary.json"
     if summary_path.is_file():
         try:
-            import json
             with open(summary_path, encoding="utf-8") as f:
                 summary = json.load(f)
             st["render_summary"] = {
@@ -74,6 +96,21 @@ def print_status(resolved: m.ResolvedTask, st: Dict, print_fn: Callable[[str], N
     print_fn(f"  trajectory exists: {st['trajectory_exists']}  -> {resolved.trajectory_output}")
     print_fn(f"  dataset episode dir: {resolved.dataset_episode_dir}")
     print_fn(f"  cameras: {st['camera_count']}  render_summary: {st['render_summary']}")
+    pipeline = st.get("pipeline", {})
+    print_fn(f"Pipeline State: {pipeline.get('state', 'UNKNOWN')}")
+    for step in FIXED_STEPS:
+        detail = pipeline.get("steps", {}).get(step, {"status": "PENDING"})
+        status = detail.get("status", "PENDING")
+        marker = {"COMPLETED": "✓", "RUNNING": "▶", "FAILED": "✗", "SKIPPED": "-"}.get(status, "○")
+        print_fn(f"  {marker} {step}: {status}")
+        if status == "FAILED":
+            print_fn(f"    error: {detail.get('error_type', '')}: {detail.get('error_message', '')}")
+    validation = st.get("validation")
+    if validation is not None:
+        print_fn(f"ValidationResult: {'PASS' if validation.get('passed') else 'FAIL'}")
+        if validation.get("passed") is False:
+            print_fn("Task success: NO")
+            print_fn("  action: inspect audit errors before treating the task as usable")
     for cam, c in st["cameras"].items():
         print_fn(
             f"    {cam}: render={c['render_rgb']} exr={c['object_id_exr']} "

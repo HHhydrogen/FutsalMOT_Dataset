@@ -644,6 +644,16 @@ def cryptomatte_to_mask(
 
 from grf_ue_bridge.config import paths as _cfg_paths
 from grf_ue_bridge.config import resolver as _resolver
+from grf_ue_bridge.pipeline_state import (
+    StepStatus,
+    create_state,
+    load_state,
+    mark_failed,
+    save_state,
+    state_path,
+    update_step,
+    resume_plan,
+)
 from grf_ue_bridge.task_requirements import resolve_task_requirements
 
 task_app = typer.Typer(help="基于 dataset task 配置的工作流（推荐入口）")
@@ -681,6 +691,113 @@ def _resolve_runtime(
         ue_project_root=str(ue_project_root) if ue_project_root else None,
         local_config=local_config,
     )
+
+
+def _pipeline_state(resolved):
+    """加载或创建当前 task 的 pipeline state。"""
+    path = state_path(Path(resolved.repo_root), resolved.task_id)
+    try:
+        state = load_state(path) if path.is_file() else create_state(resolved.task_id)
+    except ValueError as exc:
+        raise typer.BadParameter(f"pipeline state 无法读取: {exc}")
+    save_state(state, path)
+    return state, path
+
+
+def _save_pipeline_state(state, path) -> None:
+    save_state(state, path)
+
+
+def _start_pipeline_step(resolved, step):
+    state, path = _pipeline_state(resolved)
+    update_step(state, step, StepStatus.RUNNING)
+    _save_pipeline_state(state, path)
+    return state, path
+
+
+def _finish_pipeline_step(state, path, step, return_code=0, *, completion_type=None, note=None):
+    if return_code == 0:
+        detail = {}
+        if completion_type is not None:
+            detail["completion_type"] = completion_type
+        if note is not None:
+            detail["note"] = note
+        update_step(state, step, StepStatus.COMPLETED, **detail)
+    else:
+        update_step(
+            state,
+            step,
+            StepStatus.FAILED,
+            error_type="WorkflowReturnCode",
+            error_message=f"workflow returned exit code {return_code}",
+        )
+    _save_pipeline_state(state, path)
+
+
+def _fail_pipeline_step(state, path, step, exc):
+    mark_failed(state, step, exc)
+    _save_pipeline_state(state, path)
+
+
+def _sync_render_state_from_audit(resolved, state, path):
+    """依据 audit 已生成的 render check 回写 render 执行状态。"""
+    report_path = Path(resolved.dataset_episode_dir) / "audit" / "soak_audit_report.json"
+    if not report_path.is_file():
+        return
+
+
+def _resume_action(resolved, state, step, action):
+    """为 RUNNING 步骤提供保守的 artifact-based recovery decision。"""
+    if action != "unknown":
+        return action
+    if step == "render":
+        summary = Path(resolved.dataset_episode_dir) / "render_summary.json"
+        try:
+            report = json.loads(summary.read_text(encoding="utf-8"))
+            if isinstance(report, dict) and report.get("status") == "success":
+                return "complete"
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            pass
+        return "keep"
+    if step == "audit":
+        report = Path(resolved.dataset_episode_dir) / "audit" / "soak_audit_report.json"
+        if report.is_file():
+            try:
+                from grf_ue_bridge.validation_result import validation_result_from_report
+                validation_result_from_report(json.loads(report.read_text(encoding="utf-8")))
+                return "complete"
+            except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
+                pass
+        return "retry"
+    if step == "cleanup":
+        manifest = Path(resolved.dataset_episode_dir) / "dataset_manifest.json"
+        try:
+            data = json.loads(manifest.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and data.get("cleanup_status") == "applied":
+                return "complete"
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            pass
+        return "retry"
+    if step == "export":
+        traj = Path(resolved.trajectory_output)
+        return "complete" if (traj / "meta.json").is_file() and (traj / "frames.jsonl").is_file() else "retry"
+    return "retry"
+    try:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        render = (report.get("checks") or {}).get("render") or {}
+        status = render.get("status")
+        if status == "passed":
+            update_step(state, "render", StepStatus.COMPLETED,
+                        completion_type="audit_verified", note="由 audit 验证 render_summary")
+        elif status == "skipped":
+            update_step(state, "render", StepStatus.SKIPPED,
+                        note="任务未要求 Render")
+        elif status == "failed":
+            update_step(state, "render", StepStatus.FAILED,
+                        error_type="AuditValidation", error_message=render.get("message", "render audit failed"))
+        _save_pipeline_state(state, path)
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
+        return
 
 
 @task_app.command("validate")
@@ -751,7 +868,13 @@ def task_export(
     from grf_ue_bridge.workflows.task_export import run_export
 
     _task_file, resolved = _resolve_runtime(task, dataset_root, ue_project_root, local_config)
-    rc = run_export(resolved, print_fn=typer.echo)
+    state, state_file = _start_pipeline_step(resolved, "export")
+    try:
+        rc = run_export(resolved, print_fn=typer.echo)
+    except Exception as exc:
+        _fail_pipeline_step(state, state_file, "export", exc)
+        raise
+    _finish_pipeline_step(state, state_file, "export", rc)
     if rc != 0:
         raise typer.Exit(rc)
 
@@ -767,13 +890,25 @@ def task_ue_command(
 ):
     """输出可在 Unreal Editor Python Console 复制的命令（先保存 resolved task）。"""
     task_file, resolved = _resolve_runtime(task, dataset_root, ue_project_root, local_config)
-    runtime_file = _resolver.save_resolved_task(
-        resolved, Path(resolved.repo_root)
-    )
-    run_task = Path(resolved.repo_root) / "ue" / "run_task.py"
-    typer.echo(
-        f'py "{run_task}" --resolved-task "{runtime_file}"'
-    )
+    state, state_file = _start_pipeline_step(resolved, "ue_sequence")
+    try:
+        runtime_file = _resolver.save_resolved_task(
+            resolved, Path(resolved.repo_root)
+        )
+        run_task = Path(resolved.repo_root) / "ue" / "run_task.py"
+        typer.echo(
+            f'py "{run_task}" --resolved-task "{runtime_file}"'
+        )
+        _finish_pipeline_step(
+            state,
+            state_file,
+            "ue_sequence",
+            completion_type="command_generation",
+            note="仅表示 UE command 已生成，不表示 UE/MRQ/render 完成",
+        )
+    except Exception as exc:
+        _fail_pipeline_step(state, state_file, "ue_sequence", exc)
+        raise
 
 
 @task_app.command("postprocess")
@@ -794,15 +929,21 @@ def task_postprocess(
     from grf_ue_bridge.workflows.task_postprocess import run_postprocess
 
     _task_file, resolved = _resolve_runtime(task, dataset_root, ue_project_root, local_config)
-    rc = run_postprocess(
-        resolved,
-        skip_cryptomatte=skip_cryptomatte,
-        skip_annotate=skip_annotate,
-        skip_validate=skip_validate,
-        skip_pose=skip_pose,
-        skip_debug=skip_debug,
-        print_fn=typer.echo,
-    )
+    state, state_file = _start_pipeline_step(resolved, "postprocess")
+    try:
+        rc = run_postprocess(
+            resolved,
+            skip_cryptomatte=skip_cryptomatte,
+            skip_annotate=skip_annotate,
+            skip_validate=skip_validate,
+            skip_pose=skip_pose,
+            skip_debug=skip_debug,
+            print_fn=typer.echo,
+        )
+    except Exception as exc:
+        _fail_pipeline_step(state, state_file, "postprocess", exc)
+        raise
+    _finish_pipeline_step(state, state_file, "postprocess", rc)
     if rc != 0:
         raise typer.Exit(rc)
 
@@ -843,7 +984,9 @@ def task_audit(
     else:
         mask_enabled = requirements.requires_instance_mask
         pose_skip = False
-    rc = audit_main([
+    state, state_file = _start_pipeline_step(resolved, "audit")
+    try:
+        rc = audit_main([
         "--input", resolved.dataset_episode_dir,
         "--expected-cameras", str(audit_cfg.get("expected_cameras", 4)),
         "--expected-frames-per-camera", str(audit_cfg.get("expected_frames_per_camera", 300)),
@@ -856,7 +999,12 @@ def task_audit(
         "--yolo-det-required", "true" if requirements.requires_yolo_det else "false",
         "--yolo-seg-required", "true" if requirements.requires_yolo_seg else "false",
         "--pose-required", "true" if requirements.requires_pose else "false",
-    ])
+        ])
+    except Exception as exc:
+        _fail_pipeline_step(state, state_file, "audit", exc)
+        raise
+    _finish_pipeline_step(state, state_file, "audit", rc)
+    _sync_render_state_from_audit(resolved, state, state_file)
     if rc != 0:
         raise typer.Exit(rc)
 
@@ -915,20 +1063,32 @@ def task_cleanup(
     from grf_ue_bridge.workflows.artifact_cleanup import plan_cleanup, apply_cleanup
 
     _task_file, resolved = _resolve_runtime(task, dataset_root, ue_project_root, local_config)
+    state, state_file = _start_pipeline_step(resolved, "cleanup")
     ep_dir = Path(resolved.dataset_episode_dir)
     ue_ann = (resolved.ue_profile.get("annotation_export") or {}) if resolved.ue_profile else {}
     cams = (ue_ann.get("cameras") or [])
     profile = (resolved.artifact_policy or {}).get("profile", "research_minimal")
 
     if not apply:
-        rep = plan_cleanup(ep_dir, cams, profile, dry_run=True, resolved=resolved)
+        try:
+            rep = plan_cleanup(ep_dir, cams, profile, dry_run=True, resolved=resolved)
+        except Exception as exc:
+            _fail_pipeline_step(state, state_file, "cleanup", exc)
+            raise
+        _finish_pipeline_step(state, state_file, "cleanup", 0, note="dry-run 未删除文件")
         typer.echo(json.dumps(rep, indent=2, ensure_ascii=False))
         typer.echo("\n(DRY-RUN 未删除任何文件；加 --apply 真正执行)")
         return
-    result = apply_cleanup(ep_dir, cams, profile, resolved=resolved)
+    try:
+        result = apply_cleanup(ep_dir, cams, profile, resolved=resolved)
+    except Exception as exc:
+        _fail_pipeline_step(state, state_file, "cleanup", exc)
+        raise
     typer.echo(json.dumps(result, indent=2, ensure_ascii=False))
     if not result.get("ok"):
+        _finish_pipeline_step(state, state_file, "cleanup", 1)
         raise typer.Exit(1)
+    _finish_pipeline_step(state, state_file, "cleanup", 0)
     # apply 后写 dataset_manifest（cleanup_status=applied），供 audit 感知已清理
     from grf_ue_bridge.workflows.artifact_cleanup import build_manifest
     manifest = build_manifest(ep_dir, resolved.model_dump(), cams)
@@ -976,6 +1136,89 @@ def task_status(
     _task_file, resolved = _resolve_runtime(task, dataset_root, ue_project_root, local_config)
     st = collect_status(resolved)
     print_status(resolved, st, print_fn=typer.echo)
+
+
+@task_app.command("resume")
+def task_resume(
+    task: Optional[Path] = typer.Argument(None, help="task 文件（缺省用 active task）"),
+    dataset_root: Optional[Path] = typer.Option(None, "--dataset-root"),
+    ue_project_root: Optional[Path] = typer.Option(None, "--ue-project-root"),
+    local_config: Optional[Path] = typer.Option(None, "--local-config"),
+):
+    """按 pipeline state 恢复任务，复用现有 workflow。"""
+    task_file, resolved = _resolve_runtime(task, dataset_root, ue_project_root, local_config)
+    state, path = _pipeline_state(resolved)
+    actions = resume_plan(state)
+    actions = {
+        step: _resume_action(resolved, state, step, action)
+        for step, action in actions.items()
+    }
+    typer.echo(f"Resume task: {resolved.task_id}")
+    for step, action in actions.items():
+        typer.echo(f"  {step}: {action}")
+    # 只自动恢复 P1 可执行步骤；UE command 是异步边界，不能假设 UE 已执行。
+    if actions["export"] == "complete":
+        update_step(state, "export", StepStatus.COMPLETED, completion_type="recovery_verified")
+        _save_pipeline_state(state, path)
+    elif actions["export"] in ("execute", "retry"):
+        state, path = _start_pipeline_step(resolved, "export")
+        from grf_ue_bridge.workflows.task_export import run_export
+        try:
+            rc = run_export(resolved, print_fn=typer.echo)
+        except Exception as exc:
+            _fail_pipeline_step(state, path, "export", exc)
+            raise typer.Exit(1)
+        _finish_pipeline_step(state, path, "export", rc)
+        if rc != 0:
+            raise typer.Exit(rc)
+    if actions["ue_sequence"] in ("execute", "retry"):
+        try:
+            task_ue_command(
+                task_file,
+                dataset_root=dataset_root,
+                ue_project_root=ue_project_root,
+                local_config=local_config,
+            )
+        except typer.Exit as exc:
+            raise typer.Exit(exc.exit_code)
+    if actions["render"] == "complete":
+        update_step(state, "render", StepStatus.COMPLETED, completion_type="recovery_verified")
+        _save_pipeline_state(state, path)
+    elif actions["render"] == "keep":
+        typer.echo("render: keep (UE/MRQ 状态未知，等待 render_summary.json)")
+    if actions["postprocess"] in ("execute", "retry"):
+        state, path = _start_pipeline_step(resolved, "postprocess")
+        from grf_ue_bridge.workflows.task_postprocess import run_postprocess
+        try:
+            rc = run_postprocess(resolved, print_fn=typer.echo)
+        except Exception as exc:
+            _fail_pipeline_step(state, path, "postprocess", exc)
+            raise typer.Exit(1)
+        _finish_pipeline_step(state, path, "postprocess", rc)
+        if rc != 0:
+            raise typer.Exit(rc)
+    if actions["audit"] in ("execute", "retry"):
+        try:
+            task_audit(
+                task_file,
+                validation_level="quick",
+                dataset_root=dataset_root,
+                ue_project_root=ue_project_root,
+                local_config=local_config,
+            )
+        except typer.Exit as exc:
+            raise typer.Exit(exc.exit_code)
+    if actions["cleanup"] in ("execute", "retry"):
+        try:
+            task_cleanup(
+                task_file,
+                apply=True,
+                dataset_root=dataset_root,
+                ue_project_root=ue_project_root,
+                local_config=local_config,
+            )
+        except typer.Exit as exc:
+            raise typer.Exit(exc.exit_code)
 
 
 @task_app.command("activate")

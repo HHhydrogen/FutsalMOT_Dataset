@@ -15,6 +15,7 @@ from typing import Dict, List, Optional
 from grf_ue_bridge.config import loader
 from grf_ue_bridge.config import models as m
 from grf_ue_bridge.config import paths as _paths
+from grf_ue_bridge.config.runtime import resolve_runtime_paths
 from grf_ue_bridge.config.paths import (
     PLACEHOLDER_DATASET_ROOT,
     PLACEHOLDER_REPO_ROOT,
@@ -25,7 +26,13 @@ from grf_ue_bridge.config.paths import (
 
 # ── 校验（只读，不写文件）───────────────────────────────────────────────
 
-def validate_task(task_file: Path) -> List[str]:
+def validate_task(
+    task_file: Path,
+    *,
+    dataset_root: Optional[str] = None,
+    ue_project_root: Optional[str] = None,
+    local_config: Optional[Path] = None,
+) -> List[str]:
     """只读校验一个 task，返回问题列表（空 = 通过）。不生成任何文件。"""
     problems: List[str] = []
     task_file = task_file.resolve()
@@ -35,11 +42,21 @@ def validate_task(task_file: Path) -> List[str]:
     except Exception as e:  # noqa: BLE001
         return [f"task 解析失败: {e}"]
 
-    # 机器路径（必填）
-    if not task.dataset_root:
-        problems.append("缺少 dataset_root")
-    if not task.ue_project_root:
-        problems.append("缺少 ue_project_root")
+    repo_root = _paths.default_repo_root()
+    try:
+        resolved_dataset_root, resolved_ue_root = resolve_runtime_paths(
+            task_file, task, repo_root, dataset_root, ue_project_root, local_config
+        )
+    except ValueError as exc:
+        problems.append(str(exc))
+        resolved_dataset_root = resolved_ue_root = None
+    if resolved_ue_root is not None:
+        if not resolved_ue_root.is_dir():
+            problems.append(
+                f"ue_project_root 不存在或不是目录（必须包含 .uproject）: {resolved_ue_root}"
+            )
+        elif not any(resolved_ue_root.glob("*.uproject")):
+            problems.append(f"ue_project_root 缺少 .uproject: {resolved_ue_root}")
 
     # 相机数量
     cam_ids = (task.ue.annotation_export or {}).get("cameras") or []
@@ -80,15 +97,22 @@ def validate_task(task_file: Path) -> List[str]:
 
 # ── 解析为 resolved task ────────────────────────────────────────────────
 
-def resolve_task(task_file: Path) -> m.ResolvedTask:
+def resolve_task(
+    task_file: Path,
+    *,
+    dataset_root: Optional[str] = None,
+    ue_project_root: Optional[str] = None,
+    local_config: Optional[Path] = None,
+) -> m.ResolvedTask:
     """把单 config 解析为运行时 resolved task（含绝对路径）。"""
     task_file = task_file.resolve()
     task = loader.load_task_config(task_file)
 
     repo_root = _paths.default_repo_root()
-    dataset_root = Path(task.dataset_root).expanduser().resolve()
-    ue_project_root = Path(task.ue_project_root).expanduser().resolve()
-    episode_dir = dataset_root / task.episode_name
+    dataset_path, ue_project_path = resolve_runtime_paths(
+        task_file, task, repo_root, dataset_root, ue_project_root, local_config
+    )
+    episode_dir = dataset_path / task.episode_name
 
     actor_mapping = _paths.resolve_task_relative(task.ue.actor_mapping, repo_root)
 
@@ -105,8 +129,8 @@ def resolve_task(task_file: Path) -> m.ResolvedTask:
         episode_name=task.episode_name,
         source_task_file=str(task_file),
         repo_root=str(repo_root),
-        ue_project_root=str(ue_project_root),
-        dataset_root=str(dataset_root),
+        ue_project_root=str(ue_project_path),
+        dataset_root=str(dataset_path),
         trajectory_output=str(episode_dir),
         dataset_episode_dir=str(episode_dir),
         export_profile=task.export.model_dump(),

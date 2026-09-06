@@ -49,6 +49,7 @@ def run_export(
     from grf_ue_bridge.grf_runner import run_episode
 
     export_cfg = ExportConfig(**resolved.export_profile)
+    Path(resolved.dataset_root).mkdir(parents=True, exist_ok=True)
     traj = Path(resolved.trajectory_output)
 
     grf_steps = compute_source_steps(export_cfg)

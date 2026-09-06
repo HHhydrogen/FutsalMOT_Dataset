@@ -60,11 +60,13 @@ class TestDatasetConfigs:
             assert "export_profile" not in data
             assert "ue_profile" not in data
             assert "paths" not in data
-            # 机器路径必填且为绝对路径（盘符/UNC）
+            # 路径可以是 portable runtime placeholder，也允许 legacy 绝对路径。
             ds = data.get("dataset_root") or ""
             ue = data.get("ue_project_root") or ""
-            assert re.match(r"^[A-Za-z]:[/\\\\]", ds), f"dataset_root 非绝对路径: {p}"
-            assert re.match(r"^[A-Za-z]:[/\\\\]", ue), f"ue_project_root 非绝对路径: {p}"
+            portable = r"^\$\{[A-Za-z_][A-Za-z0-9_]*\}(?:[/\\].*)?$"
+            absolute = r"^[A-Za-z]:[/\\\\]"
+            assert re.match(portable, ds) or re.match(absolute, ds), f"dataset_root 路径格式非法: {p}"
+            assert re.match(portable, ue) or re.match(absolute, ue), f"ue_project_root 路径格式非法: {p}"
             # 内联 export / ue 块
             assert "export" in data and data["export"].get("scenario")
             assert "ue" in data and data["ue"].get("annotation_export")

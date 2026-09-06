@@ -3,8 +3,8 @@
   "version": 2,
   "task_id": "c6p2_perf_300f",
   "episode_name": "episode_c6p2_perf_300f",
-  "dataset_root": "G:/FutsalMOT_Dataset/c6p2_perf_300f",
-  "ue_project_root": "D:/projects/FustalMOT_UEDataset",
+  "dataset_root": "${FUTSALMOT_DATASET_ROOT}/c6p2_perf_300f",
+  "ue_project_root": "${FUTSALMOT_UE_ROOT}",
   "export": {
     "scenario": "5_vs_5",
     "seed": 999,

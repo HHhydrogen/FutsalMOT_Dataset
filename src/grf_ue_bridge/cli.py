@@ -668,9 +668,19 @@ def _resolve_task_or_active(task: Optional[Path]) -> Path:
     return active
 
 
-def _resolve_runtime(task: Optional[Path]):
+def _resolve_runtime(
+    task: Optional[Path],
+    dataset_root: Optional[Path] = None,
+    ue_project_root: Optional[Path] = None,
+    local_config: Optional[Path] = None,
+):
     task_file = _resolve_task_or_active(task)
-    return task_file, _resolver.resolve_task(task_file)
+    return task_file, _resolver.resolve_task(
+        task_file,
+        dataset_root=str(dataset_root) if dataset_root else None,
+        ue_project_root=str(ue_project_root) if ue_project_root else None,
+        local_config=local_config,
+    )
 
 
 @task_app.command("validate")
@@ -678,10 +688,22 @@ def task_validate(
     task: Optional[Path] = typer.Argument(
         None, help="task 文件（缺省用 active task）"
     ),
+    dataset_root: Optional[Path] = typer.Option(None, "--dataset-root"),
+    ue_project_root: Optional[Path] = typer.Option(None, "--ue-project-root"),
+    local_config: Optional[Path] = typer.Option(None, "--local-config"),
 ):
     """只读校验 task（schema/机器路径/相机/帧数）。不生成文件。"""
     task_file = _resolve_task_or_active(task)
-    problems = _resolver.validate_task(task_file)
+    try:
+        _, resolved = _resolve_runtime(task, dataset_root, ue_project_root, local_config)
+        problems = _resolver.validate_task(
+            task_file,
+            dataset_root=resolved.dataset_root,
+            ue_project_root=resolved.ue_project_root,
+            local_config=None,
+        )
+    except ValueError as exc:
+        problems = [str(exc)]
     if problems:
         typer.echo(f"task validate: FAIL ({len(problems)} 项)")
         for p in problems:
@@ -695,9 +717,12 @@ def task_resolve(
     task: Optional[Path] = typer.Argument(
         None, help="task 文件（缺省用 active task）"
     ),
+    dataset_root: Optional[Path] = typer.Option(None, "--dataset-root"),
+    ue_project_root: Optional[Path] = typer.Option(None, "--ue-project-root"),
+    local_config: Optional[Path] = typer.Option(None, "--local-config"),
 ):
     """解析 task → 保存 resolved task，打印关键字段。"""
-    task_file, resolved = _resolve_runtime(task)
+    task_file, resolved = _resolve_runtime(task, dataset_root, ue_project_root, local_config)
     runtime_file = _resolver.save_resolved_task(
         resolved, Path(resolved.repo_root)
     )
@@ -718,11 +743,14 @@ def task_export(
     task: Optional[Path] = typer.Argument(
         None, help="task 文件（缺省用 active task）"
     ),
+    dataset_root: Optional[Path] = typer.Option(None, "--dataset-root"),
+    ue_project_root: Optional[Path] = typer.Option(None, "--ue-project-root"),
+    local_config: Optional[Path] = typer.Option(None, "--local-config"),
 ):
     """按 task 导出轨迹（复用现有 exporter），写 provenance。"""
     from grf_ue_bridge.workflows.task_export import run_export
 
-    _task_file, resolved = _resolve_runtime(task)
+    _task_file, resolved = _resolve_runtime(task, dataset_root, ue_project_root, local_config)
     rc = run_export(resolved, print_fn=typer.echo)
     if rc != 0:
         raise typer.Exit(rc)
@@ -733,9 +761,12 @@ def task_ue_command(
     task: Optional[Path] = typer.Argument(
         None, help="task 文件（缺省用 active task）"
     ),
+    dataset_root: Optional[Path] = typer.Option(None, "--dataset-root"),
+    ue_project_root: Optional[Path] = typer.Option(None, "--ue-project-root"),
+    local_config: Optional[Path] = typer.Option(None, "--local-config"),
 ):
     """输出可在 Unreal Editor Python Console 复制的命令（先保存 resolved task）。"""
-    task_file, resolved = _resolve_runtime(task)
+    task_file, resolved = _resolve_runtime(task, dataset_root, ue_project_root, local_config)
     runtime_file = _resolver.save_resolved_task(
         resolved, Path(resolved.repo_root)
     )
@@ -755,11 +786,14 @@ def task_postprocess(
     skip_validate: bool = typer.Option(False, "--skip-validate"),
     skip_pose: bool = typer.Option(False, "--skip-pose"),
     skip_debug: bool = typer.Option(False, "--skip-debug"),
+    dataset_root: Optional[Path] = typer.Option(None, "--dataset-root"),
+    ue_project_root: Optional[Path] = typer.Option(None, "--ue-project-root"),
+    local_config: Optional[Path] = typer.Option(None, "--local-config"),
 ):
     """按 task 顺序执行 cryptomatte → annotate → validate →（可选）yolo pose →（可选）debug。"""
     from grf_ue_bridge.workflows.task_postprocess import run_postprocess
 
-    _task_file, resolved = _resolve_runtime(task)
+    _task_file, resolved = _resolve_runtime(task, dataset_root, ue_project_root, local_config)
     rc = run_postprocess(
         resolved,
         skip_cryptomatte=skip_cryptomatte,
@@ -781,11 +815,14 @@ def task_audit(
     validation_level: str = typer.Option(
         "quick", "--validation-level", help="进程内 validate 级别（quick/full/none）"
     ),
+    dataset_root: Optional[Path] = typer.Option(None, "--dataset-root"),
+    ue_project_root: Optional[Path] = typer.Option(None, "--ue-project-root"),
+    local_config: Optional[Path] = typer.Option(None, "--local-config"),
 ):
     """对 task 的数据集目录运行完整性审计。"""
     from grf_ue_bridge.workflows.task_audit import main as audit_main
 
-    _task_file, resolved = _resolve_runtime(task)
+    _task_file, resolved = _resolve_runtime(task, dataset_root, ue_project_root, local_config)
     audit_cfg = resolved.audit
     requirements = resolve_task_requirements(resolved)
     # research_minimal 已 cleanup（dataset_manifest.cleanup_status=applied）→ mask/render/pose 属有意删除的 transient，
@@ -832,11 +869,14 @@ def task_motion_quality(
     min_window_s: float = typer.Option(60.0, "--min-window-s",
                                         help="期望的最小连续 active-play 秒数"),
     out: Optional[Path] = typer.Option(None, "--out", help="JSON 报告输出路径"),
+    dataset_root: Optional[Path] = typer.Option(None, "--dataset-root"),
+    ue_project_root: Optional[Path] = typer.Option(None, "--ue-project-root"),
+    local_config: Optional[Path] = typer.Option(None, "--local-config"),
 ):
     """对 task 的 trajectory（frames.jsonl）运行 Motion Quality Audit。"""
     from grf_ue_bridge.motion_quality import analyze_frames, find_active_window
 
-    _task_file, resolved = _resolve_runtime(task)
+    _task_file, resolved = _resolve_runtime(task, dataset_root, ue_project_root, local_config)
     frames_path = Path(resolved.trajectory_output) / "frames.jsonl"
     if not frames_path.is_file():
         typer.echo(f"ERROR: 缺 {frames_path}（先运行 grf-ue task export）", err=True)
@@ -867,11 +907,14 @@ def task_cleanup(
         None, help="task 文件（缺省用 active task）"
     ),
     apply: bool = typer.Option(False, "--apply", help="真正删除（默认 dry-run）"),
+    dataset_root: Optional[Path] = typer.Option(None, "--dataset-root"),
+    ue_project_root: Optional[Path] = typer.Option(None, "--ue-project-root"),
+    local_config: Optional[Path] = typer.Option(None, "--local-config"),
 ):
     """按 artifact_policy 清理 transient 产物。默认 dry-run。"""
     from grf_ue_bridge.workflows.artifact_cleanup import plan_cleanup, apply_cleanup
 
-    _task_file, resolved = _resolve_runtime(task)
+    _task_file, resolved = _resolve_runtime(task, dataset_root, ue_project_root, local_config)
     ep_dir = Path(resolved.dataset_episode_dir)
     ue_ann = (resolved.ue_profile.get("annotation_export") or {}) if resolved.ue_profile else {}
     cams = (ue_ann.get("cameras") or [])
@@ -900,11 +943,14 @@ def task_manifest(
     task: Optional[Path] = typer.Argument(
         None, help="task 文件（缺省用 active task）"
     ),
+    dataset_root: Optional[Path] = typer.Option(None, "--dataset-root"),
+    ue_project_root: Optional[Path] = typer.Option(None, "--ue-project-root"),
+    local_config: Optional[Path] = typer.Option(None, "--local-config"),
 ):
     """生成 dataset_manifest.json。"""
     from grf_ue_bridge.workflows.artifact_cleanup import build_manifest
 
-    _task_file, resolved = _resolve_runtime(task)
+    _task_file, resolved = _resolve_runtime(task, dataset_root, ue_project_root, local_config)
     ep_dir = Path(resolved.dataset_episode_dir)
     ue_ann = (resolved.ue_profile.get("annotation_export") or {}) if resolved.ue_profile else {}
     cams = (ue_ann.get("cameras") or [])
@@ -920,11 +966,14 @@ def task_status(
     task: Optional[Path] = typer.Argument(
         None, help="task 文件（缺省用 active task）；空参数时也可只查 active"
     ),
+    dataset_root: Optional[Path] = typer.Option(None, "--dataset-root"),
+    ue_project_root: Optional[Path] = typer.Option(None, "--ue-project-root"),
+    local_config: Optional[Path] = typer.Option(None, "--local-config"),
 ):
     """只读显示任务各产物状态（不修改文件）。"""
     from grf_ue_bridge.workflows.task_status import collect_status, print_status
 
-    _task_file, resolved = _resolve_runtime(task)
+    _task_file, resolved = _resolve_runtime(task, dataset_root, ue_project_root, local_config)
     st = collect_status(resolved)
     print_status(resolved, st, print_fn=typer.echo)
 
@@ -956,11 +1005,14 @@ def monitor_cmd(
     ),
     interval: float = typer.Option(30.0, "--interval"),
     out: Path = typer.Option(Path("soak_resources.csv"), "--out"),
+    dataset_root: Optional[Path] = typer.Option(None, "--dataset-root"),
+    ue_project_root: Optional[Path] = typer.Option(None, "--ue-project-root"),
+    local_config: Optional[Path] = typer.Option(None, "--local-config"),
 ):
     """渲染期间资源/目录增长监控（按 task 的 dataset 目录）。"""
     from grf_ue_bridge.tools.resource_monitor import main as mon_main
 
-    _task_file, resolved = _resolve_runtime(task)
+    _task_file, resolved = _resolve_runtime(task, dataset_root, ue_project_root, local_config)
     rc = mon_main(["--input", resolved.dataset_episode_dir,
                    "--interval", str(interval), "--out", str(out)])
     if rc != 0:

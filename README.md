@@ -28,7 +28,20 @@ uv run pytest
 - `google-research-football`：`3d9e754720a95621bba6475c4d3b0d56fe919014`
 - `GRF_MARL`：`6cf67a509dc204f5f413adaa57619652580c80f1`
 
-现有 `configs/*.json` 是单文件任务配置，包含 `dataset_root` 和 `ue_project_root` 的机器绝对路径。换机器时必须检查这些路径；不要假设配置中的盘符在其他环境存在。
+现有 `configs/*.json` 保留 `dataset_root` 和 `ue_project_root` 字段以兼容旧 schema，但推荐使用 `${FUTSALMOT_DATASET_ROOT}` / `${FUTSALMOT_UE_ROOT}` 占位符，并把实际机器路径放入被忽略的 `.futsalmot/local.json`。路径解析优先级为 CLI override > local runtime config > 环境变量 > task 占位符 > legacy task 路径。模板见 `.futsalmot/local.example.json`。
+
+`.futsalmot/local.json` 示例：
+
+```json
+{
+  "paths": {
+    "dataset_root": "/data/FutsalMOT",
+    "ue_project_root": "/projects/FutsalMOT_UE"
+  }
+}
+```
+
+`task resolve` 只解析并输出绝对路径，不创建目录或执行强环境检查。`task validate` 要求 `ue_project_root` 是存在且包含 `.uproject` 的目录，但允许 `dataset_root` 尚不存在；`task export` 在导出边界创建 dataset root。旧 task 中的绝对路径继续兼容，但会发出 deprecated path warning。
 
 ## 推荐流程
 

@@ -4,8 +4,8 @@
   "task_id": "c5p4_4cam_1920",
   "episode_name": "episode_c5p4_4cam_1920",
 
-  "dataset_root": "G:/FutsalMOT_Dataset/c5p4_4cam_1920",
-  "ue_project_root": "D:/projects/FustalMOT_UEDataset",
+  "dataset_root": "${FUTSALMOT_DATASET_ROOT}/c5p4_4cam_1920",
+  "ue_project_root": "${FUTSALMOT_UE_ROOT}",
 
   "export": {
     "scenario": "5_vs_5",

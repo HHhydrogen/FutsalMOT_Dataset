@@ -27,7 +27,7 @@ uv run pytest -m grf_integration -q
 uv run grf-ue task validate configs/<task>.json
 ```
 
-代码会加载 `futsalmot_dataset_task` v2，检查 Pydantic 字段、后处理格式、Pose 覆盖字段键名、相机数量、按 `num_steps * max(1, target_fps/10)` 计算的预期帧数，以及在配置了 `game_duration` 时的源时长条件。它只检查 `dataset_root` 和 `ue_project_root` 非空，不会确认路径一定存在，也不会确认 UE 项目真的包含 `.uproject`、地图或 Actor。
+代码会加载 `futsalmot_dataset_task` v2，检查 Pydantic 字段、后处理格式、Pose 覆盖字段键名、相机数量、按 `num_steps * max(1, target_fps/10)` 计算的预期帧数，以及在配置了 `game_duration` 时的源时长条件。路径解析支持 `.futsalmot/local.json`、环境变量和 CLI override；`task validate` 会确认 `ue_project_root` 存在且包含 `.uproject`，但允许 `dataset_root` 在 export 前不存在。`task resolve` 不创建目录或执行强环境检查，旧 task 绝对路径继续兼容并发出 warning。
 
 `task resolve` 的输出 schema 为 `futsalmot_resolved_task` v1，并将 episode 输出路径限制在 `dataset_root` 下。它是 P1/P2 共享的运行时路径契约，不应手工编辑。
 

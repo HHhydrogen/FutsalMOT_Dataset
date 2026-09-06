@@ -4,8 +4,8 @@
   "task_id": "bp_verify_30s_1cam",
   "episode_name": "episode_ue_30s_900f",
 
-  "dataset_root": "G:/FutsalMOT_Dataset",
-  "ue_project_root": "D:/projects/FustalMOT_UEDataset",
+  "dataset_root": "${FUTSALMOT_DATASET_ROOT}",
+  "ue_project_root": "${FUTSALMOT_UE_ROOT}",
 
   "export": {
     "scenario": "5_vs_5",

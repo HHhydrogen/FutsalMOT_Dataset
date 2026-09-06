@@ -4,8 +4,8 @@
   "task_id": "c5_smoke_1280",
   "episode_name": "episode_c5_smoke_1280",
 
-  "dataset_root": "G:/FutsalMOT_Dataset/c5_resolution_smoke_1280",
-  "ue_project_root": "D:/projects/FustalMOT_UEDataset",
+  "dataset_root": "${FUTSALMOT_DATASET_ROOT}/c5_resolution_smoke_1280",
+  "ue_project_root": "${FUTSALMOT_UE_ROOT}",
 
   "export": {
     "scenario": "5_vs_5",

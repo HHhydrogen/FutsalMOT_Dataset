@@ -4,8 +4,8 @@
   "task_id": "ue_facing_test_10s",
   "episode_name": "episode_ue_facing_test",
 
-  "dataset_root": "G:/FutsalMOT_Dataset",
-  "ue_project_root": "D:/projects/FustalMOT_UEDataset",
+  "dataset_root": "${FUTSALMOT_DATASET_ROOT}",
+  "ue_project_root": "${FUTSALMOT_UE_ROOT}",
 
   "export": {
     "scenario": "5_vs_5",

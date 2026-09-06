@@ -23,6 +23,7 @@ def _valid_png() -> bytes:
 def _make_task_dir(tmp_path: Path, cam_count: int = 1, frames: int = 1) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir(parents=True, exist_ok=True)
+    (repo / "FutsalMOT.uproject").write_text("{}", encoding="utf-8")
     ds = tmp_path / "ds"
     cameras = [f"CineCam_0{i}" for i in range(1, cam_count + 1)]
     task = {

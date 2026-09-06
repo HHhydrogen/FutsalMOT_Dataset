@@ -4,8 +4,8 @@
   "task_id": "production_900frames_30fps_4cam",
   "episode_name": "episode_prod_900f_30fps_4cam_v4",
 
-  "dataset_root": "G:/FutsalMOT_Dataset/prod_900f_4cam_v4",
-  "ue_project_root": "D:/projects/FustalMOT_UEDataset",
+  "dataset_root": "${FUTSALMOT_DATASET_ROOT}/prod_900f_4cam_v4",
+  "ue_project_root": "${FUTSALMOT_UE_ROOT}",
 
   "export": {
     "scenario": "5_vs_5",

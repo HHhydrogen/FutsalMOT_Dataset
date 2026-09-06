@@ -25,11 +25,11 @@ git rev-parse HEAD
 内层 commit 必须先成功推送到 `origin/main`，外层才可以记录它。完成内层 push 后，外层仓库的更新顺序是：
 
 ```powershell
-git -C D:\projects\FustalMOT_UEDataset status --short --branch
-git -C D:\projects\FustalMOT_UEDataset add Content/FutsalMOT/code
-git -C D:\projects\FustalMOT_UEDataset diff --cached --submodule=short -- Content/FutsalMOT/code
-git -C D:\projects\FustalMOT_UEDataset commit -m "<简体中文提交说明>"
-git -C D:\projects\FustalMOT_UEDataset push origin master
+git -C D:\projects\FutsalMOT_UEDataset status --short --branch
+git -C D:\projects\FutsalMOT_UEDataset add Content/FutsalMOT/code
+git -C D:\projects\FutsalMOT_UEDataset diff --cached --submodule=short -- Content/FutsalMOT/code
+git -C D:\projects\FutsalMOT_UEDataset commit -m "<简体中文提交说明>"
+git -C D:\projects\FutsalMOT_UEDataset push origin master
 ```
 
 注意事项：

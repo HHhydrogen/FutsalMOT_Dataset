@@ -6,8 +6,8 @@
   "task_id": "my_dataset",
   "episode_name": "episode_my_dataset",
 
-  "dataset_root": "<DATASET_ROOT>",
-  "ue_project_root": "<UE_PROJECT_ROOT>",
+  "dataset_root": "${FUTSALMOT_DATASET_ROOT}",
+  "ue_project_root": "${FUTSALMOT_UE_ROOT}",
 
   "export": {
     "scenario": "5_vs_5",

@@ -55,8 +55,8 @@ task 文件的顶层 schema 是：
   "version": 2,
   "task_id": "...",
   "episode_name": "...",
-  "dataset_root": "绝对路径",
-  "ue_project_root": "绝对路径",
+  "dataset_root": "${FUTSALMOT_DATASET_ROOT} 或 legacy 路径",
+  "ue_project_root": "${FUTSALMOT_UE_ROOT} 或 legacy 路径",
   "export": {},
   "ue": {},
   "postprocess": {},
@@ -65,7 +65,7 @@ task 文件的顶层 schema 是：
 }
 ```
 
-`export` 和 `ue` 必须内联在同一个 JSON 中；`ue.actor_mapping` 默认相对 Python 仓库根目录解析为 `ue/actor_mapping.example.json`。`postprocess.formats` 的合法值是 `json`、`mot`、`yolo-det`、`yolo-seg`，`yolo_pose.enabled` 和 `debug.enabled` 默认关闭。
+`export` 和 `ue` 必须内联在同一个 JSON 中；`ue.actor_mapping` 默认相对 Python 仓库根目录解析为 `ue/actor_mapping.example.json`。`postprocess.formats` 的合法值是 `json`、`mot`、`yolo-det`、`yolo-seg`，`yolo_pose.enabled` 和 `debug.enabled` 默认关闭。路径可由 `.futsalmot/local.json`、`FUTSALMOT_DATASET_ROOT` / `FUTSALMOT_UE_ROOT` 或 task CLI override 提供，优先级为 CLI > local > environment > task placeholder > legacy task path。
 
 `task resolve` 产生的运行时 schema 是 `futsalmot_resolved_task`，版本为 `1`。它包含绝对的 `repo_root`、`dataset_root`、`ue_project_root`、`trajectory_output`、`dataset_episode_dir`、`actor_mapping`，以及归一化后的 `export_profile`、`ue_profile`、`postprocess` 和 `audit`。该文件在 `.futsalmot/runtime/<task_id>/resolved-task.json`，属于被忽略的运行时文件，不是提交契约。
 

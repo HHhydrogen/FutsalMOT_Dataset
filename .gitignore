@@ -28,7 +28,8 @@ Intermediate/
 Saved/
 
 # 运行时产物（resolved task / active task）
-.futsalmot/
+.futsalmot/*
+!.futsalmot/local.example.json
 _futsalmot/
 runtime/
 reports/local/

@@ -128,6 +128,15 @@ def print_status(resolved: m.ResolvedTask, st: Dict, print_fn: Callable[[str], N
         if validation.get("passed") is False:
             print_fn("Task success: NO")
             print_fn("  action: inspect audit errors before treating the task as usable")
+    run_manifest = st.get("run_manifest")
+    if run_manifest:
+        print_fn("Run Manifest: " + str(run_manifest.get("path", "available")))
+        source = run_manifest.get("source") or {}
+        print_fn(f"  code commit: {source.get('code_commit')}")
+        print_fn(f"  ue commit: {source.get('ue_commit')}")
+        manifest_validation = run_manifest.get("validation") or {}
+        if manifest_validation.get("passed") is not None:
+            print_fn(f"  manifest validation: {'PASS' if manifest_validation['passed'] else 'FAIL'}")
     for cam, c in st["cameras"].items():
         print_fn(
             f"    {cam}: render={c['render_rgb']} exr={c['object_id_exr']} "

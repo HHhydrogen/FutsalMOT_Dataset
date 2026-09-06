@@ -95,6 +95,8 @@ uv run grf-ue task audit configs/<task>.json --validation-level full
 
 Pipeline State 是独立的执行进度记录，位置为 `.futsalmot/runtime/<task_id>/pipeline_state.json`。`task status` 展示固定的 `export`、`ue_sequence`、`render`、`postprocess`、`audit`、`cleanup` 六步；`task resume` 对 completed 跳过、failed 重试、pending 执行、skipped 保持，`RUNNING` 一律按步骤证据处理为 unknown。Pipeline State 的 completed 不表示数据通过验证；数据正确性仍由 Audit report 的 `ValidationResult.passed` 决定。`ue_sequence` 的 completed 只表示 command generation 完成。
 
+Run Manifest 位于 `.futsalmot/runtime/<task_id>/run_manifest.json`，只汇总一次运行的来源、时间、Pipeline State 和 Audit validation，以及尽力统计的 artifact 数量。`task_hash` 只基于原始 Task Spec JSON 内容；local config、resolved path 和 machine path 不参与 hash。Python/UE commit 无法获取时写 `null`，artifact 统计失败只记录 error，不阻断已有 workflow。Cleanup 在删除 transient 前写入摘要，避免删除后丢失计数。
+
 ## Manifest 和重复检测
 
 ```powershell

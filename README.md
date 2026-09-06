@@ -146,6 +146,8 @@ grf-ue benchmark
 
 Pipeline State 保存在 `.futsalmot/runtime/<task_id>/pipeline_state.json`，只记录固定六步的执行进度：`export`、`ue_sequence`、`render`、`postprocess`、`audit`、`cleanup`。`task status` 展示这些状态，`task resume` 跳过已完成步骤并重试失败步骤；`RUNNING` 被视为未知，必须根据步骤产物决定恢复。`ue_sequence=COMPLETED` 只表示 UE command 已生成，不表示 UE/MRQ/render 完成。Pipeline State 的 `COMPLETED` 也不等于数据正确，最终仍以 Audit 的 `ValidationResult.passed` 为准。
 
+每次 task workflow 还会在同一 runtime 目录写入 `run_manifest.json`。它记录原始 task JSON 的 SHA-256、Python/UE Git commit（无法获取时为 `null`）、运行时间、Pipeline State 摘要、Audit 的 `ValidationResult.passed` 和轻量 artifact 计数。Run Manifest 只做结果和来源记录，不替代 Pipeline State 或 ValidationResult；artifact 统计失败只记录 error，不阻断 workflow。Cleanup 在删除 transient 前记录 artifact 摘要。
+
 直接 `export` 读取的是只含 `ExportConfig` 字段的旧式 JSON；包含 `schema`、`dataset_root`、`ue`、`postprocess` 和 `audit` 的单文件配置应使用 `task` 工作流。
 
 ## 代码分层

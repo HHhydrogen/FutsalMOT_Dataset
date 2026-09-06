@@ -126,6 +126,7 @@ class TestTaskStatusAudit:
         assert "episode_cli_t1" in r.output
         assert "Pipeline State:" in r.output
         assert "export:" in r.output
+        assert "Run Manifest:" in r.output
         assert "Schema version:" in r.output
         assert "Current step:" in r.output
 
@@ -137,6 +138,11 @@ class TestTaskStatusAudit:
         state_path = pin_repo_root / ".futsalmot" / "runtime" / "cli_t1" / "pipeline_state.json"
         state = json.loads(state_path.read_text(encoding="utf-8"))
         assert state["steps"]["audit"]["status"] == "COMPLETED"
+        run_manifest = pin_repo_root / ".futsalmot" / "runtime" / "cli_t1" / "run_manifest.json"
+        manifest = json.loads(run_manifest.read_text(encoding="utf-8"))
+        assert manifest["validation"]["passed"] is True
+        assert manifest["validation"]["audit_report"].endswith("soak_audit_report.json")
+        assert not (tmp_path / "ds" / "episode_cli_t1" / "dataset_manifest.json").exists()
 
     def test_postprocess_skip_all_noop(self, tmp_path, pin_repo_root):
         tf = _make_task_dir(tmp_path)

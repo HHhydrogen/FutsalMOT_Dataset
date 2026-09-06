@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
@@ -656,6 +657,14 @@ from grf_ue_bridge.pipeline_state import (
     ensure_start_allowed,
 )
 from grf_ue_bridge.task_requirements import resolve_task_requirements
+from grf_ue_bridge.run_manifest import (
+    create_run_manifest,
+    load_run_manifest,
+    run_manifest_path,
+    save_run_manifest,
+    update_artifacts,
+    update_validation,
+)
 
 task_app = typer.Typer(help="基于 dataset task 配置的工作流（推荐入口）")
 app.add_typer(task_app, name="task")
@@ -744,6 +753,36 @@ def _finish_pipeline_step(state, path, step, return_code=0, *, completion_type=N
 def _fail_pipeline_step(state, path, step, exc):
     mark_failed(state, step, exc)
     _save_pipeline_state(state, path)
+
+
+def _run_manifest(resolved, task_file):
+    """加载或创建运行摘要；manifest 损坏时不覆盖，交由调用方处理。"""
+    path = run_manifest_path(Path(resolved.repo_root), resolved.task_id)
+    manifest = load_run_manifest(path) if path.is_file() else create_run_manifest(
+        resolved.task_id, task_file, Path(resolved.repo_root)
+    )
+    return manifest, path
+
+
+def _save_run_manifest_best_effort(manifest, path, print_fn=typer.echo):
+    try:
+        save_run_manifest(manifest, path)
+    except (OSError, ValueError, TypeError) as exc:
+        print_fn(f"WARN: run manifest 未能保存: {exc}")
+
+
+def _finish_run_manifest(manifest, path, resolved, print_fn=typer.echo):
+    try:
+        pipeline_path = state_path(Path(resolved.repo_root), resolved.task_id)
+        manifest["pipeline"]["state"] = load_state(pipeline_path).state
+    except (OSError, ValueError):
+        manifest["pipeline"]["state"] = None
+    try:
+        update_artifacts(manifest, Path(resolved.dataset_episode_dir))
+    except Exception as exc:
+        manifest.setdefault("artifacts", {})["errors"] = [str(exc)]
+    manifest["runtime"]["finished_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    _save_run_manifest_best_effort(manifest, path, print_fn)
 
 
 def _sync_render_state_from_audit(resolved, state, path):
@@ -876,13 +915,17 @@ def task_export(
     from grf_ue_bridge.workflows.task_export import run_export
 
     _task_file, resolved = _resolve_runtime(task, dataset_root, ue_project_root, local_config)
+    manifest, manifest_path = _run_manifest(resolved, _task_file)
+    _save_run_manifest_best_effort(manifest, manifest_path)
     state, state_file = _start_pipeline_step(resolved, "export", force=force)
     try:
         rc = run_export(resolved, print_fn=typer.echo)
     except Exception as exc:
         _fail_pipeline_step(state, state_file, "export", exc)
+        _finish_run_manifest(manifest, manifest_path, resolved)
         raise
     _finish_pipeline_step(state, state_file, "export", rc)
+    _finish_run_manifest(manifest, manifest_path, resolved)
     if rc != 0:
         raise typer.Exit(rc)
 
@@ -899,6 +942,8 @@ def task_ue_command(
 ):
     """输出可在 Unreal Editor Python Console 复制的命令（先保存 resolved task）。"""
     task_file, resolved = _resolve_runtime(task, dataset_root, ue_project_root, local_config)
+    manifest, manifest_path = _run_manifest(resolved, task_file)
+    _save_run_manifest_best_effort(manifest, manifest_path)
     state, state_file = _start_pipeline_step(resolved, "ue_sequence", force=force)
     try:
         runtime_file = _resolver.save_resolved_task(
@@ -915,8 +960,10 @@ def task_ue_command(
             completion_type="command_generation",
             note="仅表示 UE command 已生成，不表示 UE/MRQ/render 完成",
         )
+        _finish_run_manifest(manifest, manifest_path, resolved)
     except Exception as exc:
         _fail_pipeline_step(state, state_file, "ue_sequence", exc)
+        _finish_run_manifest(manifest, manifest_path, resolved)
         raise
 
 
@@ -939,6 +986,8 @@ def task_postprocess(
     from grf_ue_bridge.workflows.task_postprocess import run_postprocess
 
     _task_file, resolved = _resolve_runtime(task, dataset_root, ue_project_root, local_config)
+    manifest, manifest_path = _run_manifest(resolved, _task_file)
+    _save_run_manifest_best_effort(manifest, manifest_path)
     state, state_file = _start_pipeline_step(resolved, "postprocess", force=force)
     try:
         rc = run_postprocess(
@@ -952,8 +1001,10 @@ def task_postprocess(
         )
     except Exception as exc:
         _fail_pipeline_step(state, state_file, "postprocess", exc)
+        _finish_run_manifest(manifest, manifest_path, resolved)
         raise
     _finish_pipeline_step(state, state_file, "postprocess", rc)
+    _finish_run_manifest(manifest, manifest_path, resolved)
     if rc != 0:
         raise typer.Exit(rc)
 
@@ -975,15 +1026,17 @@ def task_audit(
     from grf_ue_bridge.workflows.task_audit import main as audit_main
 
     _task_file, resolved = _resolve_runtime(task, dataset_root, ue_project_root, local_config)
+    manifest, manifest_path = _run_manifest(resolved, _task_file)
+    _save_run_manifest_best_effort(manifest, manifest_path)
     audit_cfg = resolved.audit
     requirements = resolve_task_requirements(resolved)
     # research_minimal 已 cleanup（dataset_manifest.cleanup_status=applied）→ mask/render/pose 属有意删除的 transient，
     # audit 不应再要求它们存在（只校验 canonical）。
-    manifest_path = Path(resolved.dataset_episode_dir) / "dataset_manifest.json"
+    dataset_manifest_path = Path(resolved.dataset_episode_dir) / "dataset_manifest.json"
     cleanup_applied = False
-    if manifest_path.is_file():
+    if dataset_manifest_path.is_file():
         try:
-            mf = json.loads(manifest_path.read_text(encoding="utf-8"))
+            mf = json.loads(dataset_manifest_path.read_text(encoding="utf-8"))
             cleanup_applied = mf.get("cleanup_status") == "applied"
         except Exception:
             pass
@@ -1013,9 +1066,13 @@ def task_audit(
         ])
     except Exception as exc:
         _fail_pipeline_step(state, state_file, "audit", exc)
+        _finish_run_manifest(manifest, manifest_path, resolved)
         raise
     _finish_pipeline_step(state, state_file, "audit", rc)
     _sync_render_state_from_audit(resolved, state, state_file)
+    audit_report_path = Path(resolved.dataset_episode_dir) / "audit" / "soak_audit_report.json"
+    update_validation(manifest, audit_report_path)
+    _finish_run_manifest(manifest, manifest_path, resolved)
     if rc != 0:
         raise typer.Exit(rc)
 
@@ -1075,6 +1132,12 @@ def task_cleanup(
     from grf_ue_bridge.workflows.artifact_cleanup import plan_cleanup, apply_cleanup
 
     _task_file, resolved = _resolve_runtime(task, dataset_root, ue_project_root, local_config)
+    manifest, manifest_path = _run_manifest(resolved, _task_file)
+    try:
+        update_artifacts(manifest, Path(resolved.dataset_episode_dir))
+    except Exception as exc:
+        manifest.setdefault("artifacts", {})["errors"] = [str(exc)]
+    _save_run_manifest_best_effort(manifest, manifest_path)
     state, state_file = _start_pipeline_step(resolved, "cleanup", force=force)
     ep_dir = Path(resolved.dataset_episode_dir)
     ue_ann = (resolved.ue_profile.get("annotation_export") or {}) if resolved.ue_profile else {}
@@ -1086,8 +1149,10 @@ def task_cleanup(
             rep = plan_cleanup(ep_dir, cams, profile, dry_run=True, resolved=resolved)
         except Exception as exc:
             _fail_pipeline_step(state, state_file, "cleanup", exc)
+            _finish_run_manifest(manifest, manifest_path, resolved)
             raise
         _finish_pipeline_step(state, state_file, "cleanup", 0, note="dry-run 未删除文件")
+        _finish_run_manifest(manifest, manifest_path, resolved)
         typer.echo(json.dumps(rep, indent=2, ensure_ascii=False))
         typer.echo("\n(DRY-RUN 未删除任何文件；加 --apply 真正执行)")
         return
@@ -1095,12 +1160,14 @@ def task_cleanup(
         result = apply_cleanup(ep_dir, cams, profile, resolved=resolved)
     except Exception as exc:
         _fail_pipeline_step(state, state_file, "cleanup", exc)
+        _finish_run_manifest(manifest, manifest_path, resolved)
         raise
     typer.echo(json.dumps(result, indent=2, ensure_ascii=False))
     if not result.get("ok"):
         _finish_pipeline_step(state, state_file, "cleanup", 1)
         raise typer.Exit(1)
     _finish_pipeline_step(state, state_file, "cleanup", 0)
+    _finish_run_manifest(manifest, manifest_path, resolved)
     # apply 后写 dataset_manifest（cleanup_status=applied），供 audit 感知已清理
     from grf_ue_bridge.workflows.artifact_cleanup import build_manifest
     manifest = build_manifest(ep_dir, resolved.model_dump(), cams)
@@ -1147,6 +1214,14 @@ def task_status(
 
     _task_file, resolved = _resolve_runtime(task, dataset_root, ue_project_root, local_config)
     st = collect_status(resolved)
+    manifest_path = run_manifest_path(Path(resolved.repo_root), resolved.task_id)
+    if manifest_path.is_file():
+        try:
+            st["run_manifest"] = load_run_manifest(manifest_path)
+        except ValueError as exc:
+            st["run_manifest"] = {"path": str(manifest_path), "error": str(exc)}
+    else:
+        st["run_manifest"] = {"path": str(manifest_path), "available": False}
     print_status(resolved, st, print_fn=typer.echo)
 
 

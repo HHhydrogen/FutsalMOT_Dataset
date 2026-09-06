@@ -71,6 +71,8 @@ task 文件的顶层 schema 是：
 
 同一 runtime 目录还可保存 `pipeline_state.json`，schema 为 `futsalmot_pipeline_state` v1。它记录固定步骤的执行进度和失败信息，不改变 resolved-task 或数据 artifact 格式，也不替代 Audit 的 `ValidationResult`。
 
+同一 runtime 目录还可保存 `run_manifest.json`，schema 为 `futsalmot_run_manifest` v1。Run Manifest 记录原始 task JSON hash、代码和可选 UE commit、运行时间、Pipeline State 摘要、Audit `ValidationResult.passed` 以及 best-effort artifact counts。它是运行结果摘要，不属于数据 artifact 格式，也不参与 Audit/Cleanup 的成功判定。
+
 ## Episode 轨迹
 
 ### `meta.json`

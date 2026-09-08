@@ -137,6 +137,15 @@ cleanup 必须先读取 canonical audit JSON：缺少 audit 报告直接 fail sa
 
 ## 已知实现限制
 
+### Camera Coverage 语义
+
+相机 profile 的 `coverage` 字段描述 camera distribution strategy 的覆盖目标，而不是单个相机 footprint 的独立能力：
+
+- `full_field` 的判断对象是选定 camera set 的联合覆盖范围。当前 `anchor_only` 和 `anchor_plus_one_partial` 的 canonical Anchor set 均为 `C1..C5`。
+- `C1..C5` 中每个相机可以只覆盖球场的一部分；只要选定 Anchor set 的 footprint 合并后覆盖完整场地，就符合 set-level `full_field` 语义。
+- `partial_field` 表示局部补充相机。当前 `P01` 是 `partial_field`，区域意图为 `left_half`。
+- 单个相机的二维理论 footprint 不能证明像素覆盖、遮挡、球员可见性或 MOT 质量；set-level 几何覆盖也不替代这些验证。
+
 ### 配置与时长
 
 - 配置中的 `game_duration` 在 `ExportConfig`/`grf_runner.py` 中表示单个 GRF 回合的引擎帧数；`resolver.validate_task()` 的源时长检查却把它按秒比较。这是当前单位不一致，不能把 task validate 的时长结果当作完整的 GRF 回合覆盖证明。

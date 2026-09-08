@@ -154,6 +154,17 @@ img1/000001.png      <-> annotation frame_index=1 <-> source_step=0
 
 ## Actor、相机和几何标注
 
+### Camera Coverage 语义
+
+`simulation.camera.profiles.<camera_id>.coverage` 描述的是相机分布策略的覆盖意图，不能直接解释为单个相机 footprint 的集合覆盖结果：
+
+- `full_field` 表示选定的 camera set 的整体目标是覆盖完整场地。当前 canonical Anchor set 为 `C1..C5`，因此 `C1..C5` 的联合 footprint 才是 full-field coverage 的判断对象。
+- `partial_field` 表示该相机作为分布策略中的局部补充视角。当前 `P01` 使用 `partial_field + left_half`。
+- 单个 `full_field` profile 不要求其理论地面 footprint 独立包含球场四个角点。
+- `Camera Coverage Visualization` 展示单相机 footprint；set-level full-field 结论需要合并选定 camera set 的 footprint 后判断。
+
+该语义澄清不改变相机位置、旋转、镜头、分辨率、UE Actor 或运行时 camera selection 行为。
+
 默认映射文件 `ue/actor_mapping.example.json` 为：
 
 | entity_id | UE Actor 标签 | track_id | mask_id |

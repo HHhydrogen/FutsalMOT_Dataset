@@ -109,6 +109,11 @@ def focal_length_to_fov_deg(focal_length_mm: float, sensor_size_mm: float) -> fl
     return 2 * math.degrees(math.atan(sensor_size_mm / (2 * focal_length_mm)))
 
 
+def focal_length_to_horizontal_fov_deg(focal_length_mm: float) -> float:
+    """按本项目固定水平 filmback 宽度从焦距推导水平 FOV。"""
+    return focal_length_to_fov_deg(focal_length_mm, 23.76)
+
+
 def fov_deg_to_focal_length(fov_deg: float, sensor_size_mm: float) -> float:
     """视场角（度）→ 焦距（mm）。sensor_size_mm 为对应轴的尺寸。"""
     return sensor_size_mm / (2 * math.tan(math.radians(fov_deg) / 2))

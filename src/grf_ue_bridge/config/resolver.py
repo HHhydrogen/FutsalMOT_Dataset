@@ -24,6 +24,76 @@ from grf_ue_bridge.config.paths import (
 )
 
 
+def _validate_camera_mapping(task: m.DatasetTaskConfig) -> None:
+    """校验 anchor 相机到 UE Actor/Sequence 的跨字段映射。"""
+    if task.simulation is None:
+        return
+
+    required = {"C1", "C2", "C3", "C4", "C5"}
+    mapping = task.ue.camera_mapping
+    if mapping is None:
+        raise ValueError(
+            "simulation.camera 存在时必须提供 ue.camera_mapping，且完整包含 C1..C5"
+        )
+    profile_ids = set(task.simulation.camera.profiles)
+    mapping_ids = set(mapping)
+    allowed_mapping_ids = required | {"P01"}
+    p01_required_but_missing = "P01" in profile_ids and "P01" not in mapping_ids
+    if (
+        not required.issubset(mapping_ids)
+        or not mapping_ids.issubset(allowed_mapping_ids)
+        or p01_required_but_missing
+    ):
+        missing = sorted(required - mapping_ids)
+        unknown = sorted(mapping_ids - allowed_mapping_ids)
+        if "P01" in profile_ids and "P01" not in mapping_ids:
+            missing.append("P01")
+        details = []
+        if missing:
+            details.append(f"缺少 {', '.join(missing)}")
+        if unknown:
+            details.append(f"未知 {', '.join(unknown)}")
+        raise ValueError(
+            "ue.camera_mapping 必须恰好包含 C1,C2,C3,C4,C5（"
+            + "；".join(details)
+            + "）"
+        )
+
+    if "P01" in mapping_ids and "P01" not in profile_ids:
+        raise ValueError("ue.camera_mapping.P01 只有在 P01 profile 存在时才允许")
+
+    episode_profile = task.simulation.camera.distribution.episode_profile
+    if episode_profile == "anchor_plus_one_partial":
+        if "P01" not in profile_ids or "P01" not in mapping_ids:
+            raise ValueError(
+                "anchor_plus_one_partial 要求同时提供 P01 profile 和 ue.camera_mapping.P01"
+            )
+    elif episode_profile == "anchor_plus_two_partial":
+        raise ValueError(
+            "anchor_plus_two_partial 当前需要第二个已实现 Partial Camera，例如 P02"
+        )
+
+    actors = {}
+    for camera_id in sorted(mapping):
+        entry = mapping[camera_id]
+        actor = entry.actor.strip()
+        sequence = entry.sequence.strip()
+        if not actor:
+            raise ValueError(f"Canonical ID {camera_id} 的 camera_mapping.actor 不能为空")
+        if not sequence:
+            raise ValueError(
+                f"Canonical ID {camera_id} 的 camera_mapping.sequence 不能为空"
+            )
+        previous_id = actors.get(actor)
+        if previous_id is not None:
+            raise ValueError(
+                f"Canonical ID {camera_id} 的 UE Actor {actor!r} 与 {previous_id} 重复"
+            )
+        actors[actor] = camera_id
+
+    task.simulation.camera.validate_camera_contract()
+
+
 # ── 校验（只读，不写文件）───────────────────────────────────────────────
 
 def validate_task(
@@ -39,6 +109,7 @@ def validate_task(
 
     try:
         task = loader.load_task_config(task_file)
+        _validate_camera_mapping(task)
     except Exception as e:  # noqa: BLE001
         return [f"task 解析失败: {e}"]
 
@@ -107,6 +178,7 @@ def resolve_task(
     """把单 config 解析为运行时 resolved task（含绝对路径）。"""
     task_file = task_file.resolve()
     task = loader.load_task_config(task_file)
+    _validate_camera_mapping(task)
 
     repo_root = _paths.default_repo_root()
     dataset_path, ue_project_path = resolve_runtime_paths(
@@ -123,6 +195,14 @@ def resolve_task(
     if "playback_fps" not in ann_export:
         ann_export["playback_fps"] = task.export.playback_fps
     ue_profile["annotation_export"] = ann_export
+    if task.simulation is not None:
+        ue_profile["camera_mapping"] = {
+            camera_id: {
+                "actor": mapping.actor.strip(),
+                "sequence": mapping.sequence.strip(),
+            }
+            for camera_id, mapping in task.ue.camera_mapping.items()
+        }
 
     return m.ResolvedTask(
         task_id=task.task_id,
@@ -134,6 +214,7 @@ def resolve_task(
         trajectory_output=str(episode_dir),
         dataset_episode_dir=str(episode_dir),
         export_profile=task.export.model_dump(),
+        simulation=(task.simulation.model_dump() if task.simulation is not None else {}),
         ue_profile=ue_profile,
         actor_mapping=str(actor_mapping),
         postprocess=task.postprocess.model_dump(),

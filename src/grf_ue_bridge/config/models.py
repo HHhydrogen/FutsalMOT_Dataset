@@ -7,7 +7,7 @@ resolved task 是 P1↔UE 共享的运行时契约。
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List, Literal, Optional
+from typing import ClassVar, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -153,12 +153,189 @@ class AuditTaskConfig(BaseModel):
     expected_frames_per_camera: int = Field(300, ge=1)
 
 
+class CameraLensConfig(BaseModel):
+    """相机镜头参数：焦距是唯一 authority，FOV 仅作兼容性断言。"""
+
+    focal_length_mm: Optional[float] = Field(None, gt=0.0)
+    horizontal_fov_deg: Optional[float] = Field(None, gt=0.0, lt=180.0)
+
+    model_config = {"extra": "forbid"}
+
+class CameraProfileConfig(BaseModel):
+    """静态监控相机 profile，支持 C1..C5 anchor 和 P01 partial prototype。"""
+
+    type: Literal["static_surveillance"]
+    coverage: Literal["full_field", "partial_field"]
+    region: Optional[Literal["left_half"]] = None
+    coverage_ratio: Optional[float] = Field(None, gt=0.0, lt=1.0)
+    placement_template: Optional[str] = None
+    resolution: List[int] = Field(default_factory=lambda: [1920, 1080])
+    lens: CameraLensConfig = Field(default_factory=CameraLensConfig)
+    position_m: List[float]
+    rotation_deg: List[float]
+    height_m: float = Field(..., gt=0.0)
+    distortion: Optional[Dict] = None
+
+    model_config = {"extra": "forbid"}
+
+
+class CameraDistributionConfig(BaseModel):
+    """固定五个 canonical anchor 的分布配置。"""
+
+    system: Literal["dual"] = "dual"
+    anchors: List[Literal["C1", "C2", "C3", "C4", "C5"]]
+    episode_profile: Literal[
+        "anchor_only",
+        "anchor_plus_one_partial",
+        "anchor_plus_two_partial",
+    ] = "anchor_only"
+    static_surveillance_ratio: Optional[List[float]] = None
+    dynamic_broadcast_ratio: Optional[List[float]] = None
+
+    model_config = {"extra": "forbid"}
+
+    def validate_anchor_contract(self) -> None:
+        required = ["C1", "C2", "C3", "C4", "C5"]
+        if self.anchors != required:
+            raise ValueError("anchor cameras 必须按 C1..C5 顺序完整提供")
+
+
+class SimulationCameraConfig(BaseModel):
+    """simulation.camera 的 canonical anchor 和受控 partial 配置。"""
+
+    distribution: CameraDistributionConfig
+    profiles: Dict[str, CameraProfileConfig]
+
+    _RESOLUTION_ALLOWLIST: ClassVar[Dict[str, set]] = {
+        "C1": {(1920, 1080), (2560, 1440)},
+        "C2": {(1920, 1080), (2560, 1440)},
+        "C3": {(1920, 1080), (2560, 1440)},
+        "C4": {(1920, 1080), (2560, 1440)},
+        # 1920x1080 remains valid for legacy C5 tasks.
+        "C5": {(1920, 1080), (2560, 1440), (3840, 2160)},
+    }
+    _FOCAL_LENGTH_ALLOWLIST: ClassVar[Dict[str, set]] = {
+        "C1": {12.0, 15.0, 18.0},
+        "C2": {12.0, 15.0, 18.0},
+        "C3": {12.0, 15.0, 18.0},
+        "C4": {12.0, 15.0, 18.0},
+        "C5": {8.0, 10.0, 12.0},
+    }
+    _DEFAULT_FOCAL_LENGTH_MM: ClassVar[Dict[str, float]] = {
+        "C1": 15.0,
+        "C2": 15.0,
+        "C3": 15.0,
+        "C4": 15.0,
+        "C5": 10.0,
+    }
+    _FOV_TOLERANCE_DEG: ClassVar[float] = 1e-3
+    _ALLOWED_PROFILE_IDS: ClassVar[set] = {"C1", "C2", "C3", "C4", "C5", "P01"}
+
+    model_config = {"extra": "forbid"}
+
+    def validate_camera_contract(self) -> None:
+        self.distribution.validate_anchor_contract()
+        required = ["C1", "C2", "C3", "C4", "C5"]
+        profile_ids = set(self.profiles)
+        if not set(required).issubset(profile_ids) or not profile_ids.issubset(self._ALLOWED_PROFILE_IDS):
+            actual = ",".join(sorted(self.profiles)) or "<empty>"
+            raise ValueError(
+                f"camera profiles 必须包含 C1..C5，且只允许额外 P01，当前 ID: {actual}"
+            )
+        for camera_id, profile in self.profiles.items():
+            if camera_id in required and profile.coverage != "full_field":
+                raise ValueError(f"canonical camera {camera_id} 必须使用 coverage=full_field")
+            if profile.coverage == "full_field" and (
+                profile.region is not None or profile.coverage_ratio is not None
+            ):
+                raise ValueError(f"full_field camera {camera_id} 不允许 region 或 coverage_ratio")
+            if profile.coverage == "partial_field":
+                if camera_id != "P01" or profile.region != "left_half":
+                    raise ValueError("partial camera 当前只允许 P01 + region=left_half")
+                if profile.placement_template != "left_half_sideline_high_v1":
+                    raise ValueError("P01 必须使用 placement_template=left_half_sideline_high_v1")
+            if camera_id == "P01" and profile.coverage != "partial_field":
+                raise ValueError("P01 必须使用 coverage=partial_field")
+            if len(profile.resolution) != 2 or any(v <= 0 for v in profile.resolution):
+                raise ValueError(f"camera resolution[{camera_id}] 必须为正数 [width, height]")
+            resolution = tuple(profile.resolution)
+            allowed = self._RESOLUTION_ALLOWLIST.get(camera_id, set())
+            if camera_id == "P01":
+                allowed = {(1920, 1080)}
+            if resolution not in allowed:
+                choices = ", ".join(
+                    "{}x{}".format(width, height)
+                    for width, height in sorted(allowed)
+                )
+                raise ValueError(
+                    f"camera resolution[{camera_id}] 不在允许集合内: "
+                    f"{resolution[0]}x{resolution[1]}（可选 {choices}）"
+                )
+            if len(profile.position_m) != 3 or len(profile.rotation_deg) != 3:
+                raise ValueError(
+                    f"camera position_m / rotation_deg[{camera_id}] 必须为三维向量"
+                )
+            if abs(profile.position_m[2] - profile.height_m) > 1e-6:
+                raise ValueError(f"camera height_m[{camera_id}] 必须与 position_m[2] 一致")
+            lens = profile.lens
+            if lens.focal_length_mm is None:
+                if lens.horizontal_fov_deg is not None:
+                    raise ValueError(
+                        f"camera lens[{camera_id}] 必须提供 focal_length_mm；"
+                        " horizontal_fov_deg 不能控制焦距"
+                    )
+                lens.focal_length_mm = self._DEFAULT_FOCAL_LENGTH_MM[camera_id]
+            focal_length = float(lens.focal_length_mm)
+            allowed_focal_lengths = self._FOCAL_LENGTH_ALLOWLIST.get(camera_id, {12.0})
+            if focal_length not in allowed_focal_lengths:
+                choices = "/".join(str(int(value)) for value in sorted(allowed_focal_lengths))
+                raise ValueError(
+                    f"camera focal_length_mm[{camera_id}] 不在允许集合内: "
+                    f"{focal_length:g} mm（可选 {choices} mm）"
+                )
+            if lens.horizontal_fov_deg is not None:
+                import sys
+
+                ue_dir = Path(__file__).resolve().parent.parent.parent.parent / "ue"
+                if str(ue_dir) not in sys.path:
+                    sys.path.insert(0, str(ue_dir))
+                from camera_projection import focal_length_to_horizontal_fov_deg
+
+                expected_fov = focal_length_to_horizontal_fov_deg(focal_length)
+                if abs(float(lens.horizontal_fov_deg) - expected_fov) > self._FOV_TOLERANCE_DEG:
+                    raise ValueError(
+                        f"camera horizontal_fov_deg[{camera_id}] 与 focal_length_mm "
+                        f"不一致（provided={lens.horizontal_fov_deg:g}, "
+                        f"derived={expected_fov:.6f}）"
+                    )
+
+
+class CameraMappingConfig(BaseModel):
+    """canonical camera 到现有 UE Actor/Sequence 的显式映射。"""
+
+    actor: str = Field(..., min_length=1)
+    sequence: str = Field(..., min_length=1)
+
+    model_config = {"extra": "forbid"}
+
+
+class SimulationTaskConfig(BaseModel):
+    """任务中的 simulation 配置。"""
+
+    camera: SimulationCameraConfig
+
+    model_config = {"extra": "forbid"}
+
+
 class UeProfile(BaseModel):
     """UE 相机/Sequence/渲染参数（内联在 task 的 ue 块，非独立文件）。"""
 
     actor_mapping: str = Field("ue/actor_mapping.example.json", description="相对仓库根")
     sequence_package_path: str = "/Game/FutsalMOT/Sequences"
     sequences: List[Dict] = Field(default_factory=list, description="相机/Sequence 列表")
+    camera_mapping: Optional[Dict[str, CameraMappingConfig]] = Field(
+        None, description="canonical camera ID 到 UE Actor/Sequence 的映射"
+    )
     replace_existing: bool = True
     ball_rolling: Dict = Field(default_factory=dict)
     annotation_export: Dict = Field(default_factory=dict, description="标注/渲染配置")
@@ -189,6 +366,9 @@ class DatasetTaskConfig(BaseModel):
 
     export: "ExportConfig" = Field(..., description="导出参数（GRF 侧）")
     ue: UeProfile = Field(..., description="UE 相机/Sequence/渲染参数")
+    simulation: Optional[SimulationTaskConfig] = Field(
+        None, description="simulation 层的相机分布参数"
+    )
 
     postprocess: PostprocessTaskConfig = Field(default_factory=PostprocessTaskConfig)
     audit: AuditTaskConfig = Field(default_factory=AuditTaskConfig)
@@ -227,6 +407,7 @@ class ResolvedTask(BaseModel):
     dataset_episode_dir: str = Field(..., description="数据集 episode 目录（绝对）")
 
     export_profile: Dict = Field(default_factory=dict, description="完整解析后的导出参数")
+    simulation: Dict = Field(default_factory=dict, description="解析后的 simulation 参数")
     ue_profile: Dict = Field(default_factory=dict, description="完整解析后的 UE 参数")
     actor_mapping: str = Field("", description="actor mapping 绝对路径")
 

@@ -1,0 +1,144 @@
+{
+  "schema": "futsalmot_dataset_task",
+  "version": 2,
+  "task_id": "camera_anchor_smoke_5cam",
+  "episode_name": "episode_camera_anchor_smoke",
+  "dataset_root": "${FUTSALMOT_DATASET_ROOT}",
+  "ue_project_root": "${FUTSALMOT_UE_ROOT}",
+  "metadata": {
+    "camera_mapping_status": "requires_live_ue_confirmation"
+  },
+  "export": {
+    "scenario": "5_vs_5",
+    "seed": 42,
+    "num_steps": 3,
+    "playback_fps": 10,
+    "field_length_m": 40.0,
+    "field_width_m": 20.0,
+    "render": false,
+    "write_video": false,
+    "dump_full_raw_observation": false
+  },
+  "simulation": {
+    "camera": {
+      "distribution": {
+        "system": "dual",
+        "anchors": ["C1", "C2", "C3", "C4", "C5"],
+        "static_surveillance_ratio": [0.70, 0.80]
+      },
+      "profiles": {
+        "C1": {
+          "type": "static_surveillance",
+          "coverage": "full_field",
+          "resolution": [1920, 1080],
+          "lens": {"focal_length_mm": 15.0, "horizontal_fov_deg": 76.75843811035156},
+          "position_m": [25.0, 12.5, 7.0],
+          "rotation_deg": [-29.395269564991747, -140.1944289077348, 0.0],
+          "height_m": 7.0,
+          "distortion": null
+        },
+        "C2": {
+          "type": "static_surveillance",
+          "coverage": "full_field",
+          "resolution": [1920, 1080],
+          "lens": {"focal_length_mm": 15.0, "horizontal_fov_deg": 76.75843811035156},
+          "position_m": [-25.0, 12.5, 7.0],
+          "rotation_deg": [-29.395269564991747, -39.805571092265225, 0.0],
+          "height_m": 7.0,
+          "distortion": null
+        },
+        "C3": {
+          "type": "static_surveillance",
+          "coverage": "full_field",
+          "resolution": [1920, 1080],
+          "lens": {"focal_length_mm": 15.0, "horizontal_fov_deg": 76.75843811035156},
+          "position_m": [-25.0, -12.5, 7.0],
+          "rotation_deg": [-29.39526956499174, 39.8055710922652, 0.0],
+          "height_m": 7.0,
+          "distortion": null
+        },
+        "C4": {
+          "type": "static_surveillance",
+          "coverage": "full_field",
+          "resolution": [1920, 1080],
+          "lens": {"focal_length_mm": 15.0, "horizontal_fov_deg": 76.75843811035156},
+          "position_m": [25.0, -12.5, 7.0],
+          "rotation_deg": [-29.395269564991736, 140.19442890773476, 0.0],
+          "height_m": 7.0,
+          "distortion": null
+        },
+        "C5": {
+          "type": "static_surveillance",
+          "coverage": "full_field",
+          "resolution": [1920, 1080],
+          "lens": {"focal_length_mm": 10.0, "horizontal_fov_deg": 99.82194519042969},
+          "position_m": [0.0, 22.0, 13.0],
+          "rotation_deg": [-35.0, -90.0, 0.0],
+          "height_m": 13.0,
+          "distortion": null
+        },
+        "P01": {
+          "type": "static_surveillance",
+          "coverage": "partial_field",
+          "region": "left_half",
+          "placement_template": "left_half_sideline_high_v1",
+          "position_m": [-10.0, -25.0, 16.0],
+          "rotation_deg": [-32.47119229084849, 90.0, 0.0],
+          "height_m": 16.0,
+          "lens": {"focal_length_mm": 12.0},
+          "resolution": [1920, 1080],
+          "distortion": null
+        }
+      }
+    }
+  },
+  "ue": {
+    "actor_mapping": "ue/actor_mapping.example.json",
+    "sequence_package_path": "/Game/FutsalMOT/Sequences",
+    "sequences": [],
+    "replace_existing": true,
+    "camera_mapping": {
+      "C1": {"actor": "CineCam_01", "sequence": "LS_Cam_01"},
+      "C2": {"actor": "CineCam_02", "sequence": "LS_Cam_02"},
+      "C3": {"actor": "CineCam_03", "sequence": "LS_Cam_03"},
+      "C4": {"actor": "CineCam_04", "sequence": "LS_Cam_04"},
+      "C5": {"actor": "CineCam_Main", "sequence": "LS_Cam_Main"},
+      "P01": {"actor": "CineCam_P01", "sequence": "LS_Cam_P01"}
+    },
+    "annotation_export": {
+      "enabled": true,
+      "image_width": 1920,
+      "image_height": 1080,
+      "cameras": [],
+      "frame_start": 0,
+      "frame_end": null,
+      "export_internal_jsonl": false,
+      "export_mot": false,
+      "render_rgb": {
+        "enabled": true,
+        "preset": "cv_gt",
+        "playback_fps": 10,
+        "output_resolution_x": 1920,
+        "output_resolution_y": 1080,
+        "frame_rate": 30,
+        "file_name_format": "{frame_number}",
+        "zero_pad_frame_numbers": 6
+      },
+      "instance_mask": {
+        "enabled": false
+      }
+    }
+  },
+  "postprocess": {
+    "include_ball": false,
+    "workers": 1,
+    "chunk_size": 1,
+    "formats": ["json"],
+    "clean_stale": true,
+    "validation_level": "quick"
+  },
+  "audit": {
+    "expected_cameras": 5,
+    "expected_frames_per_camera": 3
+  }
+}

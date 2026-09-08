@@ -35,7 +35,7 @@ _UE_MODULE_NAMES = (
     "camera_projection", "annotation_utils", "dataset_export",
     "scene_apply", "annotation_exporter", "render_preset", "render_episode",
     "pose_bones", "pose_export", "pose_render", "pose_capture_export",
-    "player_motion",
+    "player_motion", "camera_distribution",
 )
 for _name in _UE_MODULE_NAMES:
     if _name in sys.modules:
@@ -48,6 +48,101 @@ def _fail(msg: str, code: int = 2) -> int:
 
 
 POSE_KEYPOINTS_SCHEMA = "grf_ue_pose_keypoints"
+
+
+def _apply_resolved_anchor_cameras(camera_entries, annotation_cfg):
+    """应用并回读 resolved 的静态相机状态。"""
+    import math
+    import unreal
+    from camera_projection import focal_length_to_fov_deg
+    from scene_apply import find_actor
+
+    render_cfg = annotation_cfg.get("render_rgb") or {}
+    resolution = (
+        int(render_cfg.get("output_resolution_x")),
+        int(render_cfg.get("output_resolution_y")),
+    ) if render_cfg.get("output_resolution_x") is not None and render_cfg.get("output_resolution_y") is not None else None
+    for entry in camera_entries:
+        camera_id = entry["camera_id"]
+        profile = entry["profile"]
+        actor = find_actor(entry["camera_actor"])
+        if actor is None:
+            raise RuntimeError(f"Canonical ID {camera_id} 的 UE Camera Actor 不存在: {entry['camera_actor']}")
+        components = actor.get_components_by_class(unreal.CineCameraComponent)
+        if len(components) != 1:
+            raise RuntimeError(
+                f"Canonical ID {camera_id} 的 Camera Component 数量必须为 1，实际为 {len(components)}"
+            )
+        component = components[0]
+        location = profile["position_m"]
+        rotation = profile["rotation_deg"]
+        actor.set_actor_location_and_rotation(
+            unreal.Vector(float(location[0]) * 100.0, float(location[1]) * 100.0, float(location[2]) * 100.0),
+            unreal.Rotator(
+                pitch=float(rotation[0]),
+                yaw=float(rotation[1]),
+                roll=float(rotation[2]),
+            ),
+            False,
+            False,
+        )
+        lens = profile.get("lens") or {}
+        if lens.get("focal_length_mm") is not None:
+            component.set_editor_property("current_focal_length", float(lens["focal_length_mm"]))
+        actual_location = actor.get_actor_location()
+        actual_rotation = actor.get_actor_rotation()
+        actual_focal = float(component.get_editor_property("current_focal_length"))
+        actual_fov = float(component.get_editor_property("current_horizontal_fov"))
+        filmback = component.get_editor_property("filmback")
+        sensor_width = float(filmback.sensor_width)
+        expected_focal = lens.get("focal_length_mm")
+        expected_fov = focal_length_to_fov_deg(actual_focal, sensor_width)
+        if expected_focal is not None and not math.isclose(actual_focal, float(expected_focal), rel_tol=0.0, abs_tol=1e-4):
+            raise RuntimeError(f"Canonical ID {camera_id} 的 focal_length_mm 应用失败")
+        if not math.isclose(actual_fov, expected_fov, rel_tol=0.0, abs_tol=1e-3):
+            raise RuntimeError(
+                f"Canonical ID {camera_id} 的 derived horizontal FOV 与实际 filmback/focal 不一致: "
+                f"expected={expected_fov} actual={actual_fov}"
+            )
+        if resolution is not None:
+            profile_resolution = tuple(profile["resolution"])
+            if resolution != profile_resolution:
+                raise RuntimeError(
+                    f"Canonical ID {camera_id} 的 profile resolution={profile_resolution} "
+                    f"与 render resolution={resolution} 不一致"
+                )
+        for actual, expected, field in (
+            (actual_location.x / 100.0, location[0], "position_m.x"),
+            (actual_location.y / 100.0, location[1], "position_m.y"),
+            (actual_location.z / 100.0, location[2], "position_m.z"),
+            (actual_rotation.pitch, rotation[0], "rotation_deg.pitch"),
+            (actual_rotation.yaw, rotation[1], "rotation_deg.yaw"),
+            (actual_rotation.roll, rotation[2], "rotation_deg.roll"),
+        ):
+            if not math.isclose(float(actual), float(expected), rel_tol=0.0, abs_tol=1e-3):
+                raise RuntimeError(f"Canonical ID {camera_id} 的 {field} 回读不匹配")
+        print(
+            f"  Camera {camera_id}: {entry['camera_actor']} verified "
+            f"focal={actual_focal:.6f}mm fov={actual_fov:.6f}"
+        )
+
+
+def _resolve_runtime_camera_selection(
+    resolved_task,
+    *,
+    legacy_sequences,
+    legacy_cameras,
+    camera_ids=None,
+):
+    """解析 episode camera policy，并保留显式 smoke/debug 覆盖。"""
+    from camera_distribution import resolve_runtime_camera_selection
+
+    return resolve_runtime_camera_selection(
+        resolved_task,
+        legacy_sequences=legacy_sequences,
+        legacy_cameras=legacy_cameras,
+        camera_ids=camera_ids,
+    )
 
 
 def _runtime_pose_to_pose_keypoints(ep_dir, cameras, num_steps, ann_cfg):
@@ -167,7 +262,40 @@ def main() -> int:
     replace_existing = bool(ue_profile.get("replace_existing", True))
     ball_rolling = ue_profile.get("ball_rolling") or None
     episode_name = rt.get("episode_name") or "episode"
-    cameras = ann_cfg.get("cameras") or ["CineCam_01"]
+    requested_camera_ids = os.environ.get("C5_CAMERA_IDS")
+    camera_ids = (
+        [camera_id.strip() for camera_id in requested_camera_ids.split(",") if camera_id.strip()]
+        if requested_camera_ids
+        else None
+    )
+    camera_selection = _resolve_runtime_camera_selection(
+        rt,
+        legacy_sequences=seq_list,
+        legacy_cameras=ann_cfg.get("cameras") or ["CineCam_01"],
+        camera_ids=camera_ids,
+    )
+    camera_entries = camera_selection["entries"]
+    if camera_selection["canonical"]:
+        _apply_resolved_anchor_cameras(camera_entries, ann_cfg)
+    seq_list = camera_selection["sequences"]
+    cameras = camera_selection["cameras"] or ["CineCam_01"]
+    if camera_selection["canonical"]:
+        # 旧模块仍接受 annotation_export.cameras；这里仅生成兼容适配值，
+        # 选择来源始终是 resolved simulation.camera + ue.camera_mapping。
+        ann_cfg["cameras"] = cameras
+        resolution = camera_selection["resolution"]
+        render_cfg = dict(ann_cfg.get("render_rgb") or {})
+        configured = (
+            render_cfg.get("output_resolution_x"),
+            render_cfg.get("output_resolution_y"),
+        )
+        if configured != (None, None) and configured != tuple(resolution):
+            raise RuntimeError(
+                f"canonical camera resolution={tuple(resolution)} "
+                f"与 render_rgb.output_resolution={configured} 不一致"
+            )
+        render_cfg["output_resolution_x"], render_cfg["output_resolution_y"] = resolution
+        ann_cfg["render_rgb"] = render_cfg
 
     # 帧数：实际输出帧 = num_steps × factor（target_fps>10 时 Hermite 插值）。
     # 不能只取 export_profile.num_steps（否则 target_fps=30 时 playback 只到 num_steps，

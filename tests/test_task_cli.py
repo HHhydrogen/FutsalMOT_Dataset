@@ -9,6 +9,7 @@ from PIL import Image
 from typer.testing import CliRunner
 
 from grf_ue_bridge.cli import app
+from grf_ue_bridge.config.loader import load_task_config
 
 runner = CliRunner()
 
@@ -79,6 +80,76 @@ def _make_minimal_dataset(ds_root: Path, ep: str, cam_count: int = 1) -> Path:
 
 
 class TestTaskValidateCLI:
+    def test_camera_anchor_fixture_loads_with_five_canonical_ids(self, repo_root):
+        fixture = repo_root / "configs" / "camera_anchor_smoke_5cam.json"
+        raw = json.loads(fixture.read_text(encoding="utf-8"))
+        task = load_task_config(fixture)
+
+        assert {"C1", "C2", "C3", "C4", "C5"} <= set(task.ue.camera_mapping)
+        assert "P01" in task.ue.camera_mapping
+        assert task.simulation.camera.distribution.anchors == [
+            "C1", "C2", "C3", "C4", "C5"
+        ]
+        assert task.simulation.camera.distribution.episode_profile == "anchor_only"
+        assert {"C1", "C2", "C3", "C4", "C5"} <= set(task.simulation.camera.profiles)
+        assert "P01" in task.simulation.camera.profiles
+        expected_profile_fields = {
+            "type", "coverage", "resolution", "lens", "position_m",
+            "rotation_deg", "height_m",
+        }
+        assert {"C1", "C2", "C3", "C4", "C5", "P01"} == set(
+            raw["simulation"]["camera"]["profiles"]
+        )
+        for profile in raw["simulation"]["camera"]["profiles"].values():
+            assert expected_profile_fields <= set(profile)
+        for camera_id, profile in task.simulation.camera.profiles.items():
+            assert profile.type == "static_surveillance"
+            assert profile.coverage == ("partial_field" if camera_id == "P01" else "full_field")
+            assert len(profile.resolution) == 2
+            assert profile.lens.focal_length_mm or profile.lens.horizontal_fov_deg
+            assert len(profile.position_m) == 3
+            assert len(profile.rotation_deg) == 3
+            assert profile.height_m > 0
+        assert set(task.ue.camera_mapping) == set(task.simulation.camera.profiles)
+        assert {"C1", "C2", "C3", "C4", "C5", "P01"} == set(
+            raw["ue"]["camera_mapping"]
+        )
+        assert all(
+            {"actor", "sequence"} <= set(mapping)
+            for mapping in raw["ue"]["camera_mapping"].values()
+        )
+        for mapping in task.ue.camera_mapping.values():
+            assert mapping.actor
+            assert mapping.sequence
+
+        assert raw["ue"]["camera_mapping"]["C5"] == {
+            "actor": "CineCam_Main",
+            "sequence": "LS_Cam_Main",
+        }
+        assert raw["ue"]["camera_mapping"]["P01"] == {
+            "actor": "CineCam_P01",
+            "sequence": "LS_Cam_P01",
+        }
+        assert raw["simulation"]["camera"]["profiles"]["C5"] == {
+            "type": "static_surveillance",
+            "coverage": "full_field",
+            "resolution": [1920, 1080],
+            "lens": {
+                "focal_length_mm": 10.0,
+                "horizontal_fov_deg": 99.82194519042969,
+            },
+            "position_m": [0.0, 22.0, 13.0],
+            "rotation_deg": [-35.0, -90.0, 0.0],
+            "height_m": 13.0,
+            "distortion": None,
+        }
+
+        distribution = raw["simulation"]["camera"]["distribution"]
+        assert "partial" not in distribution
+        assert "dynamic_broadcast_ratio" not in distribution
+        assert "broadcast" not in distribution
+        assert "auto_create" not in raw["ue"]
+
     def test_validate_pass(self, tmp_path, pin_repo_root):
         tf = _make_task_dir(tmp_path)
         r = runner.invoke(app, ["task", "validate", str(tf)])

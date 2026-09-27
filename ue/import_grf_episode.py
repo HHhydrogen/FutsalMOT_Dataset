@@ -66,6 +66,8 @@ from annotation_exporter import export_annotations  # noqa: E402
 from render_episode import render_sequences  # noqa: E402
 
 DEFAULT_SEQUENCE_PACKAGE_PATH = "/Game/FutsalMOT/Sequences"
+EXTERNAL_MOTION_ACTIVE_PROPERTY = "ExternalMotionActive"
+EXTERNAL_MOTION_SPEED_PROPERTY = "ExternalMotionSpeedMps"
 EXPECTED_CHANNEL_NAMES = [
     "Location.X", "Location.Y", "Location.Z",
     "Rotation.X", "Rotation.Y", "Rotation.Z",
@@ -133,6 +135,65 @@ def add_double_channel_key(channel, frame_index: int, value: float, *, interpola
         else unreal.MovieSceneKeyInterpolation.LINEAR
     )
     return channel.add_key(time=frame_number, new_value=numeric_value, interpolation=interp)
+
+
+def _write_player_frame(cmap, player_data, params, frame_index, yaw_continuous):
+    """Write player transform/yaw and return the same tracker result's speed key."""
+    px, py, _ = pos_m_to_cm(player_data["position_m"])
+    add_double_channel_key(cmap["Location.X"], frame_index, px)
+    add_double_channel_key(cmap["Location.Y"], frame_index, py)
+    add_double_channel_key(cmap["Location.Z"], frame_index, PLAYER_Z_CM)
+
+    yaw = float(params["facing_deg"])
+    yaw_continuous = (
+        yaw if yaw_continuous is None else _unwind_angle(yaw_continuous, yaw)
+    )
+    add_double_channel_key(cmap["Rotation.Z"], frame_index, yaw_continuous)
+    sample = {
+        "frame": int(frame_index),
+        "speed_mps": float(params["speed_mps"]),
+    }
+    return yaw_continuous, sample
+
+
+def _add_external_motion_tracks(binding, motion_samples, total_output_frames):
+    """Bake tracker speed and activation into canonical possessable properties."""
+    import unreal
+
+    if not motion_samples:
+        return []
+
+    tracks = []
+    track_specs = (
+        (unreal.MovieSceneBoolTrack, EXTERNAL_MOTION_ACTIVE_PROPERTY),
+        (unreal.MovieSceneFloatTrack, EXTERNAL_MOTION_SPEED_PROPERTY),
+    )
+    for track_class, property_name in track_specs:
+        track = binding.add_track(track_class)
+        track.set_property_name_and_path(property_name, property_name)
+        section = track.add_section()
+        section.set_range(0, int(total_output_frames))
+        channels = section.get_all_channels()
+        if len(channels) != 1:
+            raise RuntimeError(
+                f"{property_name}: expected one property channel, got {len(channels)}"
+            )
+        channel = channels[0]
+        if property_name == EXTERNAL_MOTION_ACTIVE_PROPERTY:
+            keys = [(0, True), (max(0, int(total_output_frames) - 1), True)]
+        else:
+            keys = [(s["frame"], s["speed_mps"]) for s in motion_samples]
+        for frame, value in keys:
+            if property_name == EXTERNAL_MOTION_ACTIVE_PROPERTY:
+                channel.add_key(time=unreal.FrameNumber(int(frame)), new_value=value)
+            else:
+                add_double_channel_key(channel, frame, value)
+        if channel.get_num_keys() != len(keys):
+            raise RuntimeError(
+                f"{property_name}: expected {len(keys)} keys, got {channel.get_num_keys()}"
+            )
+        tracks.append(track)
+    return tracks
 
 
 def _canonical_channel_name(channel) -> str:
@@ -577,9 +638,8 @@ def create_sequence(meta: dict, frames: list, mapping: dict, replace_existing: b
             binding, channels, section = actor_bindings[entity_id]
             cmap = _build_channel_map(channels)
 
-            # 朝向由 PlayerMotionTracker 统一计算（与 preview/annotation/pose 同一套），
-            # 速度优先取 frame 的 velocity_mps，缺失时按位置差分；位置仍由 frame 决定。
-            player_tracker = None
+            player_tracker = PlayerMotionTracker() if entity_id != "BALL" else None
+            motion_samples = []
             # 写入 Sequence 的连续 yaw：facing_deg 归一到 [-180,180]，若直接写入，
             # 跨 ±180° 边界时 Sequencer 线性插值会沿长路径旋转约 350°；
             # 这里用 _unwind_angle 展开为连续角度（首帧取 facing_deg 为起点）。
@@ -601,33 +661,26 @@ def create_sequence(meta: dict, frames: list, mapping: dict, replace_existing: b
                         add_double_channel_key(cmap["Scale.Y"], 0, 0.5)
                         add_double_channel_key(cmap["Scale.Z"], 0, 0.5)
                 else:
-                    for player_data in frame["players"]:
-                        if player_data["id"] != entity_id:
-                            continue
-                        px, py, _ = pos_m_to_cm(player_data["position_m"])
-                        add_double_channel_key(cmap["Location.X"], kf, px)
-                        add_double_channel_key(cmap["Location.Y"], kf, py)
-                        add_double_channel_key(cmap["Location.Z"], kf, PLAYER_Z_CM)
-
-                        if player_tracker is None:
-                            player_tracker = PlayerMotionTracker()
-                        params = player_tracker.update(
-                            player_data["position_m"],
-                            player_data.get("velocity_mps"),
-                            float(frame.get("time_seconds", frame_time)),
-                            ball_position_m=(
-                                frame["ball"]["position_m"]
-                                if entity_id in gk_ids else None
-                            ),
-                            face_ball=entity_id in gk_ids,
-                            is_goalkeeper=entity_id in gk_ids,
-                        )
-                        yaw = params["facing_deg"]
-                        if player_yaw_continuous is None:
-                            player_yaw_continuous = yaw
-                        else:
-                            player_yaw_continuous = _unwind_angle(player_yaw_continuous, yaw)
-                        add_double_channel_key(cmap["Rotation.Z"], kf, player_yaw_continuous)
+                    player_data = next(
+                        (p for p in frame["players"] if p["id"] == entity_id), None
+                    )
+                    if player_data is None:
+                        continue
+                    params = player_tracker.update(
+                        player_data["position_m"],
+                        player_data.get("velocity_mps"),
+                        float(frame.get("time_seconds", frame_time)),
+                        ball_position_m=(
+                            frame["ball"]["position_m"]
+                            if entity_id in gk_ids else None
+                        ),
+                        face_ball=entity_id in gk_ids,
+                        is_goalkeeper=entity_id in gk_ids,
+                    )
+                    player_yaw_continuous, sample = _write_player_frame(
+                        cmap, player_data, params, kf, player_yaw_continuous
+                    )
+                    motion_samples.append(sample)
 
             # 校验关键帧数量
             actual_loc_x = cmap["Location.X"].get_num_keys()
@@ -645,6 +698,11 @@ def create_sequence(meta: dict, frames: list, mapping: dict, replace_existing: b
                 if actual_rot != expected:
                     raise RuntimeError(f"{entity_id} Rotation.Z: expected {expected} keys, got {actual_rot}")
                 total_transform_keys += actual_rot
+                if len(motion_samples) != expected:
+                    raise RuntimeError(f"{entity_id} motion samples: expected {expected}, got {len(motion_samples)}")
+                _add_external_motion_tracks(
+                    binding, motion_samples, total_output_frames
+                )
 
         print(f"  Total transform keys: {total_transform_keys}")
 

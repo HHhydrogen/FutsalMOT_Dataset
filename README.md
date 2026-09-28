@@ -4,6 +4,8 @@
 
 本目录位于外层 UE 仓库的 `Content/FutsalMOT/code/`，但拥有独立的 Git 历史和远程仓库。外层通过 submodule gitlink 引用本仓库 commit；修改本仓库时必须在本目录执行 Git 命令，内层 commit 完成后再回到外层更新 gitlink。
 
+当前权威文档只有本文、`docs/DATA_CONTRACT.md` 和 `docs/VALIDATION_AND_LIMITATIONS.md`。`configs/*.json` 是可执行 task 配置；其中 `configs/bp_verify_30s_1cam_long_sequence.json` 保留用于长时 Sequence 验证。历史阶段报告和一次性迁移记录不属于运行入口。
+
 ## 两个运行环境
 
 | 阶段 | 环境 | 代码入口 | 允许依赖 | 主要输出 |

@@ -151,11 +151,12 @@ def _rotator_to_quat_xyzw(comp, bone_name: str) -> Tuple[float, float, float, fl
 
 
 def _skeletal_mesh_component(actor):
-    """取 actor 的第一个 SkeletalMeshComponent（无则返回 None）。"""
+    """优先取正式可见 MPFBVisual，旧角色再回退到第一个组件。"""
     import unreal
 
     comps = actor.get_components_by_class(unreal.SkeletalMeshComponent)
-    return comps[0] if comps else None
+    named = [c for c in comps if c.get_name() == "MPFBVisual"]
+    return named[0] if named else (comps[0] if comps else None)
 
 
 def _list_actor_bones(actor) -> List[str]:

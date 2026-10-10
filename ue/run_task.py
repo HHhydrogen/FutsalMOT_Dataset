@@ -35,7 +35,7 @@ _UE_MODULE_NAMES = (
     "camera_projection", "annotation_utils", "dataset_export",
     "scene_apply", "annotation_exporter", "render_preset", "render_episode",
     "pose_bones", "pose_export", "pose_render", "pose_capture_export",
-    "player_motion", "camera_distribution",
+    "player_motion", "camera_distribution", "player_visuals",
 )
 for _name in _UE_MODULE_NAMES:
     if _name in sys.modules:
@@ -252,6 +252,12 @@ def main() -> int:
 
     ue_profile = rt.get("ue_profile") or {}
     ann_cfg = dict(ue_profile.get("annotation_export") or {})
+    export_profile = rt.get("export_profile") or {}
+    if export_profile.get("playback_fps") is not None:
+        # render_episode 的 canonical 帧映射必须使用 Sequence display rate，
+        # 不能回退到 MRQ 输出 frame_rate；两者在 10fps 轨迹 + 30fps Sequence
+        # 的任务中明确不同。
+        ann_cfg["playback_fps"] = int(export_profile["playback_fps"])
     pose_cfg = (rt.get("postprocess") or {}).get("yolo_pose") or {}
     pose_enabled = bool(pose_cfg.get("enabled", False))
     episode_dir = Path(rt["trajectory_output"])
@@ -300,8 +306,8 @@ def main() -> int:
     # 帧数：实际输出帧 = num_steps × factor（target_fps>10 时 Hermite 插值）。
     # 不能只取 export_profile.num_steps（否则 target_fps=30 时 playback 只到 num_steps，
     # 导致 sequence 有 num_steps×factor 帧却只渲染前 num_steps 帧 → img1 缺帧）。
-    _export_ns = int((rt.get("export_profile") or {}).get("num_steps") or 3)
-    _export_fps = int((rt.get("export_profile") or {}).get("target_fps") or 10)
+    _export_ns = int(export_profile.get("num_steps") or 3)
+    _export_fps = int(export_profile.get("target_fps") or 10)
     _factor = max(1, _export_fps // 10)
     meta_timing_num_steps = _export_ns * _factor
 
@@ -309,6 +315,44 @@ def main() -> int:
         return _fail(f"trajectory 目录不存在（先运行 grf-ue task export）: {episode_dir}")
     if not mapping_path.is_file():
         return _fail(f"actor mapping 不存在: {mapping_path}")
+
+    # 可选角色 Profile 门禁：旧 task 没有该字段时保持原有行为。
+    from player_visuals import (
+        apply_player_visuals,
+        normalize_player_visuals,
+        preflight_player_visuals,
+        write_player_visuals_provenance,
+    )
+
+    from import_grf_episode import create_sequence, load_episode, load_mapping
+    from annotation_exporter import export_annotations
+    from render_episode import render_sequences
+
+    mapping = load_mapping(mapping_path)
+    normalized_player_visuals = normalize_player_visuals(ue_profile.get("player_visuals"))
+    if normalized_player_visuals is not None:
+        rollback_path = (
+            Path(rt.get("repo_root", episode_dir.parent))
+            / ".futsalmot"
+            / "runtime"
+            / str(rt.get("task_id", "task"))
+            / "player-visuals-rollback.json"
+        )
+        if mode in ("full", "sequence"):
+            applied = apply_player_visuals(
+                normalized_player_visuals,
+                mapping,
+                rollback_path=str(rollback_path),
+            )
+            if not applied.get("ok"):
+                return _fail(f"player_visuals apply 失败: {applied.get('errors')}")
+        preflight = preflight_player_visuals(normalized_player_visuals, mapping)
+        if not preflight.get("ok"):
+            return _fail(f"player_visuals preflight 失败: {preflight.get('errors')}")
+        provenance_path = write_player_visuals_provenance(
+            episode_dir, normalized_player_visuals
+        )
+        print(f"  player_visuals provenance: {provenance_path}")
 
     print(f"run_task: task={rt.get('task_id')} episode={episode_name} mode={mode}")
     print(f"  trajectory: {episode_dir}")
@@ -357,26 +401,22 @@ def main() -> int:
         return 0
 
     # ── full / render / sequence / annotations 模式 ──
-    from import_grf_episode import create_sequence, load_episode, load_mapping
-    from annotation_exporter import export_annotations
-    from render_episode import render_sequences
 
     if mode in ("full", "render"):
         meta, frames = load_episode(episode_dir)
-        mapping = load_mapping(mapping_path)
         if mode == "full":
             print("\n--- 全流程：创建 Level Sequence ---")
             create_sequence(
                 meta, frames, mapping, replace_existing, seq_pkg, seq_list, ball_rolling
             )
             export_annotations(episode_dir, mapping_path, dataset_root, ann_cfg)
-        # 序列 playback 限到数据集帧数（BurnIn 捕获与 RGB 帧一致，避免多渲 1 帧）
+        # create_sequence 已按 source_step_seconds * playback_fps 设置时间轴。
+        # 不要把 30fps 时间轴错误覆盖成 10fps 样本数，否则只会渲染前 4 个样本。
         for s in seq_list:
             seq = unreal.load_asset(f"{seq_pkg}/{s['name']}")
             if seq is not None:
                 seq.set_playback_start(0)
-                seq.set_playback_end(meta_timing_num_steps)
-                print(f"  序列 {s['name']} playback -> [0, {meta_timing_num_steps})")
+                print(f"  序列 {s['name']} playback 保持创建时范围")
         # Runtime Pose prep：多 camera 下，Recorder CDO 是共享的（5 个 actor），
         # 只能 prep 一个 camera 的 slot。Runtime Pose 捕获的是世界骨骼 transform
         # （camera 无关），故只需一个 camera 的完整捕获即可得到正确 pose_capture。
@@ -412,7 +452,6 @@ def main() -> int:
 
     if mode == "sequence":
         meta, frames = load_episode(episode_dir)
-        mapping = load_mapping(mapping_path)
         create_sequence(meta, frames, mapping, replace_existing, seq_pkg, seq_list, ball_rolling)
         print("\nDone（sequence）。")
         return 0

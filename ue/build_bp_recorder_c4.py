@@ -56,7 +56,7 @@ ARRAY_ADD = "/Script/Engine.KismetArrayLibrary.Array_Add"
 MAKE_LITERAL = "/Script/Engine.KismetSystemLibrary.MakeLiteralString"
 GET_ALL_TAG = "/Script/Engine.GameplayStatics.GetAllActorsWithTag"
 ARRAY_GET = "/Script/Engine.KismetArrayLibrary.Array_Get"
-GET_COMP = "/Script/Engine.Actor.GetComponentByClass"
+GET_COMP = "/Script/Engine.Actor.FindComponentByTag"
 GET_TIME = "/Script/Engine.KismetSystemLibrary.GetGameTimeInSeconds"
 SUB_FLOAT = "/Script/Engine.KismetMathLibrary.Subtract_FloatFloat"
 
@@ -232,6 +232,7 @@ def _build_group(group):
         _set_value(fn_pins["gettag"][i], "tag", act["tag"], f"GetAllTag[{act['tag']}]")
         _set_value(fn_pins["get"][i], "index", "0", f"ArrayGet[{act['tag']}]")
         _set_value(fn_pins["comp"][i], "componentclass", SKELETAL_COMP, f"Comp[{act['actor_id']}]")
+        _set_value(fn_pins["comp"][i], "tag", "DatasetPoseSource", f"CompTag[{act['actor_id']}]")
         _set_value(fn_pins["litactor"][i], "value", act["actor_id"], f"LitActor[{act['actor_id']}]")
         for j, bone in enumerate(BONES):
             idx = i * len(BONES) + j

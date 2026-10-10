@@ -95,11 +95,15 @@ def _mesh_world_bounds(actor):
     import unreal
 
     comp = None
-    for cls in (unreal.SkeletalMeshComponent, unreal.StaticMeshComponent):
-        comps = actor.get_components_by_class(cls)
-        if comps:
-            comp = comps[0]
-            break
+    skeletal = actor.get_components_by_class(unreal.SkeletalMeshComponent)
+    named = [c for c in skeletal if c.get_name() == "MPFBVisual"]
+    if named:
+        comp = named[0]
+    elif skeletal:
+        comp = skeletal[0]
+    else:
+        static = actor.get_components_by_class(unreal.StaticMeshComponent)
+        comp = static[0] if static else None
     if comp is None:
         return None
     try:
@@ -142,9 +146,10 @@ def mesh_asset_world_bounds(actor):
     import unreal
 
     comps = actor.get_components_by_class(unreal.SkeletalMeshComponent)
-    if not comps:
+    named = [c for c in comps if c.get_name() == "MPFBVisual"]
+    comp = named[0] if named else (comps[0] if comps else None)
+    if comp is None:
         return None
-    comp = comps[0]
     getter = getattr(comp, "get_skeletal_mesh_asset", None)
     mesh = getter() if getter is not None else getattr(comp, "skeletal_mesh", None)
     if mesh is None:

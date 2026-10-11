@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from pose_bones import COCO_SKELETON_EDGES  # noqa: E402
+from pose_bones import POSE_KEYPOINT_NAMES, POSE_SKELETON_EDGES  # noqa: E402
 
 def main():
     ep = Path(os.environ.get("C5_EPISODE_DIR", "."))
@@ -31,9 +31,8 @@ def main():
         for r in rows:
             by_root.setdefault(r["root"], []).append(r)
         drawn = 0
-        from pose_bones import COCO_KEYPOINT_NAMES
-        idx = {n: i for i, n in enumerate(COCO_KEYPOINT_NAMES)}
-        edges = [(idx[a], idx[b]) for a, b in COCO_SKELETON_EDGES if a in idx and b in idx]
+        idx = {n: i for i, n in enumerate(POSE_KEYPOINT_NAMES)}
+        edges = [(idx[a], idx[b]) for a, b in POSE_SKELETON_EDGES if a in idx and b in idx]
         for root, actors in sorted(by_root.items()):
             fi = root + 1  # frame_index = step+1
             img_path = img_dir / f"{fi:06d}.png"
@@ -45,7 +44,7 @@ def main():
                 for r in actors:
                     kps = r.get("keypoints_2d_px") or []
                     vis = r.get("visible") or []
-                    if len(kps) != 17:
+                    if len(kps) != len(POSE_KEYPOINT_NAMES):
                         continue
                     pts = []
                     for i, p in enumerate(kps):

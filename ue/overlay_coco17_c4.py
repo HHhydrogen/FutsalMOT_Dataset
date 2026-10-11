@@ -1,10 +1,10 @@
-"""P1：COCO17 2D keypoints overlay（10 actor，17 点 + COCO 骨架连线）。
+"""历史 C4 2D Pose overlay（10 actor，12 个肢体点 + 骨架连线）。
 
 用法：
     uv run python ue/overlay_coco17_c4.py
 
 读：
-  - coco17_2d_c4.jsonl（每帧 17 点 2D 像素 + visible，含 actor_id）
+  - coco17_2d_c4.jsonl（每帧 12 点 2D 像素 + visible，含 actor_id）
   - img1/000001.png（RGB，1-based）
 写：
   - overlay_coco17_c4/000001.png
@@ -21,7 +21,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
-from pose_bones import COCO_KEYPOINT_NAMES, COCO_SKELETON_EDGES
+from pose_bones import POSE_KEYPOINT_NAMES, POSE_SKELETON_EDGES
 
 EP = Path(r"G:\FutsalMOT_Dataset\episode_bp_frame_sync")
 if len(sys.argv) > 1:
@@ -52,9 +52,6 @@ def make_colors():
     return colors
 
 
-FACE_COLOR = (255, 255, 0)  # 脸部黄色
-
-
 def main():
     ACTOR_COLORS = make_colors()
     frames = [json.loads(l) for l in KP2D.read_text(encoding="utf-8").splitlines()]
@@ -78,17 +75,16 @@ def main():
             color = ACTOR_COLORS.get(actor, (255, 255, 255))
             pts = fr["keypoints_2d_px"]
             vis = fr["visible"]
-            for a, b in COCO_SKELETON_EDGES:
-                ia, ib = COCO_KEYPOINT_NAMES.index(a), COCO_KEYPOINT_NAMES.index(b)
+            for a, b in POSE_SKELETON_EDGES:
+                ia, ib = POSE_KEYPOINT_NAMES.index(a), POSE_KEYPOINT_NAMES.index(b)
                 if vis[ia] and vis[ib] and pts[ia] and pts[ib]:
                     draw.line([pts[ia][0], pts[ia][1], pts[ib][0], pts[ib][1]],
                               fill=color, width=2)
-            for i, name in enumerate(COCO_KEYPOINT_NAMES):
+            for i, name in enumerate(POSE_KEYPOINT_NAMES):
                 if vis[i] and pts[i]:
                     u, v = pts[i]
-                    c = FACE_COLOR if name in ("nose", "left_eye", "right_eye", "left_ear", "right_ear") else color
                     r = 1
-                    draw.ellipse([u - r, v - r, u + r, v + r], fill=c)
+                    draw.ellipse([u - r, v - r, u + r, v + r], fill=color)
         img.save(OUT_DIR / f"{root + 1:06d}.png")
 
     print("\n=== 关键帧 actor 覆盖 ===")

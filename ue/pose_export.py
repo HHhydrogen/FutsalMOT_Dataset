@@ -1,4 +1,4 @@
-"""UE 内运行的关键点导出器：逐帧读取球员 SkeletalMesh 骨骼 transform → COCO 17 世界坐标。
+"""Legacy UE 导出器：逐帧读取 12 个球员肢体 SkeletalMesh 关键点。
 
 依赖：
   - unreal（UE 内置，一律延迟 import）
@@ -11,9 +11,7 @@
      `get_ref_skeleton` 在 UE 5.8 Python 不可用），对每个 COCO 点取第一个能读到
      有效 transform 的候选骨。
   3. 逐帧应用与 Level Sequence 相同的 actor 变换（scene_apply）。
-  4. 对每个球员读取 17 个关键点的世界坐标（cm → m 存储）：
-       - 12 个肢体点：真实骨骼 transform（子骨骼原点 = 关节，见 pose_bones 注释）；
-       - 脸部 5 点：head 骨骼局部偏移（骨骼中无眼/鼻/耳，见 HEAD_OFFSET_CM）。
+   4. 对每个球员读取 12 个肢体关键点的世界坐标（cm → m 存储）。
   5. 对每个 camera，可选对每个关键点做遮挡 trace（射线从相机到关键点，命中距离
      明显小于关键点距离即视为被几何遮挡）→ occluded 标志。
      trace API 在任何 UE 版本缺失/变化时**绝不崩溃**：失败即跳过该关键点遮挡判定
@@ -38,10 +36,8 @@ from typing import Dict, List, Optional, Tuple
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from pose_bones import (  # noqa: E402
-    COCO_KEYPOINT_NAMES,
-    HEAD_BONE_NAME,
+    POSE_KEYPOINT_NAMES,
     LIMB_BONE_CANDIDATES,
-    apply_head_offsets,
 )
 from annotation_utils import entity_id_to_track_id  # noqa: E402
 from dataset_export import (  # noqa: E402
@@ -239,15 +235,11 @@ def _resolve_bone_map_by_probe(actor, overrides: Dict[str, str]) -> Dict[str, st
     return bone_map
 
 
-def _actor_keypoints_world_m(actor, bone_map: Dict[str, str],
-                             head_offsets: Dict[str, List[float]]) -> List[List[Optional[float]]]:
-    """计算单个 actor 的 17 个关键点世界坐标（米）。
-
-    返回 [[x, y, z], ...] 长度 17；无法取得的点填充 [None, None, None]。
-    """
+def _actor_keypoints_world_m(actor, bone_map: Dict[str, str]) -> List[List[Optional[float]]]:
+    """计算单个 actor 的 12 个肢体关键点世界坐标（米）。"""
     comp = _skeletal_mesh_component(actor)
     if comp is None:
-        return [[None, None, None]] * len(COCO_KEYPOINT_NAMES)
+        return [[None, None, None]] * len(POSE_KEYPOINT_NAMES)
 
     # 12 个肢体点：子骨骼原点 = 关节
     limb: Dict[str, List[float]] = {}
@@ -258,20 +250,9 @@ def _actor_keypoints_world_m(actor, bone_map: Dict[str, str],
         loc_cm, _q = tf
         limb[coco] = [loc_cm[0] * CM_TO_M, loc_cm[1] * CM_TO_M, loc_cm[2] * CM_TO_M]
 
-    # 脸部 5 点：head 骨骼局部偏移
-    face: Dict[str, List[float]] = {}
-    head_tf = _bone_world_transform(comp, HEAD_BONE_NAME)
-    if head_tf is not None:
-        loc_cm, quat_xyzw = head_tf
-        face_cm = apply_head_offsets(loc_cm, quat_xyzw, head_offsets)
-        for name, p in face_cm.items():
-            face[name] = [p[0] * CM_TO_M, p[1] * CM_TO_M, p[2] * CM_TO_M]
-
-    merged = dict(limb)
-    merged.update(face)
     out: List[List[Optional[float]]] = []
-    for name in COCO_KEYPOINT_NAMES:
-        p = merged.get(name)
+    for name in POSE_KEYPOINT_NAMES:
+        p = limb.get(name)
         if p is None:
             out.append([None, None, None])
         else:
@@ -443,7 +424,6 @@ def export_pose_keypoints(
 
     pose_cfg 关键字段：
       bone_overrides   : {COCO 名: UE bone 名} 覆盖默认映射
-      head_offsets_cm  : {脸部 COCO 名: [x, y, z] cm} head 局部偏移覆盖
       occlusion_trace  : bool，是否对每个关键点做遮挡 trace（默认 true）
       trace_tolerance_cm: 遮挡 trace 容差（cm，默认 20.0）
     ann_cfg 关键字段：cameras / frame_start / frame_end / image_width / image_height。
@@ -464,7 +444,6 @@ def export_pose_keypoints(
     occlusion_trace = bool(pose_cfg.get("occlusion_trace", True))
     trace_tol = float(pose_cfg.get("trace_tolerance_cm", DEFAULT_TRACE_TOLERANCE_CM))
     overrides = pose_cfg.get("bone_overrides") or {}
-    head_offsets = pose_cfg.get("head_offsets_cm") or {}
     image_width = int(ann_cfg.get("image_width", 1920))
     image_height = int(ann_cfg.get("image_height", 1080))
     source_step_seconds = float(meta["timing"].get("source_step_seconds", 0.1))
@@ -524,7 +503,7 @@ def export_pose_keypoints(
         step = frame_data["step"]
         kps = {}
         for entity_id, actor in player_actors.items():
-            kps[entity_id] = _actor_keypoints_world_m(actor, bone_maps[entity_id], head_offsets)
+            kps[entity_id] = _actor_keypoints_world_m(actor, bone_maps[entity_id])
         per_frame_kps[step] = kps
         if step % 50 == 0:
             print(f"  Pose: step {step}/{len(frames)}")
@@ -545,10 +524,10 @@ def export_pose_keypoints(
             "camera_id": name,
             "image_width": image_width,
             "image_height": image_height,
-            "keypoint_names": COCO_KEYPOINT_NAMES,
+            "keypoint_names": POSE_KEYPOINT_NAMES,
             "coordinate_convention": (
                 "world keypoints in meters（UE 厘米 / 100）；UE 左手系 X 前 Y 右 Z 上；"
-                "按 COCO 17 点顺序"
+                "按 12 点肢体关键点顺序"
             ),
             "occlusion_method": (
                 f"UE line trace（相机→关键点，命中距离 < 关键点距离 - {trace_tol}cm 即被遮挡）"

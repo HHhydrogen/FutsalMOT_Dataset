@@ -139,7 +139,7 @@ def run_postprocess(
     if pose_enabled:
         from grf_ue_bridge.pose_annotator import annotate_pose_dir
 
-        print_fn("annotate-pose（YOLO Pose COCO 17 点）...")
+        print_fn("annotate-pose（YOLO Pose 12 点肢体关键点）...")
         rc = annotate_pose_dir(
             dataset,
             pose_cfg=yolo_pose,

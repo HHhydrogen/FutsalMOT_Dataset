@@ -92,12 +92,21 @@ def map_rendered_to_annotation(
 
 
 def find_rendered_frame_numbers(render_dir: Path) -> Dict[int, Path]:
-    """扫描 render 目录（含子目录），从 PNG 文件名里解析帧号。
+    """扫描 RGB render 目录并返回 FinalImage 帧；保留旧接口。
 
-    返回 {frame_number: path}。文件名须包含数字（MRQ 输出如 000000.png）。
+    若目录没有明确的 FinalImage/Final 前缀，则回退到旧的最长前缀规则，
+    兼容历史独立 RGB smoke 输出。
+    """
+    final_images = find_final_image_files(render_dir)
+    if final_images:
+        return final_images
+    return _find_png_frame_group(render_dir)
 
-    若存在多组前缀（如 FinalImage + BurnInOverlay），优先取 FinalImage
-    （RGB 主帧），避免 BurnInOverlay（半透明 overlay）覆盖真实 RGB。
+
+def _find_png_frame_group(render_dir: Path) -> Dict[int, Path]:
+    """扫描 PNG 并按前缀分组，供 legacy RGB 输出兜底。
+
+    返回 ``{frame_number: path}``；文件名须包含数字。
     """
     groups: Dict[str, Dict[int, Path]] = {}
     for p in sorted(render_dir.rglob("*.png")):
@@ -114,6 +123,97 @@ def find_rendered_frame_numbers(render_dir: Path) -> Dict[int, Path]:
             if g_prefix == prefix or g_prefix.startswith(prefix):
                 return mapping
     return max(groups.values(), key=len)
+
+
+def _find_prefixed_files(render_dir: Path, suffix: str) -> Dict[str, Dict[int, Path]]:
+    """按文件名前缀和尾部数字分组，忽略不匹配的文件。"""
+    groups: Dict[str, Dict[int, Path]] = {}
+    for path in sorted(render_dir.rglob(f"*.{suffix}")):
+        stem = path.stem
+        digits = ""
+        for char in reversed(stem):
+            if not char.isdigit():
+                break
+            digits = char + digits
+        if not digits:
+            continue
+        prefix = stem[: -len(digits)].rstrip("._")
+        groups.setdefault(prefix, {})[int(digits)] = path
+    return groups
+
+
+def find_final_image_files(render_dir: Path) -> Dict[int, Path]:
+    """选择 combined MRQ job 的 FinalImage PNG 帧。"""
+    groups = _find_prefixed_files(render_dir, "png")
+    preferred = []
+    for prefix, mapping in groups.items():
+        normalized = prefix.lower()
+        if normalized == "finalimage" or normalized.startswith("finalimage"):
+            preferred.append(mapping)
+        elif normalized == "final" or normalized.startswith("final."):
+            preferred.append(mapping)
+    if not preferred:
+        return {}
+    return max(preferred, key=len)
+
+
+def find_object_id_files(render_dir: Path) -> Dict[int, Path]:
+    """选择 combined MRQ job 输出的 Object-ID multilayer EXR 帧。
+
+    一个 combined EXR 对应一个渲染帧；多个相同帧号文件表示输出不明确，
+    必须显式失败而不是随机覆盖。
+    """
+    files: Dict[int, Path] = {}
+    for path in sorted(render_dir.rglob("*.exr")):
+        stem = path.stem
+        digits = ""
+        for char in reversed(stem):
+            if not char.isdigit():
+                break
+            digits = char + digits
+        if not digits:
+            continue
+        frame = int(digits)
+        if frame in files:
+            raise ValueError(
+                f"Object-ID EXR 帧号重复: {frame} ({files[frame]} 与 {path})"
+            )
+        files[frame] = path
+    return files
+
+
+def copy_object_id_frames(
+    render_dir: Path,
+    render_mask_dir: Path,
+    keep_indices: Sequence[int],
+) -> int:
+    """把 combined job 的 Object-ID EXR 按渲染帧号归档到 render_mask/。"""
+    rendered = find_object_id_files(render_dir)
+    ensure_dir(render_mask_dir)
+    copied = 0
+    for frame in keep_indices:
+        source = rendered.get(frame)
+        if source is None:
+            continue
+        shutil.copy2(source, render_mask_dir / f"{frame:06d}.exr")
+        copied += 1
+    return copied
+
+
+def archive_object_id_frames(
+    render_dir: Path,
+    render_mask_dir: Path,
+    keep_indices: Sequence[int],
+) -> int:
+    """归档 EXR 到 render_mask/；仅在目标副本存在时删除 scratch 源文件。"""
+    rendered = find_object_id_files(render_dir)
+    copied = copy_object_id_frames(render_dir, render_mask_dir, keep_indices)
+    for frame in keep_indices:
+        source = rendered.get(frame)
+        destination = render_mask_dir / f"{frame:06d}.exr"
+        if source is not None and destination.is_file():
+            source.unlink()
+    return copied
 
 
 def copy_rendered_frames(
@@ -404,6 +504,15 @@ def _set_job_config(job, config) -> bool:
         except Exception:
             pass
     return False
+
+
+def combined_file_name_format(file_name_format: str) -> str:
+    """为 combined MRQ PNG pass 添加稳定的 render_pass 前缀。"""
+    if "{render_pass}" in str(file_name_format):
+        return str(file_name_format)
+    # EXR writer把 render_pass token 解析为空字符串；不加分隔点可避免
+    # 合并 EXR 产生 .000000.exr 这样的隐藏式文件名。
+    return "{render_pass}" + str(file_name_format)
 
 
 def _mrq_get_queue(subsystem):
@@ -777,6 +886,75 @@ def _build_mrq_job(
             "无法把配置挂到 job（set_configuration 失败）。请把 [MRQ 诊断] 输出贴回。"
         )
 
+    return job
+
+
+def _build_combined_mrq_job(
+    queue,
+    seq_asset_path: str,
+    map_path: str,
+    render_dir: Path,
+    image_width: int,
+    image_height: int,
+    frame_rate: int,
+    file_name_format: str,
+    zero_pad: int,
+    mask_source: str,
+    post_process_material: str = None,
+    preset=None,
+    cv_gt=None,
+):
+    """构建同一 MRQ job 的 RGB、Object-ID EXR 与 Pose BurnIn 输出。"""
+    import unreal
+
+    if mask_source != "object_id_pass":
+        raise ValueError("combined MRQ 只支持 mask_source=object_id_pass")
+    if post_process_material:
+        raise ValueError("combined MRQ 不支持 post_process_material fallback")
+
+    job = queue.allocate_new_job(unreal.MoviePipelineExecutorJob)
+    job.sequence = unreal.SoftObjectPath(seq_asset_path)
+    if map_path:
+        job.map = unreal.SoftObjectPath(map_path)
+
+    config = _get_job_config(job)
+    output = config.find_or_add_setting_by_class(unreal.MoviePipelineOutputSetting)
+    output.output_directory = unreal.DirectoryPath(str(render_dir))
+    # PNG writer使用render_pass区分FinalImage和BurnInOverlay；EXR writer
+    # 会将render_pass token解析为空，再把各pass作为命名layer写入同一帧文件。
+    output.file_name_format = combined_file_name_format(file_name_format)
+    output.zero_pad_frame_numbers = zero_pad
+    output.output_resolution = unreal.IntPoint(image_width, image_height)
+    try:
+        output.frame_rate = unreal.FrameRate(frame_rate, 1)
+    except Exception:
+        pass
+
+    config.find_or_add_setting_by_class(unreal.MoviePipelineImageSequenceOutput_PNG)
+    _add_exr_output(config)
+
+    pass_added = False
+    for pass_cls in (
+        unreal.MoviePipelineDeferredPassBase,
+        unreal.MoviePipelineDeferredPass_PathTracer,
+        unreal.MoviePipelineDeferredPass_Unlit,
+    ):
+        try:
+            config.find_or_add_setting_by_class(pass_cls)
+            pass_added = True
+            break
+        except Exception:
+            continue
+    if not pass_added:
+        raise RuntimeError("combined MRQ 无法添加 Deferred/PathTracer/Unlit pass")
+
+    oid = config.find_or_add_setting_by_class(unreal.MoviePipelineObjectIdRenderPass)
+    _configure_object_id_pass(oid)
+    _apply_mrq_preset(config, preset, cv_gt, is_mask=False)
+    _add_job_console_variables(config, post_process_console_vars(preset, cv_gt))
+
+    if not _set_job_config(job, config):
+        raise RuntimeError("无法把 combined MRQ 配置挂到 job")
     return job
 
 
@@ -1370,7 +1548,15 @@ class _AsyncRenderPipeline:
         prepared = []
         for info in self.jobs:
             try:
-                if info.get("kind") == "mask":
+                if info.get("kind") == "combined":
+                    job = _build_combined_mrq_job(
+                        queue, info["seq_asset_path"], map_path, info["render_dir"],
+                        image_width, image_height, frame_rate, file_name_format, zero_pad,
+                        mask_source=info.get("mask_source", "object_id_pass"),
+                        post_process_material=info.get("post_process_material"),
+                        preset=info.get("preset"), cv_gt=info.get("cv_gt"),
+                    )
+                elif info.get("kind") == "mask":
                     job = _build_mask_job(
                         queue, info["seq_asset_path"], map_path, info["render_dir"],
                         image_width, image_height, frame_rate, file_name_format, zero_pad,
@@ -1545,11 +1731,16 @@ class _AsyncRenderPipeline:
     def _all_keep_frames_present(self) -> bool:
         """所有 camera 的目标渲染帧（keep_indices）是否已输出到 render/（mask 用 find_mask_files）。"""
         for info in self.jobs:
-            if info.get("kind") == "mask":
+            if info.get("kind") == "combined":
+                available_rgb = find_final_image_files(info["render_dir"])
+                available_mask = find_object_id_files(info["render_dir"])
+                if not all(n in available_rgb and n in available_mask for n in self.keep_indices):
+                    return False
+            elif info.get("kind") == "mask":
                 available = find_mask_files(info["render_dir"])
             else:
                 available = find_rendered_frame_numbers(info["render_dir"])
-            if not all(n in available for n in self.keep_indices):
+            if info.get("kind") != "combined" and not all(n in available for n in self.keep_indices):
                 return False
         return True
 
@@ -1575,6 +1766,30 @@ class _AsyncRenderPipeline:
             cam_id = info["cam_id"]
             render_dir, out_dir = info["render_dir"], info["img1_dir"]
             is_mask = info.get("kind") == "mask"
+            is_combined = info.get("kind") == "combined"
+            if is_combined:
+                copied = copy_rendered_frames(render_dir, out_dir, self.keep_indices)
+                mask_dir = info["render_mask_dir"]
+                mask_copied = archive_object_id_frames(render_dir, mask_dir, self.keep_indices)
+                total_copied += copied
+                total_mask_copied += mask_copied
+                entry = per_camera.setdefault(cam_id, {
+                    "sequence": info["name"],
+                    "expected_frames": expected,
+                    "ok": True,
+                })
+                entry["img1_frames"] = copied
+                entry["mask_frames"] = mask_copied
+                entry["mask_source"] = "object_id_exr"
+                entry["ok"] = copied == expected and mask_copied == expected
+                print(f"  [{'OK' if entry['ok'] else 'PARTIAL'}] {cam_id}: combined RGB {copied}/{expected}, mask(EXR) {mask_copied}/{expected}")
+                if copied == expected and render_dir.is_dir():
+                    for rp in render_dir.glob("*.png"):
+                        try:
+                            rp.unlink()
+                        except OSError:
+                            pass
+                continue
             if is_mask:
                 copied = copy_mask_frames(render_dir, out_dir, self.keep_indices)
             else:
@@ -1804,20 +2019,41 @@ def render_sequences(
         img1_dir = cam_out / "img1"
         ensure_dir(render_dir)
         _clear_dir(render_dir)  # 清空上一次渲染残留，避免旧帧混入
-        jobs.append({
-            "name": seq_name,
-            "cam_id": cam_id,
-            "seq_asset_path": seq_asset_path,
-            "cam_out": cam_out,
-            "render_dir": render_dir,
-            "img1_dir": img1_dir,
-            "kind": "rgb",
-            "preset": preset,
-            "cv_gt": cv_gt,
-        })
-        print(f"  待渲染 RGB: {seq_name} -> {img1_dir}")
+        if mask_enabled and mask_source == "object_id_pass":
+            render_mask_dir = cam_out / "render_mask"
+            mask_dir = cam_out / "mask"
+            ensure_dir(render_mask_dir)
+            _clear_dir(render_mask_dir)
+            _clear_dir(mask_dir)
+            jobs.append({
+                "name": seq_name,
+                "cam_id": cam_id,
+                "seq_asset_path": seq_asset_path,
+                "cam_out": cam_out,
+                "render_dir": render_dir,
+                "render_mask_dir": render_mask_dir,
+                "img1_dir": img1_dir,
+                "kind": "combined",
+                "mask_source": "object_id_pass",
+                "preset": preset,
+                "cv_gt": cv_gt,
+            })
+            print(f"  待渲染 COMBINED RGB+MASK: {seq_name} -> {img1_dir}, {render_mask_dir}")
+        else:
+            jobs.append({
+                "name": seq_name,
+                "cam_id": cam_id,
+                "seq_asset_path": seq_asset_path,
+                "cam_out": cam_out,
+                "render_dir": render_dir,
+                "img1_dir": img1_dir,
+                "kind": "rgb",
+                "preset": preset,
+                "cv_gt": cv_gt,
+            })
+            print(f"  待渲染 RGB: {seq_name} -> {img1_dir}")
 
-        if mask_enabled:
+        if mask_enabled and mask_source != "object_id_pass":
             mask_render_dir = cam_out / "render_mask"
             mask_dir = cam_out / "mask"
             ensure_dir(mask_render_dir)

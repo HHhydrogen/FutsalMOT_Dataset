@@ -94,8 +94,7 @@
       "write_dataset_yaml": true,
       "occlusion_trace": false,
       "trace_tolerance_cm": 20.0,
-      "bone_overrides": {},
-      "head_offsets_cm": {}
+      "bone_overrides": {}
     },
     "debug": {
       "enabled": false,

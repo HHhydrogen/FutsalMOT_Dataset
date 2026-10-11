@@ -4,7 +4,7 @@
   - 默认 research_minimal：清理 render/FinalImage 重复、BurnIn、debug overlay、
     mask EXR、mask PNG、raw pose_capture、render scratch、SaveGame slots。
   - 保留 canonical：RGB img1、camera calibration、frames/meta、annotations、
-    MOT、COCO17 2D/3D、YOLO det/seg/pose labels、provenance、audit、manifest。
+    MOT、12 点 Pose 2D/3D、YOLO det/seg/pose labels、provenance、audit、manifest。
 
 安全规则：
   - 必须 validation-gated：若 episode 不完整（audit FAIL / pose incomplete /
@@ -34,7 +34,7 @@ _TRANSIENT_CAM_RELS = {
 }
 # global transient 相对 episode 目录
 _TRANSIENT_EP_RELS = {
-    "pose_capture.jsonl": None,  # raw pose（coco17_3d 已验证后可删）
+    "pose_capture.jsonl": None,  # raw 13 骨 pose（12 点最终 Pose 已验证后可删）
 }
 # yolo_pose/images 是复制自 img1 的重复 RGB（YOLO 配置应引用原始 img1），属 transient
 _YOLO_IMAGE_DIRS = ("yolo_pose/images", "yolo_det/images", "yolo_seg/images")
@@ -68,7 +68,7 @@ def collect_transient(dataset_episode_dir: Path, cams, profile="research_minimal
                         to_delete[str(f)] = f.stat().st_size
             elif target.is_file():
                 to_delete[str(target)] = target.stat().st_size
-    # global transient（research_minimal：raw pose 在 coco17_3d 验证后可删）
+    # global transient（research_minimal：raw pose 在 12 点最终 Pose 验证后可删）
     for rel, pat in _TRANSIENT_EP_RELS.items():
         target = dataset_episode_dir / rel
         if target.is_file():
@@ -211,7 +211,7 @@ def build_manifest(dataset_episode_dir, resolved, cams) -> dict:
         "classes": ["player", "ball"],
         "global_track_id_policy": "L0=1..L4=5,R0=6..R4=10,BALL=100",
         "mot_ball_policy": "include_ball=true (BALL track_id=100)",
-        "pose_schema": "coco17_3d/2d (17 keypoints, meters/pixels)",
+        "pose_schema": "limb_pose_3d/2d (12 keypoints, meters/pixels); raw capture keeps 13 bones",
         "artifact_profile": (resolved.get("artifact_policy") or {}).get("profile", "research_minimal"),
         "rgb_count_per_camera": len(list((dataset_episode_dir / cams[0] / "img1").glob("*.png")))
         if cams and (dataset_episode_dir / cams[0] / "img1").is_dir() else 0,

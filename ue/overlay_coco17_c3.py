@@ -1,10 +1,10 @@
-"""P1：COCO17 2D keypoints overlay（双 actor，17 点 + COCO 骨架连线）。
+"""历史双 actor 2D Pose overlay（12 个肢体点 + 骨架连线）。
 
 用法：
     uv run python ue/overlay_coco17_c3.py
 
 读：
-  - coco17_2d.jsonl（每帧 17 点 2D 像素 + visible，含 actor_id）
+  - coco17_2d.jsonl（每帧 12 点 2D 像素 + visible，含 actor_id）
   - img1/000001.png（RGB，1-based）
 写：
   - overlay_coco17/000001.png
@@ -18,7 +18,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
-from pose_bones import COCO_KEYPOINT_NAMES, COCO_SKELETON_EDGES
+from pose_bones import POSE_KEYPOINT_NAMES, POSE_SKELETON_EDGES
 
 EP = Path(r"G:\FutsalMOT_Dataset\episode_bp_frame_sync")
 CAM = EP / "CineCam_01"
@@ -32,7 +32,6 @@ ACTOR_COLORS = {
     "Player_L0": (255, 0, 0),      # 红
     "Player_R0": (0, 128, 255),    # 蓝
 }
-FACE_COLOR = (255, 255, 0)  # 脸部黄色（与肢体区分）
 
 
 def main():
@@ -59,21 +58,19 @@ def main():
             pts = fr["keypoints_2d_px"]
             vis = fr["visible"]
             # 连线
-            for a, b in COCO_SKELETON_EDGES:
-                ia, ib = COCO_KEYPOINT_NAMES.index(a), COCO_KEYPOINT_NAMES.index(b)
+            for a, b in POSE_SKELETON_EDGES:
+                ia, ib = POSE_KEYPOINT_NAMES.index(a), POSE_KEYPOINT_NAMES.index(b)
                 if vis[ia] and vis[ib] and pts[ia] and pts[ib]:
                     draw.line([pts[ia][0], pts[ia][1], pts[ib][0], pts[ib][1]],
                               fill=color, width=2)
-            # 点（脸部用黄色）
-            for i, name in enumerate(COCO_KEYPOINT_NAMES):
+            for i, name in enumerate(POSE_KEYPOINT_NAMES):
                 if vis[i] and pts[i]:
                     u, v = pts[i]
-                    c = FACE_COLOR if name in ("nose", "left_eye", "right_eye", "left_ear", "right_ear") else color
                     r = 1
-                    draw.ellipse([u - r, v - r, u + r, v + r], fill=c)
+                    draw.ellipse([u - r, v - r, u + r, v + r], fill=color)
         img.save(OUT_DIR / f"{root + 1:06d}.png")
 
-    print("\n=== 关键帧 17 点（像素）===")
+    print("\n=== 关键帧 12 点（像素）===")
     for f in CHECK_FRAMES:
         frs = by_root.get(f, [])
         if not frs:
@@ -82,7 +79,7 @@ def main():
         print(f"root={f:>3}:")
         for fr in sorted(frs, key=lambda x: x["actor_id"]):
             print(f"  [{fr['actor_id']}]")
-            for i, name in enumerate(COCO_KEYPOINT_NAMES):
+            for i, name in enumerate(POSE_KEYPOINT_NAMES):
                 if fr["visible"][i] and fr["keypoints_2d_px"][i]:
                     u, v = fr["keypoints_2d_px"][i]
                     print(f"      {name:<15} ({u:7.1f},{v:7.1f})")

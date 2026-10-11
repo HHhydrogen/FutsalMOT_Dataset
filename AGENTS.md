@@ -47,7 +47,7 @@ git -C D:\projects\FutsalMOT_UEDataset push origin master
 进入本仓库工作前先阅读：
 
 1. `README.md`：架构、环境、推荐流程和 CLI 入口。
-2. `docs/DATA_CONTRACT.md`：轨迹、相机、Mask、MOT、YOLO、Pose 和 COCO17 数据格式。
+2. `docs/DATA_CONTRACT.md`：轨迹、相机、Mask、MOT、YOLO、Pose 和 12 点肢体格式。
 3. `docs/VALIDATION_AND_LIMITATIONS.md`：测试、验证、审计、清理和已知限制。
 
 不要引用已删除的 `CLAUDE.md`、`configs/README.md`、`ue/README.md`、`docs/architecture/` 或 `docs/design/` 文档作为当前实现依据。
@@ -96,7 +96,7 @@ UE 相关任务优先使用外层项目已配置的 Unreal MCP：
 ## 正式入口与 Legacy 代码
 
 - 正式 P2 总入口：`ue/run_task.py --resolved-task <path> --mode full`。
-- `--mode pose-finalize` 在 MRQ 完成后导出 Runtime Pose、COCO17 和 `pose_keypoints.jsonl`。
+- `--mode pose-finalize` 在 MRQ 完成后导出含 13 骨的 raw Runtime Pose、12 点肢体最终 Pose 和 `pose_keypoints.jsonl`。
 - `--mode annotations` 仍可调用旧的逐帧 `pose_export.py`，属于 Legacy，不要与 Runtime Pose 结果混写或混称。
 - `ue/import_grf_episode.py` 及 `ue/archive_c4_diag/` 中的旧导入、构建和诊断脚本不是默认正式入口。
 - 当前正式 UE 资产路径位于 `/Game/FutsalMOT/Blueprints/Pose/`；若旧脚本仍引用 `/Game/FutsalMOT/Blueprints/` 根路径，先核验资产是否已迁移，不能直接假设脚本可用。

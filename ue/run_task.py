@@ -34,7 +34,9 @@ RESOLVED_TASK_SCHEMA = "futsalmot_resolved_task"
 _UE_MODULE_NAMES = (
     "camera_projection", "annotation_utils", "dataset_export",
     "scene_apply", "annotation_exporter", "render_preset", "render_episode",
+    "import_grf_episode",
     "pose_bones", "pose_export", "pose_render", "pose_capture_export",
+    "build_coco17",
     "player_motion", "camera_distribution", "player_visuals",
 )
 for _name in _UE_MODULE_NAMES:
@@ -146,13 +148,13 @@ def _resolve_runtime_camera_selection(
 
 
 def _runtime_pose_to_pose_keypoints(ep_dir, cameras, num_steps, ann_cfg):
-    """把 Runtime Pose COCO17_3D 输出桥接为 P1 pose_annotator 契约的 pose_keypoints.jsonl。
+    """把 Runtime Pose 12 点输出桥接为 P1 pose_annotator 契约的 pose_keypoints.jsonl。
 
-    读 <ep>/coco17_3d.jsonl（每行 {actor_id, root, keypoints_3d_m: [[x,y,z]×17]}），
+    读 <ep>/coco17_3d.jsonl（每行 {actor_id, root, keypoints_3d_m: [[x,y,z]×12]}），
     写 <ep>/<cam>/pose_keypoints.jsonl（meta + frame 行，与 pose_export.py 格式一致，
     keypoints_world 单位为米，无 occluded——P1 用 mask 判定 visibility）。
     """
-    from pose_bones import COCO_KEYPOINT_NAMES
+    from pose_bones import POSE_KEYPOINT_NAMES, NUM_POSE_KEYPOINTS
     from annotation_utils import entity_id_to_track_id
 
     # 解析 image_width/height（来自 render_rgb 或 annotation_export 配置）
@@ -180,10 +182,10 @@ def _runtime_pose_to_pose_keypoints(ep_dir, cameras, num_steps, ann_cfg):
             "camera_id": cam,
             "image_width": image_width,
             "image_height": image_height,
-            "keypoint_names": COCO_KEYPOINT_NAMES,
+            "keypoint_names": POSE_KEYPOINT_NAMES,
             "coordinate_convention": (
                 "world keypoints in meters（Runtime Pose SaveGame cm / 100）；"
-                "UE 左手系 X 前 Y 右 Z 上；按 COCO 17 点顺序"
+                "UE 左手系 X 前 Y 右 Z 上；按 12 点肢体关键点顺序"
             ),
             "occlusion_method": "none（P1 仅用 mask 判定 visibility）",
         }
@@ -192,7 +194,7 @@ def _runtime_pose_to_pose_keypoints(ep_dir, cameras, num_steps, ann_cfg):
             objects = []
             for r in by_root[root]:
                 kps = r.get("keypoints_3d_m") or []
-                if len(kps) != 17:
+                if len(kps) != NUM_POSE_KEYPOINTS:
                     continue
                 # None → 仍占位（pose_annotator 检查 len==17）
                 kp_world = []
@@ -361,7 +363,7 @@ def main() -> int:
     print(f"  cameras: {cameras}")
     print(f"  num_steps={meta_timing_num_steps}  yolo_pose enabled: {pose_enabled}")
 
-    # ── pose-finalize 模式：渲染完成后导出 Runtime Pose + 生成 COCO17 ──
+    # ── pose-finalize 模式：渲染完成后导出 raw 13 骨 + 生成 12 点肢体 Pose ──
     if mode == "pose-finalize":
         os.environ["C5_POSE_TASK"] = str(args.resolved_task or os.environ.get("C5_RESOLVED_TASK"))
         os.environ["C5_POSE_EXPECT"] = str(meta_timing_num_steps)
@@ -377,23 +379,23 @@ def main() -> int:
         import pose_capture_export
         pose_capture_export.main()
         # pose_capture_export 在 incomplete 时 fail-fast（不写文件）。
-        # 必须检查新文件存在 + pose_session.capture_complete=True 才继续 COCO17。
+        # 必须检查新文件存在 + pose_session.capture_complete=True 才继续生成最终 Pose。
         pc_path = ep_out / "pose_capture.jsonl"
         ps_path = ep_out / "pose_session.json"
         if not pc_path.is_file() or not ps_path.is_file():
-            return _fail("pose_capture_export 未生成 pose_capture.jsonl（Runtime Pose 捕获 incomplete 或失败），禁止 COCO17")
+            return _fail("pose_capture_export 未生成 pose_capture.jsonl（Runtime Pose 捕获 incomplete 或失败），禁止生成最终 Pose")
         import json as _json
         ps = _json.loads(ps_path.read_text(encoding="utf-8"))
         if not ps.get("capture_complete"):
-            return _fail(f"pose_session.capture_complete=False (captured={ps.get('captured_frame_count')}/expected={ps.get('expected_frame_count')})，禁止 COCO17")
-        print("\n--- COCO17 3D/2D 生成（build_coco17）---")
+            return _fail(f"pose_session.capture_complete=False (captured={ps.get('captured_frame_count')}/expected={ps.get('expected_frame_count')})，禁止生成最终 Pose")
+        print("\n--- 12 点肢体 Pose 3D/2D 生成（build_coco17）---")
         os.environ["C5_EPISODE_DIR"] = str(dataset_root / episode_name)
         os.environ["C5_COCO17_CAMERAS"] = ",".join(cameras)
         import build_coco17
         rc = build_coco17.main()
         if rc:
             return _fail("build_coco17 失败（见上）")
-        # 生成 pose_keypoints.jsonl（P1 annotate-pose 契约：从 Runtime Pose COCO17_3D 桥接）
+        # 生成 12 点 pose_keypoints.jsonl（P1 annotate-pose 契约）
         print("\n--- 生成 pose_keypoints.jsonl（Runtime Pose → P1 pose_annotator 契约）---")
         _runtime_pose_to_pose_keypoints(dataset_root / episode_name, cameras,
                                         meta_timing_num_steps, ann_cfg)
@@ -438,7 +440,7 @@ def main() -> int:
         print("\n已提交。MRQ 渲染为异步执行（不阻塞编辑器），完成后自动复制 RGB 到 img1/"
               "（及统计 Instance-ID Mask 对齐帧）并写 render_summary.json。")
         print(f"Runtime Pose 捕获：BurnIn 写入 {cameras[0]} 的 5×SaveGame（世界 3D，camera 无关）。")
-        print("渲染完成后运行：py run_task.py --mode pose-finalize（导出 pose_capture + COCO17）。")
+        print("渲染完成后运行：py run_task.py --mode pose-finalize（导出 raw 13 骨 + 12 点肢体 Pose）。")
         return 0
 
     if mode == "annotations":

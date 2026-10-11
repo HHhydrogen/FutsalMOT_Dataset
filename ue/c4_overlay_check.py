@@ -3,12 +3,11 @@
 读 coco17_2d_c4.jsonl + img1/ + overlay_coco17_c4/。
 检查：
   1. 每帧恰好 10 actor，ID 严格 {L0..L4,R0..R4}
-  2. 每 actor 17 keypoints，无 NaN/Inf
+  2. 每 actor 12 keypoints，无 NaN/Inf
   3. 每 actor 投影点不全在同一位置
-  4. 同一 actor nose(0) 与 ankle(15) 2D 距离明显非零（跨人体高度）
+  4. 同一 actor shoulder(0) 与 ankle(10) 2D 距离明显非零（跨人体高度）
   5. L/R 两队空间分离（不混淆）
-  6. InSocketName 修复验证：指定帧+actor 打印 head→nose、hand_l→9、hand_r→10、
-     thigh_l→11、calf_l→13、foot_l→15 的 2D 投影，确认各不相同
+  6. InSocketName 修复验证：指定帧+actor 打印肩、腕、髋、膝、踝的 2D 投影，确认各不相同
   7. 全帧 actor 中心两两最近距离 → 挑出球员最接近（最可能遮挡）的 3 帧
 """
 
@@ -22,9 +21,9 @@ OV = EP / "overlay_coco17_c4"
 IMG = EP / "CineCam_01" / "img1"
 
 EXPECT_ACTORS = [f"L{i}" for i in range(5)] + [f"R{i}" for i in range(5)]
-# COCO17 索引：nose=0, wrist=9/10, hip=11/12, knee=13/14, ankle=15/16
-PROBE = [("nose", 0), ("left_wrist", 9), ("right_wrist", 10),
-         ("left_hip", 11), ("left_knee", 13), ("left_ankle", 15)]
+# 12 点索引：shoulder=0/1, wrist=4/5, hip=6/7, knee=8/9, ankle=10/11
+PROBE = [("left_shoulder", 0), ("right_wrist", 5), ("left_hip", 6),
+         ("left_knee", 8), ("left_ankle", 10)]
 
 
 def _dist(a, b):
@@ -54,14 +53,14 @@ def main():
             aid = fr["actor_id"]
             kp = fr["keypoints_2d_px"]
             vis = fr["visible"]
-            if len(kp) != 17:
-                problems.append(f"frame {root} {aid}: keypoints {len(kp)} != 17")
+            if len(kp) != 12:
+                problems.append(f"frame {root} {aid}: keypoints {len(kp)} != 12")
                 continue
             # NaN/Inf
             for p in kp:
                 if p is not None and any(math.isnan(v) or math.isinf(v) for v in p):
                     problems.append(f"frame {root} {aid}: NaN/Inf keypoint")
-            # 17 点是否全同
+            # 12 点是否全同
             pts = [p for p in kp if p]
             if pts:
                 xs = [p[0] for p in pts]
@@ -70,11 +69,11 @@ def main():
                 if span < 1.0:
                     problems.append(f"frame {root} {aid}: 投影全集中 ({span:.3f}px)")
                 centers[aid] = (sum(xs) / len(xs), sum(ys) / len(ys))
-            # head(nose) vs ankle 距离
-            if kp[0] and kp[15]:
-                d = _dist(kp[0], kp[15])
+            # shoulder vs ankle 距离
+            if kp[0] and kp[10]:
+                d = _dist(kp[0], kp[10])
                 if d < 20.0:
-                    problems.append(f"frame {root} {aid}: nose-ankle 距离过小 {d:.1f}px")
+                    problems.append(f"frame {root} {aid}: shoulder-ankle 距离过小 {d:.1f}px")
         if len(centers) == 10:
             frame_centers[root] = centers
 

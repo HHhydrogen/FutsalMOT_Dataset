@@ -882,6 +882,69 @@ def test_audit_pose_requires_coco17_2d_for_every_expected_camera(tmp_path):
     assert "coco17_2d.jsonl" in " ".join(report["errors"])
 
 
+def test_audit_rejects_legacy_17_point_final_pose_arrays(tmp_path):
+    root = _write_audit_camera_fixture(tmp_path)
+    (root / "pose_session.json").write_text(
+        json.dumps({"capture_complete": True}), encoding="utf-8"
+    )
+    (root / "pose_capture.jsonl").write_text("{}\n" * (13 * 10), encoding="utf-8")
+    (root / "coco17_3d.jsonl").write_text(
+        "\n".join(json.dumps({"keypoints_3d_m": [[0.0, 0.0, 0.0]] * 17}) for _ in range(10)) + "\n",
+        encoding="utf-8",
+    )
+    (root / "Camera_01" / "coco17_2d.jsonl").write_text(
+        "\n".join(json.dumps({"keypoints_2d_px": [[0.0, 0.0]] * 17, "visible": [True] * 17}) for _ in range(10)) + "\n",
+        encoding="utf-8",
+    )
+
+    report = run_audit(
+        root,
+        require_render=False,
+        require_mask=False,
+        require_mot=False,
+        require_pose=True,
+        validation_level="none",
+    )
+
+    assert report["passed"] is False
+    assert report["checks"]["runtime_pose"]["status"] == "failed"
+    assert "12 点肢体契约" in " ".join(report["errors"])
+
+
+def test_audit_accepts_12_limb_points_and_preserves_13_raw_bones(tmp_path):
+    root = _write_audit_camera_fixture(tmp_path)
+    (root / "pose_session.json").write_text(
+        json.dumps({"capture_complete": True}), encoding="utf-8"
+    )
+    (root / "pose_capture.jsonl").write_text("{}\n" * (13 * 10), encoding="utf-8")
+    (root / "coco17_3d.jsonl").write_text(
+        "\n".join(
+            json.dumps({"keypoints_3d_m": [[0.0, 0.0, 0.0]] * 12}) for _ in range(10)
+        ) + "\n",
+        encoding="utf-8",
+    )
+    (root / "Camera_01" / "coco17_2d.jsonl").write_text(
+        "\n".join(
+            json.dumps({"keypoints_2d_px": [[0.0, 0.0]] * 12, "visible": [True] * 12})
+            for _ in range(10)
+        ) + "\n",
+        encoding="utf-8",
+    )
+
+    report = run_audit(
+        root,
+        require_render=False,
+        require_mask=False,
+        require_mot=False,
+        require_pose=True,
+        validation_level="none",
+    )
+
+    assert report["passed"] is True
+    assert report["pose_coco17"]["pose_capture_rows"] == 130
+    assert report["pose_coco17"]["coco17_total_kp"] == 120
+
+
 def test_audit_unrequested_render_zero_byte_is_ignored(tmp_path):
     root = _write_audit_camera_fixture(tmp_path)
     camera = root / "Camera_01"

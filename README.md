@@ -1,6 +1,6 @@
 # FutsalMOT GRF-UE 数据集代码
 
-本仓库是 FutsalMOT 项目的 Python 数据集代码仓库，包名为 `grf-ue-bridge`。它把 Google Research Football 的 5v5 轨迹导出为 JSONL，再由 Unreal Engine 5.8 导入、创建 Level Sequence、渲染 RGB 和 Instance-ID Mask，最后生成 MOT、YOLO 和 COCO17 姿态标注。
+本仓库是 FutsalMOT 项目的 Python 数据集代码仓库，包名为 `grf-ue-bridge`。它把 Google Research Football 的 5v5 轨迹导出为 JSONL，再由 Unreal Engine 5.8 导入、创建 Level Sequence、渲染 RGB 和 Instance-ID Mask，最后生成 MOT、YOLO 和 12 点肢体 Pose 标注。
 
 本目录位于外层 UE 仓库的 `Content/FutsalMOT/code/`，但拥有独立的 Git 历史和远程仓库。外层通过 submodule gitlink 引用本仓库 commit；修改本仓库时必须在本目录执行 Git 命令，内层 commit 完成后再回到外层更新 gitlink。
 
@@ -81,9 +81,9 @@ py "D:/projects/FustalMOT_UEDataset/Content/FutsalMOT/code/ue/run_task.py" --res
 | `annotations` | 导出相机标定和几何 AABB 标注；若显式启用 Pose，使用旧的逐帧 `pose_export.py` |
 | `full` | 创建 Sequence、导出几何标注；若启用 YOLO Pose 则准备 Runtime Pose Recorder，然后异步提交 RGB/Mask MRQ |
 | `render` | 不创建 Sequence，只使用已有 Sequence 导出并提交渲染 |
-| `pose-finalize` | 渲染结束后读取 Runtime Pose SaveGame，生成 Pose 和 COCO17 文件 |
+| `pose-finalize` | 渲染结束后读取 Runtime Pose SaveGame，保留 raw 13 骨 capture 并生成 12 点肢体 Pose 文件 |
 
-`full` 不等待 MRQ 完成。MRQ 完成回调或非阻塞 watchdog 会把 RGB 对齐复制到 `img1/`，统计或保留 Object-ID EXR，并写 `render_summary.json`。执行期间必须保持 Editor 继续 tick；不要在 UE 主线程中用 `sleep` 或阻塞等待。
+`full` 不等待 MRQ 完成。启用 Object-ID Mask 时，每个相机使用一个 MRQ job 同时输出 Deferred RGB、Object-ID multilayer EXR 和 Runtime Pose BurnIn；MRQ 完成回调或非阻塞 watchdog 会把 `FinalImage` RGB 对齐复制到 `img1/`，把 Object-ID EXR 归档到 `render_mask/`，并写 `render_summary.json`。仅 RGB 任务和 stencil PNG fallback 保持各自的兼容路径。执行期间必须保持 Editor 继续 tick；不要在 UE 主线程中用 `sleep` 或阻塞等待。
 
 如果 task 的 `postprocess.yolo_pose.enabled` 为 `true`，MRQ 完成后还必须运行：
 
@@ -180,8 +180,8 @@ ue/
   render_episode.py              异步 MRQ RGB/Mask 渲染
   pose_render.py                 C4 Recorder 准备和专用 Pose 渲染
   pose_capture_export.py         SaveGame -> pose_capture.jsonl
-  build_coco17.py                Runtime Pose -> COCO17 3D/2D
-  pose_bones.py                  COCO17 与 UE 骨骼映射
+   build_coco17.py                Runtime Pose -> 12 点肢体 3D/2D（保留历史文件名）
+   pose_bones.py                  12 点肢体与 UE 骨骼映射
   instance_mask.py               P1 Mask 纯函数，不在 UE 中导入
   archive_c4_diag/               历史诊断脚本，非正式入口
 ```

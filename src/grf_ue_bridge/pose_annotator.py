@@ -4,8 +4,8 @@
   读 pose_keypoints.jsonl（UE 写的世界 3D 关键点 + occluded 标志）
   + camera.json（真实内参/外参）+ annotations.jsonl（mask-primary bbox/track）
   + mask/{frame:06d}.png（Instance-ID Mask，可见性判定）
-  → 逐相机逐帧把 17 个世界关键点投影到图像，判定 visibility
-  → 写 labels_pose/{frame:06d}.txt（YOLO Pose，每行 56 字段）
+  → 逐相机逐帧把 12 个世界关键点投影到图像，判定 visibility
+  → 写 labels_pose/{frame:06d}.txt（YOLO Pose，每行 41 字段）
   → 可选写 yolo_pose/（images+labels 硬链接暂存 + futsal_pose.yaml，可直接训练）
 
 可见性规则（v = 0/1/2，见 docs/design/2026-08-11-yolo-pose-export.md）：
@@ -15,7 +15,7 @@
   - v=2：其余（关键点落在自身 mask 邻域或自由空间，且无遮挡）。
 
 bbox 复用 annotations.jsonl 的 mask-primary bbox（与 YOLO det 完全一致），
-不根据关键点重新生成。track_id / mask_id / 17 keypoints 始终来自同一球员。
+不根据关键点重新生成。track_id / mask_id / 12 keypoints 始终来自同一球员。
 
 调用入口：grf-ue annotate-pose <output_dir>（见 cli.py）；task postprocess 自动集成。
 """
@@ -49,11 +49,10 @@ from instance_mask import (  # noqa: E402
     yolo_class_id,
 )
 from pose_bones import (  # noqa: E402
-    COCO_FLIP_IDX,
-    COCO_KEYPOINT_NAMES,
-    COCO_SKELETON_EDGES,
-    NUM_COCO_KEYPOINTS,
-    NOSE_SHOULDER_MIDPOINT_EDGE,
+    POSE_FLIP_IDX,
+    POSE_KEYPOINT_NAMES,
+    POSE_SKELETON_EDGES,
+    NUM_POSE_KEYPOINTS,
     YOLO_POSE_FIELDS,
     bone_index_of,
 )
@@ -190,9 +189,9 @@ def _load_camera(cam_dir: Path) -> Tuple[Optional[CameraIntrinsics], Optional[Ca
 def _project_keypoints(kps_world: List[List[Optional[float]]],
                        intrinsics: CameraIntrinsics,
                        extrinsics: CameraExtrinsics) -> List[Optional[Tuple[float, float]]]:
-    """把 17 个世界关键点投影到图像坐标（像素，浮点）。
+    """把 12 个世界关键点投影到图像坐标（像素，浮点）。
 
-    返回长度 17 的列表；投影失败（3D 无效 / 相机后方 / 非有限值）为 None。
+    返回长度 12 的列表；投影失败（3D 无效 / 相机后方 / 非有限值）为 None。
     """
     out: List[Optional[Tuple[float, float]]] = []
     for kp in kps_world:
@@ -290,7 +289,7 @@ def compute_pose_instances(
         if pose is None:
             continue
         kps_world = pose.get("keypoints_world")
-        if not kps_world or len(kps_world) != NUM_COCO_KEYPOINTS:
+        if not kps_world or len(kps_world) != NUM_POSE_KEYPOINTS:
             continue
         occluded = pose.get("occluded")
         mask_id = ann.get("mask_id")
@@ -341,14 +340,14 @@ def serialize_pose_line(
     keypoints: List[Tuple[Optional[float], Optional[float], int]],
     precision: int = 6,
 ) -> str:
-    """序列化一行 YOLO Pose：class xc yc w h x1 y1 v1 ... x17 y17 v17（56 字段）。
+    """序列化一行 12 点 YOLO Pose：class bbox + 12×(x,y,v)（41 字段）。
 
     bbox 由 bbox_xyxy 归一化（与 YOLO det 完全一致，复用 det_xyxy_to_yolo_norm）。
-    keypoints 为 17 个 (px, py, visibility)，px/py 为像素坐标（None = 无效）。
+    keypoints 为 12 个 (px, py, visibility)，px/py 为像素坐标（None = 无效）。
     """
-    if len(keypoints) != NUM_COCO_KEYPOINTS:
+    if len(keypoints) != NUM_POSE_KEYPOINTS:
         raise ValueError(
-            f"关键点数 {len(keypoints)} != {NUM_COCO_KEYPOINTS}（COCO 17 点）"
+            f"关键点数 {len(keypoints)} != {NUM_POSE_KEYPOINTS}（12 点肢体关键点）"
         )
     cx, cy, w, h = det_xyxy_to_yolo_norm(bbox_xyxy, width, height, precision)
     fields = [str(int(class_id)), f"{cx:.6f}", f"{cy:.6f}", f"{w:.6f}", f"{h:.6f}"]
@@ -561,15 +560,15 @@ def _write_pose_yaml(episode_root: Path, stage_dir: Path) -> Path:
     data = {
         "path": episode_root.resolve().as_posix(),
         "names": {0: "player"},
-        "kpt_shape": [NUM_COCO_KEYPOINTS, 3],
-        "flip_idx": COCO_FLIP_IDX,
+        "kpt_shape": [NUM_POSE_KEYPOINTS, 3],
+        "flip_idx": POSE_FLIP_IDX,
     }
     lines = [f"path: {data['path']}",
              "# zero-waste: 不复制 RGB。images 为各 camera 的 img1（<episode>/<camera>/img1）；",
              "# 训练时请把 images 指向这些 img1 目录（labels 位于 yolo_pose/labels/<camera>/）。",
              "names:", "  0: player",
-             f"kpt_shape: [{NUM_COCO_KEYPOINTS}, 3]",
-             "flip_idx: [" + ", ".join(str(i) for i in COCO_FLIP_IDX) + "]", ""]
+             f"kpt_shape: [{NUM_POSE_KEYPOINTS}, 3]",
+             "flip_idx: [" + ", ".join(str(i) for i in POSE_FLIP_IDX) + "]", ""]
     path = episode_root / POSE_YAML_FILENAME
     write_text_atomic(path, "\n".join(lines))
     stage_yaml = stage_dir / POSE_YAML_FILENAME
@@ -611,9 +610,9 @@ def _edge_indices(a: str, b: str) -> Tuple[int, int]:
 
 
 def draw_pose_overlay(img, instances: List[dict], skeleton_edges: Optional[List[Tuple[str, str]]] = None,
-                      draw_midpoint: bool = True, dot_radius: int = 3,
+                      dot_radius: int = 3,
                       edge_width: int = 2, keypoint_names: bool = False):
-    """在 RGB 帧上绘制 17 关键点、骨架连线、bbox、track_id。返回新 PIL Image。
+    """在 RGB 帧上绘制 12 个肢体关键点、骨架连线、bbox、track_id。返回新 PIL Image。
 
     关键点颜色区分 visibility（绿=可见 / 橙=遮挡 / 红=无效）；骨架连线只连接
     v>0 的点。bbox 与 track_id 沿用 annotations 的 mask-primary bbox。
@@ -622,7 +621,7 @@ def draw_pose_overlay(img, instances: List[dict], skeleton_edges: Optional[List[
     """
     from PIL import ImageDraw
 
-    edges = skeleton_edges if skeleton_edges is not None else COCO_SKELETON_EDGES
+    edges = skeleton_edges if skeleton_edges is not None else POSE_SKELETON_EDGES
     img = img.convert("RGB")
     draw = ImageDraw.Draw(img)
 
@@ -644,17 +643,6 @@ def draw_pose_overlay(img, instances: List[dict], skeleton_edges: Optional[List[
             if kps[ia][2] == VIS_INVALID or kps[ib][2] == VIS_INVALID:
                 continue
             draw.line([pa, pb], fill=(180, 180, 185), width=edge_width)
-        # 可选：nose → 双肩中点
-        if draw_midpoint and "nose" in COCO_KEYPOINT_NAMES and \
-                "left_shoulder" in COCO_KEYPOINT_NAMES and "right_shoulder" in COCO_KEYPOINT_NAMES:
-            inose = bone_index_of("nose")
-            ils = bone_index_of("left_shoulder")
-            irs = bone_index_of("right_shoulder")
-            pn, pls, prs = pts[inose], pts[ils], pts[irs]
-            if pn is not None and pls is not None and prs is not None and \
-                    kps[inose][2] != VIS_INVALID:
-                mid = ((pls[0] + prs[0]) / 2.0, (pls[1] + prs[1]) / 2.0)
-                draw.line([pn, mid], fill=(180, 180, 185), width=edge_width)
         # 关键点（先画黑描边大点，再画彩色内核，保证在亮色/暗色背景上都可见）
         for i, kp in enumerate(kps):
             p = pts[i]
@@ -672,7 +660,7 @@ def draw_pose_overlay(img, instances: List[dict], skeleton_edges: Optional[List[
                 if p is None or kp[2] == VIS_INVALID:
                     continue
                 x, y = p
-                draw.text((x + dot_radius + 1, y - dot_radius), COCO_KEYPOINT_NAMES[i],
+                draw.text((x + dot_radius + 1, y - dot_radius), POSE_KEYPOINT_NAMES[i],
                           fill=(255, 255, 255), font=None)
         # bbox + track_id
         bbox = inst.get("bbox_xyxy")

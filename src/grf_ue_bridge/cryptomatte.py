@@ -47,6 +47,55 @@ def hex_id_to_float(hex_id: str) -> float:
     return struct.unpack(">f", bytes.fromhex(hex_id))[0]
 
 
+def select_cryptomatte_id_channel(
+    manifest: dict,
+    layers: dict,
+) -> Tuple[np.ndarray, str]:
+    """按 manifest 精确匹配选择 Cryptomatte float32 ID R 通道。
+
+    一个 multilayer EXR 可以同时包含 FinalImage 和 Object-ID pass。不能只按
+    ``RGBA`` 层名取值，因为合并输出时 ``RGBA`` 通常属于 FinalImage；这里用
+    manifest hash 的 float32 位模式统计每个候选层的命中像素，选择命中最多的
+    layer，并保留旧式独立 Object-ID EXR 的 RGBA 兼容性。
+    """
+    targets = []
+    for hex_id in manifest.values():
+        try:
+            targets.append(np.uint32(int(str(hex_id), 16)))
+        except (TypeError, ValueError):
+            continue
+    if not targets:
+        raise ValueError("Cryptomatte manifest 没有有效的十六进制 ID")
+    target_bits = np.asarray(targets, dtype=np.uint32)
+
+    candidates = []
+    for layer_name, channel in layers.items():
+        pixels = getattr(channel, "pixels", channel)
+        if pixels is None:
+            continue
+        array = np.asarray(pixels)
+        if array.ndim != 3 or array.shape[2] < 1:
+            continue
+        if array.dtype != np.float32:
+            array = np.asarray(array, dtype=np.float32)
+        channel_r = np.ascontiguousarray(array[:, :, 0], dtype=np.float32)
+        bits = channel_r.view(np.uint32)
+        hits = int(np.isin(bits, target_bits).sum())
+        candidates.append((hits, 1 if str(layer_name).upper() == "RGBA" else 0,
+                           str(layer_name), channel_r))
+
+    if not candidates:
+        raise ValueError("Cryptomatte EXR 没有可用的三维 float32 图层")
+    candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    hits, _, layer_name, selected = candidates[0]
+    if hits <= 0:
+        names = ", ".join(item[2] for item in candidates)
+        raise ValueError(
+            f"Cryptomatte manifest 未命中任何候选 ID 层（候选: {names}）"
+        )
+    return np.ascontiguousarray(selected, dtype=np.float32), layer_name
+
+
 def load_cryptomatte(exr_path) -> Tuple[dict, np.ndarray]:
     """读一个 Cryptomatte EXR，返回 (manifest: {actor_label: hex_id}, id_channel: float32 R)。
 
@@ -63,25 +112,10 @@ def load_cryptomatte(exr_path) -> Tuple[dict, np.ndarray]:
             break
     if not manifest:
         raise ValueError(f"{exr_path}: 无 cryptomatte manifest")
-    # ID 通道：优先 RGBA.R；否则在各层 R 通道里找非零且能匹配 manifest 的
-    layers = f.channels()
-    if "RGBA" in layers:
-        px = layers["RGBA"].pixels
-        if px is not None and px.ndim == 3 and px.shape[2] >= 1:
-            return manifest, np.ascontiguousarray(px[:, :, 0], dtype=np.float32)
-    # fallback：扫描各层 R 通道
-    ids = None
-    for name, ch in layers.items():
-        px = getattr(ch, "pixels", None)
-        if px is None or px.ndim != 3 or px.shape[2] < 1:
-            continue
-        cand = np.ascontiguousarray(px[:, :, 0], dtype=np.float32)
-        uniq = set(np.unique(cand).tolist())
-        matches = sum(hex_id_to_float(h) in uniq for h in manifest.values())
-        if ids is None or matches > 0:
-            ids = cand
-    if ids is None:
-        raise ValueError(f"{exr_path}: 找不到 ID 通道")
+    try:
+        ids, _ = select_cryptomatte_id_channel(manifest, f.channels())
+    except ValueError as exc:
+        raise ValueError(f"{exr_path}: {exc}") from exc
     return manifest, ids
 
 

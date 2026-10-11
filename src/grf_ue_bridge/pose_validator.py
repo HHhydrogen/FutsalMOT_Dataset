@@ -3,12 +3,12 @@
 校验项（见 docs/design/2026-08-11-yolo-pose-export.md）：
   文件级：
     - labels_pose/ 与 pose_keypoints.jsonl 帧一一对应；空场景允许空 txt。
-    - 每行必须恰好 56 个字段（5 + 17×3）。
+    - 每行必须恰好 41 个字段（5 + 12×3）。
   数值范围：
     - bbox：0 <= xc/yc/w/h <= 1，且 w/h > 0。
     - 关键点：0 <= x <= 1、0 <= y <= 1、v ∈ {0, 1, 2}。
   实例级（full 级别重新派生并逐行比对；quick 级别结构 + 行数比对）：
-    - 每实例恰好 17 个关键点（由 56 字段保证）。
+    - 每实例恰好 12 个关键点（由 41 字段保证）。
     - track/player 不重复、bbox 与 instance mask 一致（行数与 bbox 来自同一
       annotations.jsonl mask-primary 数据）。
     - 左右关节点映射未反转：用世界坐标验证双肩轴与双髋轴方向一致
@@ -38,8 +38,8 @@ from grf_ue_bridge.pose_annotator import (  # noqa: E402
     _load_camera,
 )
 from pose_bones import (  # noqa: E402
-    COCO_KEYPOINT_NAMES,
-    NUM_COCO_KEYPOINTS,
+    POSE_KEYPOINT_NAMES,
+    NUM_POSE_KEYPOINTS,
     YOLO_POSE_FIELDS,
     bone_index_of,
 )
@@ -92,7 +92,7 @@ def _left_right_axis_consistency(pose_frame: dict) -> List[str]:
     i_rh = bone_index_of("right_hip")
     for obj in pose_frame.get("objects", []):
         kps = obj.get("keypoints_world")
-        if not kps or len(kps) != NUM_COCO_KEYPOINTS:
+        if not kps or len(kps) != NUM_POSE_KEYPOINTS:
             continue
 
         def _vec(a: int, b: int) -> Optional[Tuple[float, float, float]]:
@@ -123,7 +123,7 @@ def _validate_label_file(
     cam_label: str,
     p: Path,
 ) -> Dict[int, List[str]]:
-    """校验单个 labels_pose/*.txt：56 字段 + 数值范围。返回 {frame: lines}。"""
+    """校验单个 labels_pose/*.txt：41 字段 + 数值范围。返回 {frame: lines}。"""
     lines_by_frame: Dict[int, List[str]] = {}
     digits = "".join(ch for ch in p.stem if ch.isdigit())
     fi = int(digits) if digits else None
@@ -135,7 +135,7 @@ def _validate_label_file(
         if len(parts) != YOLO_POSE_FIELDS:
             errors.append(
                 f"[{cam_label}] {p.name} 第 {line_no} 行字段数 {len(parts)} "
-                f"!= {YOLO_POSE_FIELDS}（5 + 17×3）：{line[:80]!r}"
+                f"!= {YOLO_POSE_FIELDS}（5 + 12×3）：{line[:80]!r}"
             )
             continue
         try:
@@ -153,10 +153,10 @@ def _validate_label_file(
                 errors.append(f"[{cam_label}] {p.name} 第 {line_no} 行 bbox {name} 越界 [0,1]: {val}")
         if w <= 0 or h <= 0:
             errors.append(f"[{cam_label}] {p.name} 第 {line_no} 行 bbox w/h 非正")
-        # 17 关键点：x,y ∈ [0,1]，v ∈ {0,1,2}
-        for i in range(NUM_COCO_KEYPOINTS):
+        # 12 个肢体关键点：x,y ∈ [0,1]，v ∈ {0,1,2}
+        for i in range(NUM_POSE_KEYPOINTS):
             x, y, v = floats[5 + 3 * i], floats[6 + 3 * i], floats[7 + 3 * i]
-            name = COCO_KEYPOINT_NAMES[i]
+            name = POSE_KEYPOINT_NAMES[i]
             if not (0.0 <= x <= 1.0) or not (0.0 <= y <= 1.0):
                 errors.append(
                     f"[{cam_label}] {p.name} 第 {line_no} 行 {name}(#{i}) 坐标越界 [0,1]: "

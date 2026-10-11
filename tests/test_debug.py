@@ -29,10 +29,8 @@ CAMERA_JSON = {
                    "right": [0.0, 1.0, 0.0], "up": [0.0, 0.0, 1.0]},
 }
 
-# 简单 17 点骨架（世界米，x=5，y 取 ±、z 从高到低）
+# 简单 12 点肢体骨架（世界米，x=5，y 取 ±、z 从高到低）
 STANDING = [
-    [5.0, 0.00, 1.62], [5.0, -0.05, 1.66], [5.0, 0.05, 1.66],
-    [5.0, -0.10, 1.60], [5.0, 0.10, 1.60],
     [5.0, -0.25, 1.50], [5.0, 0.25, 1.50],
     [5.0, -0.35, 1.35], [5.0, 0.35, 1.35],
     [5.0, -0.42, 1.20], [5.0, 0.42, 1.20],
@@ -97,16 +95,15 @@ def _make_camera(root: Path, n_frames: int = 2) -> Path:
         frames.append({"episode_id": "ep", "camera_id": "Cam_01", "frame_index": fi,
                        "source_step": fi - 1, "time_seconds": (fi - 1) * 0.1, "objects": [obj]})
         pose_objs_all.append({"entity_id": "L0", "track_id": 1, "keypoints_world": kps,
-                              "occluded": [False] * 17})
+                               "occluded": [False] * 12})
     with open(cam / "annotations.jsonl", "w", encoding="utf-8") as f:
         for fr in frames:
             f.write(json.dumps(fr) + "\n")
     meta = {"kind": "meta", "schema": "futsalmot_pose_keypoints_v1", "episode_id": "ep",
             "camera_id": "Cam_01", "image_width": W, "image_height": H,
-            "keypoint_names": ["nose", "left_eye", "right_eye", "left_ear", "right_ear",
-                               "left_shoulder", "right_shoulder", "left_elbow", "right_elbow",
-                               "left_wrist", "right_wrist", "left_hip", "right_hip",
-                               "left_knee", "right_knee", "left_ankle", "right_ankle"],
+             "keypoint_names": ["left_shoulder", "right_shoulder", "left_elbow", "right_elbow",
+                                "left_wrist", "right_wrist", "left_hip", "right_hip",
+                                "left_knee", "right_knee", "left_ankle", "right_ankle"],
             "coordinate_convention": "meters", "occlusion_method": "none"}
     with open(cam / "pose_keypoints.jsonl", "w", encoding="utf-8") as f:
         f.write(json.dumps(meta) + "\n")

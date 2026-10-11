@@ -25,8 +25,8 @@
     seqinfo.ini                # export_mot=true 时由 UE 侧写入
     gt/gt.txt                  # export_mot=true 或 annotate-masks 选择 mot 时写入
     img1/*.png                 # 对齐后的 canonical RGB
-    render/*.png               # MRQ 原始 RGB，可能在完成后被 zero-waste 删除
-    render_mask/*.exr          # Object-ID Cryptomatte 原始输出
+    render/*.png               # MRQ FinalImage/临时 pass 输出，可能在完成后被 zero-waste 删除
+    render_mask/*.exr          # Object-ID Cryptomatte canonical 原始输出
     mask/*.png                 # P1 从 EXR 解码的 Instance-ID Mask
     mask_config.json
     labels/det/*.txt
@@ -208,12 +208,12 @@ v = cy - fy * z_cam / x_cam
 
 ## Instance-ID Mask 和可见像素 GT
 
-当前正式 mask 来源是 UE MRQ 的 `MoviePipelineObjectIdRenderPass`，输出 multilayer EXR 到 `render_mask/`。`ue/render_episode.py` 对 EXR 只统计与标注对齐的帧，不在 UE 中解码；P1 的 `grf-ue cryptomatte-to-mask` 使用 `openexr` 和 NumPy 完成转换。
+当前正式 mask 来源是 UE MRQ 的 `MoviePipelineObjectIdRenderPass`，输出 multilayer EXR 到 `render_mask/`。启用 Object-ID 的正式路径与 Deferred RGB、Runtime Pose 共用一个 MRQ job；stencil PNG 是兼容 fallback。`ue/render_episode.py` 对 EXR 只归档与标注对齐的帧，不在 UE 中解码；P1 的 `grf-ue cryptomatte-to-mask` 使用 `openexr` 和 NumPy 完成转换。
 
 Cryptomatte 解码契约：
 
 - manifest 位于 EXR header 的 `cryptomatte/<hash>/manifest`。
-- UE 5.8 当前实现优先读取 `RGBA` 层 R 通道的 float32 Actor ID。
+- UE 5.8 独立 Object-ID EXR 通常把 float32 Actor ID 放在 `RGBA` 层 R 通道；RGB+Object-ID 合并的 multilayer EXR 可能把 `RGBA` 用作 FinalImage，并把 ID 放在 `ActorHitProxyMask00` 等层。P1 按 manifest hash 命中数选择 ID 层，不依赖固定层名。
 - manifest 的十六进制 ID 按 float32 位模式精确匹配，不使用宽松的浮点误差比较。
 - 输出 `mask/{frame_index:06d}.png` 为单通道 PNG，背景为 `0`，实体为 `1..11`。
 
@@ -257,7 +257,7 @@ class_id center_x center_y width height
 
 坐标归一化到 `[0,1]`，类别为 `0=player`、`1=ball`。YOLO Segment 使用类别 ID 加归一化 polygon 坐标。两种标签只从 `bbox_source="instance_mask"` 的可见对象写出；没有 mask 的 legacy 几何对象和 `not_visible` 对象不会进入训练标签。
 
-## Runtime Pose、COCO17 和 YOLO Pose
+## Runtime Pose、12 点肢体 Pose 和 YOLO Pose
 
 正式 `run_task.py --mode full` 使用 5 个 C4 Recorder，每个 Recorder 负责 2 名球员：
 
@@ -269,34 +269,33 @@ class_id center_x center_y width height
 | G3 | `R1`, `R2` |
 | G4 | `R3`, `R4` |
 
-每名球员采样 13 个骨骼：`head`、左右 `upperarm`、`lowerarm`、`hand`、`thigh`、`calf` 和 `foot`。BurnIn 的 `OnOutputFrameStarted` 每个输出帧调用 5 个 Recorder；每个 Recorder 写入带 episode 和主相机名的动态 SaveGame slot。
+每名球员采样 13 个骨骼：`head`、左右 `upperarm`、`lowerarm`、`hand`、`thigh`、`calf` 和 `foot`。BurnIn 的 `OnOutputFrameStarted` 每个输出帧调用 5 个 Recorder；每个 Recorder 写入带 episode 和主相机名的动态 SaveGame slot。`head` 只用于 raw capture 完整性，不进入最终 Pose 点数组。
 
 `pose-finalize` 读取第一个配置相机的 5 个 slot：
 
-- `pose_capture.jsonl`：每行一个 actor/bone sample，位置为 UE cm，包含 `root`、`shot`、`game_time`、`actor_id`、`bone`、`x/y/z` 和四元数。
-- `pose_session.json`：保存主相机、期望帧数、捕获帧数、完整性标志、样本数和 root 帧范围。`capture_complete` 不为 true 时禁止生成正式 COCO17。
-- `coco17_3d.jsonl`：episode 级，每行一个 actor/frame，`keypoints_3d_m` 为按 COCO 顺序排列的 17 个世界坐标点，单位米。
-- `<camera>/coco17_2d.jsonl`：每相机一份，每行包含 `keypoints_2d_px` 和 `visible`；投影坐标单位为像素。
-- `<camera>/pose_keypoints.jsonl`：`run_task.py` 把 COCO17 3D 结果桥接为 P1 Pose 标注器的输入，`keypoints_world` 单位米。Runtime Pose 桥接不写 `occluded`，P1 主要依据 mask 判定 visibility。
+- `pose_capture.jsonl`：每行一个 actor/bone sample，位置为 UE cm，包含 `root`、`shot`、`game_time`、`actor_id`、`bone`、`x/y/z` 和四元数。每个 actor/frame 必须有 13 条 raw bone 记录（包括 `head`）。
+- `pose_session.json`：保存主相机、期望帧数、捕获帧数、完整性标志、样本数和 root 帧范围。`capture_complete` 不为 true 时禁止生成正式最终 Pose。
+- `coco17_3d.jsonl`：历史文件名保持兼容；当前每行一个 actor/frame，`keypoints_3d_m` 已改为固定顺序的 12 个肢体世界坐标点，单位米。
+- `<camera>/coco17_2d.jsonl`：历史文件名保持兼容；每相机一份，每行包含 12 个 `keypoints_2d_px` 和 12 个 `visible`；投影坐标单位为像素。
+- `<camera>/pose_keypoints.jsonl`：`run_task.py` 把 12 点 3D 结果桥接为 P1 Pose 标注器的输入，`keypoints_world` 单位米。Runtime Pose 桥接不写 `occluded`，P1 主要依据 mask 判定 visibility。
 
-COCO 17 点顺序固定为：
+最终 12 点顺序固定为：
 
 ```text
-nose, left_eye, right_eye, left_ear, right_ear,
 left_shoulder, right_shoulder, left_elbow, right_elbow,
 left_wrist, right_wrist, left_hip, right_hip,
 left_knee, right_knee, left_ankle, right_ankle
 ```
 
-资产骨架没有眼、鼻、耳骨骼，脸部五点由 `head` 骨骼局部偏移推导；12 个肢体点使用候选骨骼的世界 transform。`pose_bones.py` 是两侧共用的映射常量来源。
+12 个肢体点使用候选骨骼的世界 transform。`pose_bones.py` 是两侧共用的映射常量来源，正式输出不再生成脸部估计点。
 
-`grf-ue annotate-pose` 读取 Pose、相机、mask-primary annotations 和 mask，写入 `labels_pose/{frame_index:06d}.txt`。每行固定 56 个字段：
+`grf-ue annotate-pose` 读取 Pose、相机、mask-primary annotations 和 mask，写入 `labels_pose/{frame_index:06d}.txt`。每行固定 41 个字段：
 
 ```text
-class xc yc w h (x y visibility) * 17
+class xc yc w h (x y visibility) * 12
 ```
 
-Pose 类别当前只写 `0=player`；关键点坐标归一化到 `[0,1]`，visibility 为 `0=无效`、`1=遮挡`、`2=可见`。Pose bbox 直接复用同一对象的 mask-primary bbox，与 YOLO Detect 一致。只有可见球员且至少有一个有效关键点时才写行。`futsal_pose.yaml` 和 `yolo_pose/labels/<camera>/` 是可再生的训练暂存结构，RGB 不复制到 `yolo_pose/images/`，训练应引用各 camera 的 `img1/`。
+Pose 类别当前只写 `0=player`；关键点坐标归一化到 `[0,1]`，visibility 为 `0=无效`、`1=遮挡`、`2=可见`。Pose bbox 直接复用同一对象的 mask-primary bbox，与 YOLO Detect 一致。只有可见球员且至少有一个有效关键点时才写行。`futsal_pose.yaml` 使用 `kpt_shape: [12, 3]` 和左右翻转索引 `[1, 0, 3, 2, 5, 4, 7, 6, 9, 8, 11, 10]`。`futsal_pose.yaml` 和 `yolo_pose/labels/<camera>/` 是可再生的训练暂存结构，RGB 不复制到 `yolo_pose/images/`，训练应引用各 camera 的 `img1/`。
 
 ## provenance、manifest 和清理
 

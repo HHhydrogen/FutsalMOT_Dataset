@@ -28,7 +28,7 @@ class YoloPoseTaskConfig(BaseModel):
     enabled: bool = Field(
         False,
         description=(
-            "是否导出 YOLO Pose（COCO 17 点）。开启后 UE 导出 pose_keypoints.jsonl，"
+            "是否导出 YOLO Pose（12 点肢体关键点）。开启后 UE 导出 pose_keypoints.jsonl，"
             "postprocess 生成 labels_pose/ + futsal_pose.yaml"
         ),
     )
@@ -58,36 +58,25 @@ class YoloPoseTaskConfig(BaseModel):
     )
     bone_overrides: Dict[str, str] = Field(
         default_factory=dict,
-        description="UE bone 名覆盖：{COCO 关键点名: UE bone 名}（用于骨骼命名不同的资产）",
-    )
-    head_offsets_cm: Dict[str, List[float]] = Field(
-        default_factory=dict,
-        description="脸部五点相对 head 骨骼的局部偏移覆盖：{脸部 COCO 名: [x, y, z] cm}",
+        description="UE bone 名覆盖：{12 点肢体名: UE bone 名}（用于骨骼命名不同的资产）",
     )
 
     def validate_pose(self) -> None:
-        """跨字段一致性：bone_overrides / head_offsets_cm 键名合法。"""
+        """跨字段一致性：bone_overrides 键名合法。"""
         # 延迟 import：config 层早期加载，避免依赖 ue/ 路径；运行时补 sys.path
         import sys
 
         _ue_dir = Path(__file__).resolve().parent.parent.parent.parent / "ue"
         if str(_ue_dir) not in sys.path:
             sys.path.insert(0, str(_ue_dir))
-        from pose_bones import COCO_KEYPOINT_NAMES, FACE_KEYPOINT_NAMES
+        from pose_bones import POSE_KEYPOINT_NAMES
 
-        valid = set(COCO_KEYPOINT_NAMES)
+        valid = set(POSE_KEYPOINT_NAMES)
         for k in self.bone_overrides:
             if k not in valid:
                 raise ValueError(
-                    f"yolo_pose.bone_overrides 键 {k!r} 非法（只接受 COCO 关键点名）"
+                    f"yolo_pose.bone_overrides 键 {k!r} 非法（只接受 12 点肢体名）"
                 )
-        for k, off in self.head_offsets_cm.items():
-            if k not in FACE_KEYPOINT_NAMES:
-                raise ValueError(
-                    f"yolo_pose.head_offsets_cm 键 {k!r} 非法（只接受脸部五点）"
-                )
-            if not isinstance(off, list) or len(off) != 3:
-                raise ValueError(f"yolo_pose.head_offsets_cm[{k}] 须为 [x, y, z] cm")
 
 
 # ── 数据集 Task（单 config：导出 + UE + 机器路径内联）──────────────────

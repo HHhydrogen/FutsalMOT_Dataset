@@ -1,6 +1,6 @@
-"""P1：C3 JSONL → COCO17（3D world + 2D projected）。
+"""历史 C3 JSONL → 12 点肢体 Pose（3D world + 2D projected）。
 
-复用 ue/pose_bones.py 的现有 COCO17 映射逻辑，不重设计。
+复用 ue/pose_bones.py 的 12 点肢体映射逻辑，不重设计；文件名保留历史 C3 兼容性。
 
 用法：
     uv run python ue/build_coco17_c3.py
@@ -9,11 +9,11 @@
   - pose_capture_c3.jsonl（1170 行：root/shot/game_time/actor_id/bone/x/y/z/qx/qy/qz/qw，cm）
   - camera.json（投影参数，世界米）
 写：
-  - coco17_3d.jsonl  每帧一行 {root, keypoints_3d_m: [[x,y,z]×17]}
-  - coco17_2d.jsonl  每帧一行 {root, keypoints_2d_px: [[x,y]×17], visible: [bool×17]}
+  - coco17_3d.jsonl  每帧一行 {root, keypoints_3d_m: [[x,y,z]×12]}
+  - coco17_2d.jsonl  每帧一行 {root, keypoints_2d_px: [[x,y]×12], visible: [bool×12]}
 
 复用：
-  - pose_bones.resolve_limb_bone_map / apply_head_offsets / normalize_world_keypoints
+  - pose_bones.resolve_limb_bone_map / normalize_world_keypoints
   - pose_bones.CM 转 M（肢体点）
 """
 
@@ -21,12 +21,7 @@ import json
 import sys
 from pathlib import Path
 
-from pose_bones import (
-    COCO_KEYPOINT_NAMES,
-    resolve_limb_bone_map,
-    apply_head_offsets,
-    normalize_world_keypoints,
-)
+from pose_bones import POSE_KEYPOINT_NAMES, resolve_limb_bone_map, normalize_world_keypoints
 
 EP = Path(r"G:\FutsalMOT_Dataset\episode_bp_frame_sync")
 CAM = EP / "CineCam_01"
@@ -77,7 +72,7 @@ def main():
     limb_map = resolve_limb_bone_map(all_bones)
     print(f"骨骼名集合 ({len(all_bones)}): {all_bones}")
     print(f"肢体点映射 ({len(limb_map)}/12):")
-    for coco in COCO_KEYPOINT_NAMES:
+    for coco in POSE_KEYPOINT_NAMES:
         if coco in limb_map:
             print(f"  {coco:<15} -> {limb_map[coco]}")
 
@@ -97,17 +92,8 @@ def main():
                 continue
             limb[coco] = [r["x"], r["y"], r["z"]]
 
-        # 脸部 5 点（head + 局部偏移）
-        face = {}
-        head = recmap.get("head")
-        if head is not None:
-            face = apply_head_offsets(
-                [head["x"], head["y"], head["z"]],
-                [head["qx"], head["qy"], head["qz"], head["qw"]],
-            )
-
-        # 合成 17×3 world cm
-        kp_cm = normalize_world_keypoints(limb, face)
+        # 合成 12×3 world cm；raw head bone 不进入最终 Pose。
+        kp_cm = normalize_world_keypoints(limb)
         # → 米
         kp_m = []
         for p in kp_cm:
@@ -131,8 +117,10 @@ def main():
                     kp_2d.append([round(px[0], 3), round(px[1], 3)])
                     vis.append(True)
 
-        out3d.append({"actor_id": aid, "root": root, "keypoints_3d_m": kp_m})
-        out2d.append({"actor_id": aid, "root": root, "keypoints_2d_px": kp_2d, "visible": vis})
+        out3d.append({"actor_id": aid, "root": root, "keypoint_names": POSE_KEYPOINT_NAMES,
+                      "keypoints_3d_m": kp_m})
+        out2d.append({"actor_id": aid, "root": root, "keypoint_names": POSE_KEYPOINT_NAMES,
+                      "keypoints_2d_px": kp_2d, "visible": vis})
 
     OUT_3D.write_text(
         "\n".join(json.dumps(o) for o in out3d) + "\n", encoding="utf-8")
@@ -148,11 +136,10 @@ def main():
         for key, roots in missing.items():
             print(f"  {key}: 缺 {len(roots)} 帧")
     else:
-        print("\n所有肢体点 + head 齐全，无缺失")
+        print("\n12 个肢体点齐全；raw head 未进入最终标注")
 
-    # 总关键点数 = 每 actor 每帧 17
-    total_kp = len(out3d) * 17
-    print(f"\n最终关键点总数 = {len(out3d)} (actor×帧) × 17 = {total_kp}")
+    total_kp = len(out3d) * len(POSE_KEYPOINT_NAMES)
+    print(f"\n最终关键点总数 = {len(out3d)} (actor×帧) × 12 = {total_kp}")
 
 
 if __name__ == "__main__":

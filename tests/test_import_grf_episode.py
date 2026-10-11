@@ -299,3 +299,92 @@ def test_external_motion_track_names_are_canonical_and_not_retired():
     assert ig.EXTERNAL_MOTION_SPEED_PROPERTY == "ExternalMotionSpeedMps"
     assert ig.EXTERNAL_MOTION_ACTIVE_PROPERTY != "MotionSpeedMps"
     assert ig.EXTERNAL_MOTION_SPEED_PROPERTY != "MotionSpeedMps"
+
+
+def test_replace_existing_reuses_sequence_when_editor_delete_fails():
+    class Section:
+        pass
+
+    class Track:
+        def __init__(self):
+            self.sections = [Section()]
+            self.removed_sections = []
+
+        def get_sections(self):
+            return list(self.sections)
+
+        def remove_section(self, section):
+            self.removed_sections.append(section)
+            self.sections.remove(section)
+
+    class Binding:
+        def __init__(self):
+            self.tracks = [Track()]
+            self.removed_tracks = []
+            self.removed = False
+
+        def get_tracks(self):
+            return list(self.tracks)
+
+        def remove_track(self, track):
+            self.removed_tracks.append(track)
+            self.tracks.remove(track)
+
+        def remove(self):
+            self.removed = True
+
+    class Sequence:
+        def __init__(self):
+            self.bindings = [Binding()]
+            self.tracks = [Track()]
+            self.removed_tracks = []
+
+        def get_bindings(self):
+            return list(self.bindings)
+
+        def get_tracks(self):
+            return list(self.tracks)
+
+        def remove_track(self, track):
+            self.removed_tracks.append(track)
+            self.tracks.remove(track)
+
+    sequence = Sequence()
+
+    class EditorAssetLibrary:
+        @staticmethod
+        def does_asset_exist(path):
+            return True
+
+        @staticmethod
+        def delete_asset(path):
+            raise AssertionError("existing sequences should be reused, not deleted")
+
+    class AssetTools:
+        def __init__(self):
+            self.create_calls = 0
+
+        def create_asset(self, *args):
+            self.create_calls += 1
+            return None
+
+    asset_tools = AssetTools()
+    fake_unreal = SimpleNamespace(
+        EditorAssetLibrary=EditorAssetLibrary,
+        AssetToolsHelpers=SimpleNamespace(get_asset_tools=lambda: asset_tools),
+        LevelSequenceFactoryNew=lambda: object(),
+        load_asset=lambda path: sequence,
+    )
+
+    result = ig._get_or_create_sequence_asset(
+        fake_unreal,
+        "LS_Cam_01",
+        "/Game/FutsalMOT/Sequences",
+        replace_existing=True,
+    )
+
+    assert result is sequence
+    assert asset_tools.create_calls == 0
+    assert sequence.bindings[0].removed is True
+    assert sequence.bindings[0].tracks == []
+    assert sequence.tracks == []

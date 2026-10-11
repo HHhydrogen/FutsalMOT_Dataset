@@ -3,9 +3,14 @@
 import json
 
 from render_episode import (
+    archive_object_id_frames,
+    combined_file_name_format,
     copy_mask_frames,
+    copy_object_id_frames,
     copy_rendered_frames,
+    find_final_image_files,
     find_mask_files,
+    find_object_id_files,
     map_rendered_to_annotation,
     recover_render_to_img1,
     select_rendered_frame_indices,
@@ -56,6 +61,61 @@ class TestCopyRenderedFrames:
         assert (img1 / "000002.png").exists()
         assert (img1 / "000003.png").exists()
         assert not (img1 / "000004.png").exists()
+
+
+class TestCombinedRenderPassFiles:
+    def test_combined_file_name_format_contains_render_pass_and_frame(self):
+        assert combined_file_name_format("{frame_number}") == "{render_pass}{frame_number}"
+        assert combined_file_name_format("{render_pass}{frame_number}") == "{render_pass}{frame_number}"
+
+    def test_find_final_image_files_ignores_burnin_overlay(self, tmp_path):
+        render_dir = tmp_path / "render"
+        render_dir.mkdir()
+        (render_dir / "FinalImage.000000.png").write_bytes(b"x")
+        (render_dir / "BurnInOverlay.000000.png").write_bytes(b"x")
+        (render_dir / "FinalImage.000001.png").write_bytes(b"x")
+        found = find_final_image_files(render_dir)
+        assert sorted(found) == [0, 1]
+        assert found[0].name == "FinalImage.000000.png"
+
+    def test_find_object_id_files_uses_only_exr(self, tmp_path):
+        render_dir = tmp_path / "render"
+        render_dir.mkdir()
+        (render_dir / "FinalImage.000000.png").write_bytes(b"x")
+        (render_dir / "000000.exr").write_bytes(b"x")
+        (render_dir / "ActorHitProxyMask.000000.png").write_bytes(b"x")
+        found = find_object_id_files(render_dir)
+        assert sorted(found) == [0]
+        assert found[0].suffix == ".exr"
+
+    def test_copy_object_id_frames_preserves_render_frame_numbers(self, tmp_path):
+        render_dir = tmp_path / "render"
+        mask_dir = tmp_path / "render_mask"
+        render_dir.mkdir()
+        for n in (0, 3, 6):
+            (render_dir / f"ActorHitProxyMask.{n:06d}.exr").write_bytes(b"x")
+        copied = copy_object_id_frames(render_dir, mask_dir, [0, 3, 6])
+        assert copied == 3
+        assert (mask_dir / "000000.exr").exists()
+        assert (mask_dir / "000003.exr").exists()
+        assert (mask_dir / "000006.exr").exists()
+
+    def test_archive_object_id_frames_moves_sources_after_copy(self, tmp_path):
+        render_dir = tmp_path / "render"
+        mask_dir = tmp_path / "render_mask"
+        render_dir.mkdir()
+        for n in (0, 3):
+            (render_dir / f"ActorHitProxyMask.{n:06d}.exr").write_bytes(b"exr")
+        (render_dir / "FinalImage.000000.png").write_bytes(b"png")
+
+        archived = archive_object_id_frames(render_dir, mask_dir, [0, 3, 6])
+
+        assert archived == 2
+        assert (mask_dir / "000000.exr").read_bytes() == b"exr"
+        assert (mask_dir / "000003.exr").read_bytes() == b"exr"
+        assert not (render_dir / "ActorHitProxyMask.000000.exr").exists()
+        assert not (render_dir / "ActorHitProxyMask.000003.exr").exists()
+        assert (render_dir / "FinalImage.000000.png").exists()
 
     def test_subdir_scan(self, tmp_path):
         # 渲染输出可能在子目录（MRQ 会建 shot 子目录），递归扫描应能找到

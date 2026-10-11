@@ -1,7 +1,7 @@
 """pose_annotator 的端到端与单元测试（合成 camera 目录，纯 numpy/PIL）。
 
 覆盖：world→camera→image 投影、normalization、visibility 判定（mask 邻域 + occluded）、
-YOLO Pose 序列化（56 字段）、labels_pose 输出、dataset YAML、与 det bbox 对齐、
+YOLO Pose 序列化（41 字段）、labels_pose 输出、dataset YAML、与 det bbox 对齐、
 以及既有 Detection/Segmentation/MOT pipeline 的回归。
 """
 
@@ -43,11 +43,8 @@ CAMERA_JSON = {
                    "right": [0.0, 1.0, 0.0], "up": [0.0, 0.0, 1.0]},
 }
 
-# L0 的 17 个世界关键点（米），球员在 x=4m（图像中高约 19px，比 x=10 时大 2.5 倍）。
-# left_ankle 放在相机后方（x<0）→ 应判 v=0。
+# L0 的 12 个肢体世界关键点（米），left_ankle 放在相机后方（x<0）→ 应判 v=0。
 L0_WORLD = [
-    [4.0, 0.00, 1.62], [4.0, -0.05, 1.66], [4.0, 0.05, 1.66],
-    [4.0, -0.10, 1.60], [4.0, 0.10, 1.60],
     [4.0, -0.25, 1.50], [4.0, 0.25, 1.50],
     [4.0, -0.35, 1.35], [4.0, 0.35, 1.35],
     [4.0, -0.42, 1.20], [4.0, 0.42, 1.20],
@@ -58,16 +55,15 @@ L0_WORLD = [
 
 # 期望投影（像素）：u=32+50*y/4=32+12.5y，v=32-50*z/4=32-12.5z
 EXPECTED_PROJ = [
-    (32.0, 11.75), (31.375, 11.25), (32.625, 11.25), (30.75, 12.0), (33.25, 12.0),
     (28.875, 13.25), (35.125, 13.25), (27.625, 15.125), (36.375, 15.125),
     (26.75, 17.0), (37.25, 17.0), (30.125, 20.75), (33.875, 20.75),
     (30.125, 25.75), (33.875, 25.75), None, (33.875, 30.125),
 ]
 
-# 期望可见性：right_wrist(#10) 被 L1 mask 覆盖 → 1；left_ankle(#15) 在相机后方 → 0
-EXPECTED_VIS = [2] * 17
-EXPECTED_VIS[10] = 1
-EXPECTED_VIS[15] = 0
+# 期望可见性：right_wrist(#5) 被 L1 mask 覆盖 → 1；left_ankle(#10) 在相机后方 → 0
+EXPECTED_VIS = [2] * 12
+EXPECTED_VIS[5] = 1
+EXPECTED_VIS[10] = 0
 
 
 def _intrinsics():
@@ -96,12 +92,12 @@ def _mask_frames() -> dict:
 
 
 def _pose_objects(occluded_all=False):
-    occ = [occluded_all] * 17
+    occ = [occluded_all] * 12
     return [
         {"entity_id": "L0", "track_id": 1, "keypoints_world": L0_WORLD, "occluded": occ},
         # L1 所有关键点无效 → 应被跳过（不产生无意义标签行）
         {"entity_id": "L1", "track_id": 2,
-         "keypoints_world": [[None, None, None]] * 17, "occluded": [False] * 17},
+         "keypoints_world": [[None, None, None]] * 12, "occluded": [False] * 12},
     ]
 
 
@@ -113,8 +109,7 @@ def _pose_keypoints_jsonl(cam_dir: Path, frames: dict = None):
         "episode_id": "ep",
         "camera_id": "Cam_01",
         "image_width": W, "image_height": H,
-        "keypoint_names": ["nose", "left_eye", "right_eye", "left_ear", "right_ear",
-                           "left_shoulder", "right_shoulder", "left_elbow", "right_elbow",
+        "keypoint_names": ["left_shoulder", "right_shoulder", "left_elbow", "right_elbow",
                            "left_wrist", "right_wrist", "left_hip", "right_hip",
                            "left_knee", "right_knee", "left_ankle", "right_ankle"],
         "coordinate_convention": "meters",
@@ -224,15 +219,15 @@ class TestProjection:
 
 
 class TestSerialization:
-    def test_line_has_56_fields(self):
-        kps = [(10.0, 20.0, 2)] * 17
+    def test_line_has_41_fields(self):
+        kps = [(10.0, 20.0, 2)] * 12
         line = serialize_pose_line(0, [0.0, 0.0, 100.0, 200.0], 1920, 1080, kps)
-        assert len(line.split()) == 56
+        assert len(line.split()) == 41
 
     def test_normalization_ranges(self):
         # bbox [28,20,38,34] → cx=33/64, cy=27/64, w=10/64, h=14/64
         line = serialize_pose_line(0, [28.0, 20.0, 38.0, 34.0], W, H,
-                                   [(32.0, 23.9, 2)] * 17)
+                                   [(32.0, 23.9, 2)] * 12)
         parts = [float(v) for v in line.split()]
         assert parts[0] == 0.0
         cx, cy, w, h = parts[1:5]
@@ -300,12 +295,12 @@ class TestEndToEnd:
         lines = [ln for ln in label.read_text(encoding="utf-8").splitlines() if ln.strip()]
         assert len(lines) == 1  # 只有 L0（L1 全无效关键点被跳过）
         parts = [float(v) for v in lines[0].split()]
-        assert len(parts) == 56
+        assert len(parts) == 41
         # bbox 与 mask-primary 一致：cx=(26+38)/2/64=0.5, cy=(10+31)/2/64=20.5/64
         assert math.isclose(parts[1], 0.5, abs_tol=1e-6)
         assert math.isclose(parts[2], 20.5 / 64, abs_tol=1e-6)
         # 关键点可见性：right_wrist=1、left_ankle=0、其余 2
-        vis = [int(parts[7 + 3 * i]) for i in range(17)]
+        vis = [int(parts[7 + 3 * i]) for i in range(12)]
         assert vis == EXPECTED_VIS
 
     def test_annotate_pose_is_idempotent(self, tmp_path):
@@ -314,15 +309,15 @@ class TestEndToEnd:
         assert annotate_pose_dir(tmp_path, write_yaml=True) == 0
         assert annotate_pose_dir(tmp_path, write_yaml=True) == 0  # 第二次（staging 已存在）
         label = (cam / "labels_pose" / "000001.txt").read_text(encoding="utf-8")
-        assert len(label.split()) == 56
+        assert len(label.split()) == 41
 
     def test_dataset_yaml(self, tmp_path):
         cam = _make_camera_dir(tmp_path)
         assert annotate_pose_dir(tmp_path, write_yaml=True) == 0
         yaml_path = tmp_path / "futsal_pose.yaml"
         text = yaml_path.read_text(encoding="utf-8")
-        assert "kpt_shape: [17, 3]" in text
-        assert "flip_idx: [0, 2, 1, 4, 3, 6, 5, 8, 7, 10, 9, 12, 11, 14, 13, 16, 15]" in text
+        assert "kpt_shape: [12, 3]" in text
+        assert "flip_idx: [1, 0, 3, 2, 5, 4, 7, 6, 9, 8, 11, 10]" in text
         assert "names:" in text and "0: player" in text
         # C6-P1.7 zero-waste：path 指向 episode 根，images 引用各 camera img1（不复制 RGB）
         assert f"path: {tmp_path.resolve().as_posix()}" in text
@@ -371,7 +366,7 @@ class TestEndToEnd:
         # 覆盖：L0/L1 全部关键点无效
         _pose_keypoints_jsonl(cam, {"1": [
             {"entity_id": "L0", "track_id": 1,
-             "keypoints_world": [[None, None, None]] * 17, "occluded": [False] * 17},
+             "keypoints_world": [[None, None, None]] * 12, "occluded": [False] * 12},
         ]})
         assert annotate_pose_dir(tmp_path, write_yaml=False) == 0
         assert (cam / "labels_pose" / "000001.txt").exists()

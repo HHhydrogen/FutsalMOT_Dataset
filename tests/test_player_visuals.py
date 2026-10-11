@@ -222,6 +222,14 @@ def test_run_task_reloads_player_visuals_after_editor_module_cache():
     assert '"player_visuals"' in module_block
 
 
+def test_run_task_reloads_pose_builder_after_editor_module_cache():
+    source = (
+        Path(__file__).resolve().parents[1] / "ue" / "run_task.py"
+    ).read_text(encoding="utf-8")
+    module_block = source.split("_UE_MODULE_NAMES = (", 1)[1].split(")", 1)[0]
+    assert '"build_coco17"' in module_block
+
+
 def test_run_task_passes_export_playback_fps_to_annotation_config():
     source = (
         Path(__file__).resolve().parents[1] / "ue" / "run_task.py"

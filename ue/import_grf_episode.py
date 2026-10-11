@@ -538,6 +538,52 @@ def _add_camera_transform_track(sequence, camera_binding, cam_actor, total_outpu
 
 # ── Sequence 模式 ───────────────────────────────────────────────────────
 
+def _clear_sequence_contents(sequence) -> None:
+    """清空可复用 Level Sequence 的绑定和主轨道。"""
+
+    for binding in list(sequence.get_bindings()):
+        for track in list(binding.get_tracks()):
+            for section in list(track.get_sections()):
+                track.remove_section(section)
+            binding.remove_track(track)
+        binding.remove()
+    for track in list(sequence.get_tracks()):
+        sequence.remove_track(track)
+
+
+def _get_or_create_sequence_asset(
+    unreal_module,
+    sequence_name: str,
+    package_path: str,
+    *,
+    replace_existing: bool,
+):
+    """获取或创建 Sequence，兼容 UE 删除 API 拒绝删除的情况。"""
+
+    sequence_asset_path = f"{package_path}/{sequence_name}"
+    asset_library = unreal_module.EditorAssetLibrary
+    if asset_library.does_asset_exist(sequence_asset_path):
+        if not replace_existing:
+            raise RuntimeError(
+                f"Level Sequence already exists: {sequence_asset_path}. "
+                f"Run again with --replace-existing."
+            )
+        existing = unreal_module.load_asset(sequence_asset_path)
+        if existing is not None:
+            _clear_sequence_contents(existing)
+            return existing
+        raise RuntimeError(f"Failed to load existing Level Sequence: {sequence_asset_path}")
+
+    sequence = unreal_module.AssetToolsHelpers.get_asset_tools().create_asset(
+        sequence_name,
+        package_path,
+        None,
+        unreal_module.LevelSequenceFactoryNew(),
+    )
+    if not sequence:
+        raise RuntimeError(f"Failed to create Level Sequence: {sequence_asset_path}")
+    return sequence
+
 def create_sequence(meta: dict, frames: list, mapping: dict, replace_existing: bool = False,
                     package_path: str = None, sequences_cfg: list = None,
                     ball_rolling_cfg: dict = None):
@@ -584,22 +630,12 @@ def create_sequence(meta: dict, frames: list, mapping: dict, replace_existing: b
 
         print(f"\n--- Creating Sequence: {seq_name} ---")
 
-        # 删除已存在的资产
-        if unreal.EditorAssetLibrary.does_asset_exist(sequence_asset_path):
-            if not replace_existing:
-                raise RuntimeError(
-                    f"Level Sequence already exists: {sequence_asset_path}. "
-                    f"Run again with --replace-existing."
-                )
-            unreal.EditorAssetLibrary.delete_asset(sequence_asset_path)
-            print(f"  Deleted existing: {sequence_asset_path}")
-
-        # 创建新的 Sequence
-        seq = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
-            seq_name, pkg_path, None, unreal.LevelSequenceFactoryNew()
+        seq = _get_or_create_sequence_asset(
+            unreal,
+            seq_name,
+            pkg_path,
+            replace_existing=replace_existing,
         )
-        if not seq:
-            raise RuntimeError(f"Failed to create Level Sequence: {sequence_asset_path}")
 
         display_rate = unreal.FrameRate(numerator=playback_fps, denominator=1)
         seq.set_display_rate(display_rate)

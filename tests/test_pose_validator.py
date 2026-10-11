@@ -21,10 +21,8 @@ CAMERA_JSON = {
                    "right": [0.0, 1.0, 0.0], "up": [0.0, 0.0, 1.0]},
 }
 
-# 站立姿势的简单 17 点世界坐标（米），肩/髋左右对称
+# 站立姿势的简单 12 个肢体点世界坐标（米），肩/髋左右对称
 STANDING = [
-    [10.0, 0.00, 1.62], [10.0, -0.05, 1.66], [10.0, 0.05, 1.66],
-    [10.0, -0.10, 1.60], [10.0, 0.10, 1.60],
     [10.0, -0.25, 1.50], [10.0, 0.25, 1.50],
     [10.0, -0.35, 1.35], [10.0, 0.35, 1.35],
     [10.0, -0.42, 1.20], [10.0, 0.42, 1.20],
@@ -64,8 +62,7 @@ def _make_camera(root: Path) -> Path:
     meta = {
         "kind": "meta", "schema": "futsalmot_pose_keypoints_v1", "episode_id": "ep",
         "camera_id": "Cam_01", "image_width": W, "image_height": H,
-        "keypoint_names": ["nose", "left_eye", "right_eye", "left_ear", "right_ear",
-                           "left_shoulder", "right_shoulder", "left_elbow", "right_elbow",
+        "keypoint_names": ["left_shoulder", "right_shoulder", "left_elbow", "right_elbow",
                            "left_wrist", "right_wrist", "left_hip", "right_hip",
                            "left_knee", "right_knee", "left_ankle", "right_ankle"],
         "coordinate_convention": "meters", "occlusion_method": "none",
@@ -73,7 +70,7 @@ def _make_camera(root: Path) -> Path:
     frame_line = {
         "kind": "frame", "frame_index": 1, "source_step": 0, "time_seconds": 0.0,
         "objects": [{"entity_id": "L0", "track_id": 1, "keypoints_world": STANDING,
-                     "occluded": [False] * 17}],
+                     "occluded": [False] * 12}],
     }
     with open(cam / "pose_keypoints.jsonl", "w", encoding="utf-8") as f:
         f.write(json.dumps(meta) + "\n" + json.dumps(frame_line) + "\n")
@@ -101,7 +98,7 @@ class TestStructuralValidation:
         assert annotate_pose_dir(tmp_path, write_yaml=False) == 0
         label = cam / "labels_pose" / "000001.txt"
         parts = label.read_text(encoding="utf-8").split()
-        parts[5] = "2.5"  # nose x 越界
+        parts[5] = "2.5"  # left_shoulder x 越界
         label.write_text(" ".join(parts) + "\n", encoding="utf-8")
         assert validate_pose_dir(tmp_path, validation_level="quick") == 1
 
@@ -110,7 +107,7 @@ class TestStructuralValidation:
         assert annotate_pose_dir(tmp_path, write_yaml=False) == 0
         label = cam / "labels_pose" / "000001.txt"
         parts = label.read_text(encoding="utf-8").split()
-        parts[7] = "5"  # nose v 非法
+        parts[7] = "5"  # left_shoulder v 非法
         label.write_text(" ".join(parts) + "\n", encoding="utf-8")
         assert validate_pose_dir(tmp_path, validation_level="quick") == 1
 
@@ -135,8 +132,8 @@ class TestLeftRightAxis:
     def _frame_with_shoulders_hips(self, shoulder_sign=1.0, hip_sign=1.0):
         kps = [list(p) for p in STANDING]
         # 调整肩/髋左右分离方向：正 = left 在 -Y、right 在 +Y（与 STANDING 一致）
-        ls, rs = 5, 6
-        lh, rh = 11, 12
+        ls, rs = 0, 1
+        lh, rh = 6, 7
         kps[ls] = [10.0, -0.25 * shoulder_sign, 1.50]
         kps[rs] = [10.0, 0.25 * shoulder_sign, 1.50]
         kps[lh] = [10.0, -0.15 * hip_sign, 0.90]

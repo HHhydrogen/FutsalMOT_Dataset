@@ -30,6 +30,11 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 from grf_ue_bridge.validation_result import CheckStatus, ValidationResult
 
+_UE_DIR = Path(__file__).resolve().parents[3] / "ue"
+if str(_UE_DIR) not in sys.path:
+    sys.path.insert(0, str(_UE_DIR))
+from pose_bones import NUM_POSE_KEYPOINTS  # noqa: E402
+
 # 实体 → track_id / mask_id 的稳定映射（与 annotation_utils 一致，本地复述避免依赖）
 TRACK_MAP = {f"L{i}": i + 1 for i in range(5)}
 TRACK_MAP.update({f"R{i}": i + 6 for i in range(5)})
@@ -821,12 +826,13 @@ def check_pose_coco17(
     required: bool = False,
     expected_camera_ids: Optional[Sequence[str]] = None,
 ) -> dict:
-    """检查 Runtime Pose + COCO17 完整性（C5.3 正式 Pose 来源）。
+    """检查 Runtime Pose + 12 点肢体 Pose 完整性（保留历史函数名）。
 
     仅当 pose_session.json 存在时校验（= Runtime Pose 已运行）：
     - capture_complete=True
     - pose_capture.jsonl 行数 == 10 actor × expected_frames × 13 bone
-    - coco17_3d.jsonl 行数 == 10 actor × expected_frames
+    - coco17_3d.jsonl 行数 == 10 actor × expected_frames，且每行恰有 12 点
+    - 每个配置相机的 coco17_2d.jsonl 每行恰有 12 个投影点和 visibility 值
     pose_session.json 不存在 → 未启用 yolo_pose 时跳过；要求 Pose 时失败。
     skip=True（research_minimal 已 cleanup，raw pose 属有意删除的 transient）→ 跳过。
     """
@@ -903,10 +909,26 @@ def check_pose_coco17(
         )
         if not coco3d_valid:
             st["ok"] = False
-        st["coco17_total_kp"] = st["coco17_3d_rows"] * 17
+        st["coco17_total_kp"] = st["coco17_3d_rows"] * NUM_POSE_KEYPOINTS
         if st["coco17_3d_rows"] != expected_coco:
             errors.append(f"coco17_3d: {st['coco17_3d_rows']} 行 != 预期 {expected_coco}（10 actor × {expected_frames} 帧）")
             st["ok"] = False
+        else:
+            for line_number, line in enumerate(c3d_path.read_text(encoding="utf-8").splitlines(), start=1):
+                if not line.strip():
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue  # _read_jsonl_rows 已报告解析错误
+                points = row.get("keypoints_3d_m") if isinstance(row, dict) else None
+                if not isinstance(points, list) or len(points) != NUM_POSE_KEYPOINTS:
+                    actual = len(points) if isinstance(points, list) else "missing"
+                    errors.append(
+                        f"coco17_3d 第 {line_number} 行关键点数 {actual} "
+                        f"!= {NUM_POSE_KEYPOINTS}（12 点肢体契约）"
+                    )
+                    st["ok"] = False
     else:
         errors.append("coco17: 缺少 coco17_3d.jsonl")
         st["ok"] = False
@@ -940,6 +962,28 @@ def check_pose_coco17(
                     f"!= 预期 {expected_coco}（10 actor × {expected_frames} 帧）"
                 )
                 st["ok"] = False
+            else:
+                for line_number, line in enumerate(c2d_path.read_text(encoding="utf-8").splitlines(), start=1):
+                    if not line.strip():
+                        continue
+                    try:
+                        row = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue  # _read_jsonl_rows 已报告解析错误
+                    points = row.get("keypoints_2d_px") if isinstance(row, dict) else None
+                    visible = row.get("visible") if isinstance(row, dict) else None
+                    if (
+                        not isinstance(points, list)
+                        or len(points) != NUM_POSE_KEYPOINTS
+                        or not isinstance(visible, list)
+                        or len(visible) != NUM_POSE_KEYPOINTS
+                    ):
+                        actual = len(points) if isinstance(points, list) else "missing"
+                        errors.append(
+                            f"coco17_2d {camera_id} 第 {line_number} 行关键点数 {actual} "
+                            f"!= {NUM_POSE_KEYPOINTS}（12 点肢体契约）"
+                        )
+                        st["ok"] = False
     st["coco17_2d_cameras"] = camera_ids
     return st
 
@@ -1056,7 +1100,7 @@ def write_reports(
         pc = report["pose_coco17"]
         lines.append("")
         lines.append(
-            f"## Runtime Pose + COCO17\n\n- pose_session: {pc.get('pose_session')}，"
+            f"## Runtime Pose + 12 点肢体 Pose\n\n- pose_session: {pc.get('pose_session')}，"
             f"capture_complete: {pc.get('capture_complete')}\n"
             f"- pose_capture rows: {pc.get('pose_capture_rows')}\n"
             f"- coco17_3d rows: {pc.get('coco17_3d_rows')}，total_kp: {pc.get('coco17_total_kp')}，OK: {pc.get('ok')}"
@@ -1115,7 +1159,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
     ap.add_argument(
         "--pose-required", default="false",
-        help="是否要求 Runtime Pose/COCO17（true/false，缺省 false）",
+        help="是否要求 Runtime Pose/raw 13 骨与 12 点最终 Pose（true/false，缺省 false）",
     )
     ap.add_argument("--output", default=None, help="报告输出目录（默认 <input>/audit）")
     args = ap.parse_args(argv)

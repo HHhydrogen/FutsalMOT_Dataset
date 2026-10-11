@@ -67,9 +67,9 @@ uv run grf-ue validate-pose <dataset_episode_dir>
 uv run grf-ue validate-pose <dataset_episode_dir> --validation-level quick
 ```
 
-Pose 验证器检查 `labels_pose/` 和 `pose_keypoints.jsonl` 帧集合、每行 56 字段、bbox 和关键点坐标范围、visibility 值 `0/1/2`、图片对应关系、左右肩轴与左右髋轴是否同向。`full` 重新使用当前标注路径比对标签内容；`quick` 主要比对结构和每帧行数。
+Pose 验证器检查 `labels_pose/` 和 `pose_keypoints.jsonl` 帧集合、每行 41 字段、12 个关键点坐标范围、visibility 值 `0/1/2`、图片对应关系、左右肩轴与左右髋轴是否同向。`full` 重新使用当前标注路径比对标签内容；`quick` 主要比对结构和每帧行数。
 
-正式 `run_task.py --mode pose-finalize` 的完整性门禁在 UE 侧执行：5 个 SaveGame slot 都存在、root 帧数等于期望值、10 个 actor 和 13 个骨骼结构齐全后才写 `pose_capture.jsonl` 和 `pose_session.json`。然后 `build_coco17.py` 生成 COCO17 3D/2D；P1 再生成 YOLO Pose。
+正式 `run_task.py --mode pose-finalize` 的完整性门禁在 UE 侧执行：5 个 SaveGame slot 都存在、root 帧数等于期望值、10 个 actor 和每个 actor/frame 的 13 个 raw 骨骼结构齐全后才写 `pose_capture.jsonl` 和 `pose_session.json`。然后 `build_coco17.py` 生成 12 点肢体 3D/2D；P1 再生成 41 字段 YOLO Pose。
 
 ## Audit
 
@@ -86,7 +86,7 @@ uv run grf-ue task audit configs/<task>.json --validation-level full
 - 跨相机的 `frame_index`、时间、源步、episode ID、track ID 和 mask ID 同步。
 - 相机内参、外参、分辨率和相机位置重复情况。
 - 被要求时的 `render_summary.json` status 和每相机状态。
-- 被要求时的 Runtime Pose/COCO17 完整性；Pose disabled 时不根据残留 `pose_session.json` 反推 requirement。
+- 被要求时的 Runtime Pose/raw 13 骨与 12 点最终 Pose 完整性；Pose disabled 时不根据残留 `pose_session.json` 反推 requirement。
 - 可选的 `validate-annotations`。
 
 报告的 canonical 字段是 `passed`、`exit_code`、`errors`、`warnings` 和 `checks`。errors 或 required failed check 使报告失败；warnings-only 与 skipped checks 保持通过。原有 `cameras`、`sync`、`mapping`、`calibration`、`render_summary`、`pose_coco17` 等 detail sections 及其 local `ok` 字段继续保留。报告 Markdown 和 JSON 都是生成物，不是本仓库的技术文档。
@@ -131,7 +131,7 @@ uv run grf-ue task cleanup configs/<task>.json --apply
 
 cleanup 必须先读取 canonical audit JSON：缺少 audit 报告直接 fail safe 阻止 `--apply`。canonical `passed/exit_code/errors/warnings/checks` 中，`passed=false`、errors、nonzero exit 或 required failed check 一定阻止 `--apply`；warnings-only 不阻止。仅有 `{"passed": true}` 的最小成功报告可兼容读取；其它 canonical 字段缺失、格式混合或无法解析时 fail safe 拒绝 cleanup。没有 canonical 字段时才只读兼容旧 `ok/failed_checks`，避免错误删除。
 
-清理集合当前包括相机下的 `render/`、`render_mask/`、`debug/`、`mask/*.png`，episode 根的 `pose_capture.jsonl`，以及 `yolo_pose/images/`、`yolo_det/images/`、`yolo_seg/images/` 下的 PNG。canonical 的 `img1/`、相机标定、annotations、MOT、COCO17、YOLO labels、provenance、audit 和 manifest 不在删除集合中。
+清理集合当前包括相机下的 `render/`、`render_mask/`、`debug/`、`mask/*.png`，episode 根的 `pose_capture.jsonl`，以及 `yolo_pose/images/`、`yolo_det/images/`、`yolo_seg/images/` 下的 PNG。canonical 的 `img1/`、相机标定、annotations、MOT、12 点 Pose、YOLO labels、provenance、audit 和 manifest 不在删除集合中。
 
 虽然 task 模型提供 `artifact_policy.profile`，当前 `collect_transient()` 对不同 profile 没有实现不同删除分支；文档不能把 `full` profile 描述为已经保留全部 transient 原始文件。
 
@@ -154,7 +154,7 @@ cleanup 必须先读取 canonical audit JSON：缺少 audit 报告直接 fail sa
 
 ### Pose 覆盖字段
 
-`postprocess.yolo_pose` 模型接受 `bone_overrides` 和 `head_offsets_cm`，并且旧的 `ue/pose_export.py` 会读取这些覆盖。但正式 `pose-finalize -> build_coco17.py` 当前调用 `resolve_limb_bone_map(all_bones)` 和默认的 `apply_head_offsets()`，没有把 resolved task 中的两个覆盖字典传进去。因此当前文档只能说这些字段对部分旧/显式路径有效，不能声称它们一定改变正式 Runtime Pose 的 COCO17 结果。
+`postprocess.yolo_pose` 的 `bone_overrides` 只接受 12 个正式肢体点名称。正式 `pose-finalize -> build_coco17.py` 保留 13 骨 raw capture 的完整性门禁，但最终 3D/2D arrays、`pose_keypoints.jsonl`、YOLO 标签和 overlay 都只允许 12 个肢体点；不再支持 `head_offsets_cm` 或脸部估计点。
 
 ### Legacy 脚本和资产路径
 
@@ -162,11 +162,11 @@ cleanup 必须先读取 canonical audit JSON：缺少 audit 报告直接 fail sa
 
 ### UE 运行时和视觉验收
 
-- MRQ 是异步的；脚本提交后立即返回，Editor 必须继续运行和 tick。
+- MRQ 是异步的；脚本提交后立即返回，Editor 必须继续运行和 tick。Object-ID 正式路径将 RGB、Mask 和 Runtime Pose 放在同一个 MRQ job 中求值，降低跨 job 时刻差异；这不能单独证明每个 AnimGraph/Retarget 姿态几何正确。
 - Camera Cut 的自动设置使用 UE API fallback，API 版本差异可能导致设置失败；没有有效 Camera Cut 时，MRQ 可能没有期望的相机视角。
 - 代码会在 MRQ 前尝试把 Actor 烘焙到第 0 帧，以避免 possessable 接管前使用关卡默认位置，但这不是对当前关卡状态的静态证明。
 - `camera.json` 的数值来自当前 CineCamera；代码不能仅凭配置证明焦距、filmback、位置、朝向或分辨率与实际 MRQ 完全一致。渲染阶段会拒绝已发现的 RGB 与标定分辨率不一致，但仍需要视觉 overlay 检查。
-- `pose_bones.py` 中脸部点是 head 局部偏移估计，不是眼鼻耳真实骨骼；必须用 Pose overlay 或 UE 侧检查确认是否适合目标角色。
+- `coco17_*.jsonl` 是历史兼容文件名，不能据文件名推断当前仍为 17 点；最终数组长度和 `keypoint_names` 才是有效契约。
 - 代码和测试不能证明地图中的 Actor 标签、Blueprint 编译、Sequence binding、MRQ Object-ID pass 输出、RGB/mask/pose 像素对齐或最终视觉质量。上述事项必须在 UE Editor 中验收并保留运行日志。
 
 ## 验收顺序

@@ -467,7 +467,7 @@ def validate_pose(
         help="重算用邻域半径（须与 annotate-pose 一致）",
     ),
 ):
-    """验证 YOLO Pose 标签：56 字段 / 数值范围 / 帧对应 / 左右轴一致性。"""
+    """验证 12 点 YOLO Pose 标签：41 字段 / 数值范围 / 帧对应 / 左右轴一致性。"""
     from grf_ue_bridge.pose_validator import validate_pose_dir
 
     exit_code = validate_pose_dir(

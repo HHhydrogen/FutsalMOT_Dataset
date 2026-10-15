@@ -6,10 +6,13 @@ import json
 from pathlib import Path
 
 from PIL import Image
+import pytest
 from typer.testing import CliRunner
 
 from grf_ue_bridge.cli import app
+from grf_ue_bridge.appearance import APPEARANCE_POLICY, build_appearance_manifest
 from grf_ue_bridge.config.loader import load_task_config
+from grf_ue_bridge.seeds import derive_episode_seeds
 
 runner = CliRunner()
 
@@ -21,7 +24,92 @@ def _valid_png() -> bytes:
     return buf.getvalue()
 
 
-def _make_task_dir(tmp_path: Path, cam_count: int = 1, frames: int = 1) -> Path:
+def _appearance_catalog() -> dict:
+    return {
+        "mode": "seeded",
+        "policy": APPEARANCE_POLICY,
+        "catalog_id": "mpfb_players_003_009_v1",
+        "models": [
+            {
+                "player_id": player_id,
+                "mesh": f"/Game/Players/Player_{player_id:03d}",
+                "anim_class": "/Game/Core/ABP_RuntimeRetarget",
+                "skeleton": "/Game/Core/SKEL_MPFB_Base",
+            }
+            for player_id in range(3, 10)
+        ],
+        "skins": [
+            {
+                "skin_id": f"skin-{index:02d}",
+                "texture": f"/Game/Textures/T_Skin_{index:02d}",
+            }
+            for index in range(1, 10)
+        ],
+        "kits": [
+            {
+                "set_id": f"{index:02d}",
+                "jersey_material": f"/Game/Materials/M_Jersey_Set_{index:02d}",
+                "shorts_material": f"/Game/Materials/M_Shorts_Set_{index:02d}",
+            }
+            for index in range(1, 6)
+        ],
+        "body_texture_parameter": "SkinTexture",
+    }
+
+
+def _appearance_meta(episode_id: str) -> dict:
+    return {
+        "schema": "grf_ue_episode",
+        "version": 1,
+        "episode_id": episode_id,
+        "source": {"seed": 42},
+        "randomness": derive_episode_seeds(42).model_dump(),
+        "timing": {
+            "source_step_seconds": 0.1,
+            "playback_fps": 10,
+            "num_steps": 1,
+        },
+        "field": {"length_m": 40.0, "width_m": 20.0},
+        "entities": [
+            {
+                "id": entity_id,
+                "team": "left" if entity_id.startswith("L") else "right",
+                "is_goalkeeper": entity_id in {"L2", "R1"},
+            }
+            for entity_id in (
+                "L0", "L1", "L2", "L3", "L4",
+                "R0", "R1", "R2", "R3", "R4",
+            )
+        ] + [{"id": "BALL", "team": None, "is_goalkeeper": False}],
+    }
+
+
+def _appearance_frame() -> dict:
+    return {
+        "step": 0,
+        "time_seconds": 0.0,
+        "score": [0, 0],
+        "ball": {"position_m": [0.0, 0.0, 0.11]},
+        "players": [
+            {"id": entity_id, "position_m": [0.0, 0.0, 0.0]}
+            for entity_id in (
+                "L0", "L1", "L2", "L3", "L4",
+                "R0", "R1", "R2", "R3", "R4",
+            )
+        ],
+        "ball_owned_team": -1,
+        "ball_owned_player": -1,
+        "game_mode": 0,
+    }
+
+
+def _make_task_dir(
+    tmp_path: Path,
+    cam_count: int = 1,
+    frames: int = 1,
+    *,
+    appearance: bool = False,
+) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir(parents=True, exist_ok=True)
     (repo / "FutsalMOT.uproject").write_text("{}", encoding="utf-8")
@@ -40,6 +128,8 @@ def _make_task_dir(tmp_path: Path, cam_count: int = 1, frames: int = 1) -> Path:
         "postprocess": {"workers": 2, "validation_level": "full"},
         "audit": {"expected_cameras": cam_count, "expected_frames_per_camera": frames},
     }
+    if appearance:
+        task["ue"]["appearance"] = _appearance_catalog()
     (repo / "task.json").write_text(json.dumps(task), encoding="utf-8")
     return repo / "task.json"
 
@@ -294,6 +384,118 @@ class TestTaskStatusAudit:
 
         assert r.exit_code == 0, r.output
         assert not state_path.exists()
+
+    @pytest.mark.parametrize(
+        "invalid_artifact",
+        [
+            "missing_manifest", "bad_schema", "changed_frames", "changed_meta",
+            "bad_meta", "catalog", "entity_binding", "fingerprint",
+            "invalid_hashed_frames",
+        ],
+    )
+    def test_resume_retries_completed_appearance_export_with_invalid_manifest_inputs(
+        self, tmp_path, pin_repo_root, invalid_artifact
+    ):
+        from grf_ue_bridge import pipeline_state
+
+        tf = _make_task_dir(tmp_path, appearance=True)
+        from grf_ue_bridge.config import resolver
+
+        resolved = resolver.resolve_task(tf)
+        episode = Path(resolved.trajectory_output)
+        episode.mkdir(parents=True)
+        meta = _appearance_meta(episode.name)
+        meta_path = episode / "meta.json"
+        frames_path = episode / "frames.jsonl"
+        meta_path.write_text(json.dumps(meta), encoding="utf-8")
+        frames_path.write_text(json.dumps(_appearance_frame()) + "\n", encoding="utf-8")
+        manifest = build_appearance_manifest(
+            meta, frames_path, resolved.ue_profile["appearance"]
+        )
+        provenance = episode / "provenance"
+        provenance.mkdir()
+        manifest_path = provenance / "appearance.json"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+        if invalid_artifact == "missing_manifest":
+            manifest_path.unlink()
+        elif invalid_artifact == "bad_schema":
+            manifest["schema"] = "wrong_schema"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        elif invalid_artifact == "changed_frames":
+            frames_path.write_bytes(b'{"step":0,"changed":true}\n')
+        elif invalid_artifact == "changed_meta":
+            meta["randomness"]["ue_visual_seed"] += 1
+            meta_path.write_text(json.dumps(meta), encoding="utf-8")
+        elif invalid_artifact == "bad_meta":
+            meta_path.write_text("not json", encoding="utf-8")
+        elif invalid_artifact == "catalog":
+            task_data = json.loads(tf.read_text(encoding="utf-8"))
+            task_data["ue"]["appearance"]["models"][0]["mesh"] = "/Game/Players/Changed"
+            tf.write_text(json.dumps(task_data), encoding="utf-8")
+        elif invalid_artifact == "entity_binding":
+            meta["entities"][2]["is_goalkeeper"] = False
+            meta["entities"][3]["is_goalkeeper"] = True
+            meta_path.write_text(json.dumps(meta), encoding="utf-8")
+        elif invalid_artifact == "fingerprint":
+            manifest["fingerprint"] = "0" * 64
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        elif invalid_artifact == "invalid_hashed_frames":
+            frames_path.write_text("not json\n", encoding="utf-8")
+            manifest = build_appearance_manifest(
+                meta, frames_path, resolved.ue_profile["appearance"]
+            )
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+        state_path = pipeline_state.state_path(pin_repo_root, "cli_t1")
+        state = pipeline_state.create_state("cli_t1")
+        pipeline_state.update_step(state, "export", pipeline_state.StepStatus.COMPLETED)
+        pipeline_state.save_state(state, state_path)
+
+        result = runner.invoke(app, [
+            "task", "resume", str(tf), "--dry-run",
+            "--dataset-root", str(tmp_path / "ds"),
+            "--ue-project-root", str(tf.parent),
+        ])
+
+        assert result.exit_code == 0, result.output
+        assert "export: retry" in result.output
+
+    def test_resume_accepts_valid_appearance_manifest(self, tmp_path, pin_repo_root):
+        from grf_ue_bridge import pipeline_state
+        from grf_ue_bridge.config import resolver
+
+        tf = _make_task_dir(tmp_path, appearance=True)
+        resolved = resolver.resolve_task(tf)
+        episode = Path(resolved.trajectory_output)
+        episode.mkdir(parents=True)
+        meta = _appearance_meta(episode.name)
+        meta_path = episode / "meta.json"
+        frames_path = episode / "frames.jsonl"
+        meta_path.write_text(json.dumps(meta), encoding="utf-8")
+        frames_path.write_text(json.dumps(_appearance_frame()) + "\n", encoding="utf-8")
+        manifest = build_appearance_manifest(
+            meta, frames_path, resolved.ue_profile["appearance"]
+        )
+        provenance = episode / "provenance"
+        provenance.mkdir()
+        (provenance / "appearance.json").write_text(
+            json.dumps(manifest), encoding="utf-8"
+        )
+
+        state_path = pipeline_state.state_path(pin_repo_root, "cli_t1")
+        state = pipeline_state.create_state("cli_t1")
+        pipeline_state.update_step(state, "export", pipeline_state.StepStatus.COMPLETED)
+        pipeline_state.save_state(state, state_path)
+
+        result = runner.invoke(app, [
+            "task", "resume", str(tf), "--dry-run",
+            "--dataset-root", str(tmp_path / "ds"),
+            "--ue-project-root", str(tf.parent),
+        ])
+
+        assert result.exit_code == 0, result.output
+        assert "export: skip" in result.output
 
     def test_running_state_blocks_new_postprocess_without_force(self, tmp_path, pin_repo_root):
         tf = _make_task_dir(tmp_path)

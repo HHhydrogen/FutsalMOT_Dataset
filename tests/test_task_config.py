@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from grf_ue_bridge.config import loader
+from grf_ue_bridge.config import loader, resolver
 from grf_ue_bridge.config.models import (
     AuditTaskConfig,
     CameraMappingConfig,
@@ -46,6 +46,39 @@ def _write_task(path: Path, **over):
     data.update(over)
     (path / "task.json").write_text(json.dumps(data), encoding="utf-8")
     return path / "task.json"
+
+
+def _appearance_catalog():
+    return {
+        "mode": "seeded",
+        "policy": "futsalmot_appearance_v1",
+        "catalog_id": "mpfb_players_003_009_v1",
+        "models": [
+            {
+                "player_id": player_id,
+                "mesh": f"/Game/FutsalMOT/Characters/MPFB/Players/Player_{player_id:03d}/MPFB_Player_{player_id:03d}",
+                "anim_class": "/Game/FutsalMOT/Characters/MPFB/Core/Retarget/ABP_MPFB_RuntimeRetarget",
+                "skeleton": "/Game/FutsalMOT/Characters/MPFB/Core/Skeleton/SKEL_MPFB_Base",
+            }
+            for player_id in range(3, 10)
+        ],
+        "skins": [
+            {
+                "skin_id": f"skin-{index:02d}",
+                "texture": f"/Game/FutsalMOT/Characters/MPFB/Textures/Skins/Male/T_Skin_{index:02d}",
+            }
+            for index in range(1, 10)
+        ],
+        "kits": [
+            {
+                "set_id": f"{index:02d}",
+                "jersey_material": f"/Game/FutsalMOT/Characters/MPFB/Materials/M_MPFB_Jersey_Set_{index:02d}",
+                "shorts_material": f"/Game/FutsalMOT/Characters/MPFB/Materials/M_MPFB_Shorts_Set_{index:02d}",
+            }
+            for index in range(1, 6)
+        ],
+        "body_texture_parameter": "SkinTexture",
+    }
 
 
 def _camera_task_fields():
@@ -238,6 +271,114 @@ class TestTaskSchema:
         t = loader.load_task_config(tf)
         assert t.simulation is None
         assert t.ue.camera_mapping is None
+
+    def test_legacy_ue_extra_fields_remain_allowed_without_appearance(self, tmp_path):
+        legacy_visuals = {"L0": {"mesh": "/Game/Legacy/Player"}}
+        tf = _write_task(
+            tmp_path,
+            ue={"player_visuals": legacy_visuals, "legacy_option": "retained"},
+        )
+
+        task = loader.load_task_config(tf)
+
+        assert task.ue.appearance is None
+        assert task.ue.player_visuals == legacy_visuals
+        assert task.ue.legacy_option == "retained"
+
+    def test_valid_appearance_catalog_is_typed_and_preserved(self, tmp_path):
+        tf = _write_task(tmp_path, ue={"appearance": _appearance_catalog()})
+
+        task = loader.load_task_config(tf)
+
+        assert task.ue.appearance.policy == "futsalmot_appearance_v1"
+        assert task.ue.appearance.catalog_id == "mpfb_players_003_009_v1"
+        assert [model.player_id for model in task.ue.appearance.models] == list(range(3, 10))
+        assert task.ue.appearance.body_texture_parameter == "SkinTexture"
+
+    def test_appearance_accepts_legitimate_ue_object_path_syntax(self, tmp_path):
+        catalog = _appearance_catalog()
+        catalog["models"][0]["mesh"] += ".MPFB_Player_003"
+
+        task = loader.load_task_config(_write_task(tmp_path, ue={"appearance": catalog}))
+
+        assert task.ue.appearance.models[0].mesh.endswith(".MPFB_Player_003")
+
+    def test_seeded_appearance_rejects_nonempty_legacy_player_visuals(self, tmp_path):
+        tf = _write_task(
+            tmp_path,
+            ue={
+                "appearance": _appearance_catalog(),
+                "player_visuals": {"L0": {"mesh": "/Game/Legacy/Player"}},
+            },
+        )
+
+        with pytest.raises(ValueError, match="appearance.*player_visuals"):
+            loader.load_task_config(tf)
+
+        problems = resolver.validate_task(tf)
+        assert any("appearance" in problem and "player_visuals" in problem for problem in problems)
+
+    @pytest.mark.parametrize(
+        ("mutate", "message"),
+        [
+            (lambda catalog: catalog["models"].pop(), "models"),
+            (lambda catalog: catalog["skins"].pop(), "skins"),
+            (lambda catalog: catalog["kits"].pop(), "kits"),
+            (
+                lambda catalog: catalog["models"][1].update(
+                    {"player_id": catalog["models"][0]["player_id"]}
+                ),
+                "player_id",
+            ),
+            (lambda catalog: catalog["skins"][1].update({"skin_id": "skin-01"}), "skin_id"),
+            (lambda catalog: catalog["kits"][1].update({"set_id": "01"}), "set_id"),
+            (lambda catalog: catalog["kits"][0].update({"set_id": "Set_01"}), "set_id"),
+            (lambda catalog: catalog["skins"][0].update({"texture": "Textures/Skin"}), "texture"),
+            (lambda catalog: catalog["models"][0].update({"mesh": "/Game/"}), "mesh"),
+            (lambda catalog: catalog.update({"policy": "unsupported"}), "policy"),
+            (lambda catalog: catalog.update({"catalog_id": "other_catalog"}), "catalog_id"),
+            (lambda catalog: catalog.update({"body_texture_parameter": ""}), "body_texture_parameter"),
+            (lambda catalog: catalog.update({"body_texture_parameter": "Diffuse"}), "body_texture_parameter"),
+            (lambda catalog: catalog["models"][0].update({"unexpected": "value"}), "unexpected"),
+        ],
+    )
+    def test_invalid_appearance_catalog_is_rejected(self, tmp_path, mutate, message):
+        catalog = _appearance_catalog()
+        mutate(catalog)
+        tf = _write_task(tmp_path, ue={"appearance": catalog})
+
+        with pytest.raises(ValueError, match=message):
+            loader.load_task_config(tf)
+
+    @pytest.mark.parametrize(
+        "material_field",
+        ["jersey_material", "shorts_material"],
+    )
+    def test_appearance_kit_material_must_match_owning_set_id(
+        self, tmp_path, material_field
+    ):
+        catalog = _appearance_catalog()
+        catalog["kits"][0][material_field] = catalog["kits"][0][material_field].replace(
+            "_Set_01", "_Set_02"
+        )
+
+        with pytest.raises(ValueError, match="set_id.*material|material.*set_id"):
+            loader.load_task_config(_write_task(tmp_path, ue={"appearance": catalog}))
+
+    def test_dotted_kit_material_object_name_must_match_owning_set_id(self, tmp_path):
+        catalog = _appearance_catalog()
+        catalog["kits"][0]["jersey_material"] += ".M_MPFB_Jersey_Set_02"
+
+        with pytest.raises(ValueError, match="set_id.*material|material.*set_id"):
+            loader.load_task_config(_write_task(tmp_path, ue={"appearance": catalog}))
+
+    @pytest.mark.parametrize("malformed_path", ["/Game//Asset", "/Game/Foo/"])
+    def test_appearance_rejects_empty_asset_path_segments(self, tmp_path, malformed_path):
+        catalog = _appearance_catalog()
+        catalog["models"][0]["mesh"] = malformed_path
+
+        with pytest.raises(ValueError, match="/Game/.*路径|资产路径"):
+            loader.load_task_config(_write_task(tmp_path, ue={"appearance": catalog}))
 
     @pytest.mark.parametrize(
         ("block", "field"),

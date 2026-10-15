@@ -1,11 +1,14 @@
+import hashlib
 import json
 import shutil
 from pathlib import Path
+from typing import Optional
 
 import pytest
 
 from grf_ue_bridge import annotation_validator as annotation_validator_module
 from grf_ue_bridge.annotation_validator import validate_annotation_result
+from grf_ue_bridge.appearance import build_appearance_manifest
 from grf_ue_bridge.dataset_regression import collect_dataset_regression_errors
 from grf_ue_bridge.task_requirements import TaskRequirements, resolve_task_requirements
 from grf_ue_bridge.validation_result import (
@@ -138,6 +141,159 @@ def _write_audit_camera_fixture(tmp_path: Path) -> Path:
     return root
 
 
+def _appearance_catalog() -> dict:
+    """构造审计所需的最小完整外观 catalog。"""
+    return {
+        "mode": "seeded",
+        "policy": "futsalmot_appearance_v1",
+        "catalog_id": "audit-appearance-v1",
+        "models": [
+            {
+                "player_id": player_id,
+                "mesh": f"/Game/Appearance/Mesh_{player_id}",
+                "anim_class": "/Game/Appearance/Anim",
+                "skeleton": "/Game/Appearance/Skeleton",
+            }
+            for player_id in range(3, 10)
+        ],
+        "skins": [
+            {
+                "skin_id": f"skin-{index}",
+                "texture": f"/Game/Appearance/Skin_{index}",
+            }
+            for index in range(1, 10)
+        ],
+        "kits": [
+            {
+                "set_id": f"{index:02d}",
+                "jersey_material": f"/Game/Appearance/Jersey_{index}",
+                "shorts_material": f"/Game/Appearance/Shorts_{index}",
+            }
+            for index in range(1, 6)
+        ],
+        "body_texture_parameter": "SkinTexture",
+    }
+
+
+def _write_appearance_fixture(
+    root: Path,
+    *,
+    report_overrides: Optional[dict] = None,
+    change_frames_after_manifest: bool = False,
+    render_required: bool = False,
+) -> dict:
+    """为 appearance audit 构造 resolved profile、manifest 和 application report。"""
+    meta = {
+        "schema": "grf_ue_episode",
+        "version": 1,
+        "episode_id": root.name,
+        "source": {"seed": 42},
+        "randomness": {
+            "policy": "futsalmot_seed_v1",
+            "root_seed": 42,
+            "ue_visual_seed": 1001,
+        },
+        "entities": [
+            {
+                "id": entity_id,
+                "team": "left" if entity_id.startswith("L") else "right",
+                "is_goalkeeper": entity_id in {"L2", "R1"},
+            }
+            for entity_id in (
+                "L0", "L1", "L2", "L3", "L4",
+                "R0", "R1", "R2", "R3", "R4",
+            )
+        ],
+    }
+    frames_path = root / "frames.jsonl"
+    frames_path.write_bytes(b'{"step":0}\n')
+    (root / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+    manifest = build_appearance_manifest(meta, frames_path, _appearance_catalog())
+    if change_frames_after_manifest:
+        frames_path.write_bytes(b'{"step":1}\n')
+    provenance = root / "provenance"
+    provenance.mkdir(exist_ok=True)
+    (provenance / "ue-profile.json").write_text(
+        json.dumps({"appearance": _appearance_catalog()}), encoding="utf-8"
+    )
+    (provenance / "appearance.json").write_text(
+        json.dumps(manifest), encoding="utf-8"
+    )
+    report = {
+        "schema": "futsalmot_appearance_application",
+        "version": 1,
+        "manifest_fingerprint": manifest["fingerprint"],
+        "catalog_fingerprint": manifest["catalog_fingerprint"],
+        "trajectory_sha256": hashlib.sha256(
+            b'{"step":0}\n'
+        ).hexdigest(),
+        "state": "restored",
+        "errors": [],
+        "warnings": [],
+        "actors": [
+            {
+                "entity_id": entity_id,
+                "apply_status": "applied",
+                "restore_status": "restored",
+                "assets": {
+                    field: next(
+                        item[field]
+                        for item in manifest["entities"]
+                        if item["entity_id"] == entity_id
+                    )
+                    for field in (
+                        "mesh", "anim_class", "skeleton", "skin_texture",
+                        "jersey_material", "shorts_material",
+                    )
+                },
+                "slots": {
+                    "body_texture_parameter": manifest["body_texture_parameter"],
+                    "Body": next(
+                        item["skin_texture"]
+                        for item in manifest["entities"]
+                        if item["entity_id"] == entity_id
+                    ),
+                    "Jersey": next(
+                        item["jersey_material"]
+                        for item in manifest["entities"]
+                        if item["entity_id"] == entity_id
+                    ),
+                    "Shorts": next(
+                        item["shorts_material"]
+                        for item in manifest["entities"]
+                        if item["entity_id"] == entity_id
+                    ),
+                },
+            }
+            for entity_id in (
+                "L0", "L1", "L2", "L3", "L4",
+                "R0", "R1", "R2", "R3", "R4",
+            )
+        ],
+        "mrq_jobs": ([{"camera_id": "Camera_01", "status": "success"}]
+                     if render_required else []),
+        "mrq_pending": False,
+        **({"render_result":
+            {
+                "status": "success",
+                "jobs": [{"camera_id": "Camera_01", "status": "success"}],
+                "cameras": {"Camera_01": {"ok": True}},
+            }
+        } if render_required else {}),
+    }
+    if report_overrides:
+        report.update(report_overrides)
+    (provenance / "appearance_application.json").write_text(
+        json.dumps(report), encoding="utf-8"
+    )
+    if render_required:
+        (root / "render_summary.json").write_text(
+            json.dumps({"status": "success", "cameras": {"Camera_01": {"ok": True}}}),
+            encoding="utf-8",
+        )
+    return {"meta": meta, "manifest": manifest, "report": report}
+
+
 def run_audit_fixture(
     tmp_path: Path,
     *,
@@ -172,6 +328,8 @@ def run_audit(
     validation_level: str,
     require_yolo_det: bool = False,
     require_yolo_seg: bool = False,
+    episode: Optional[Path] = None,
+    appearance_catalog=None,
 ) -> dict:
     args = [
         "--input",
@@ -182,6 +340,7 @@ def run_audit(
         "1",
         "--validation-level",
         validation_level,
+        *( ["--episode", str(episode)] if episode is not None else [] ),
         "--render-required",
         str(require_render).lower(),
         "--mask-enabled",
@@ -195,11 +354,835 @@ def run_audit(
         "--pose-required",
         str(require_pose).lower(),
     ]
-    rc = audit_main(args)
+    rc = audit_main(
+        args,
+        appearance_catalog=appearance_catalog,
+        episode_dir=episode or root,
+    )
     assert rc in (0, 1)
     return json.loads(
         (root / "audit" / "soak_audit_report.json").read_text(encoding="utf-8")
     )
+
+
+def test_audit_legacy_task_skips_appearance_even_with_residual_files(tmp_path):
+    root = _write_audit_camera_fixture(tmp_path)
+    provenance = root / "provenance"
+    provenance.mkdir()
+    (provenance / "appearance.json").write_text("{}", encoding="utf-8")
+    (provenance / "appearance_application.json").write_text("{}", encoding="utf-8")
+    (provenance / "ue-profile.json").write_text(
+        json.dumps({"appearance": _appearance_catalog()}), encoding="utf-8"
+    )
+
+    report = run_audit(
+        root,
+        require_render=False,
+        require_mask=False,
+        require_mot=False,
+        require_pose=False,
+        validation_level="none",
+        appearance_catalog=None,
+    )
+
+    assert report["passed"] is True
+    assert report["checks"]["appearance"]["status"] == "skipped"
+
+
+def test_audit_standalone_ignores_residual_enabled_profile_without_task_config(tmp_path):
+    root = _write_audit_camera_fixture(tmp_path)
+    provenance = root / "provenance"
+    provenance.mkdir()
+    (provenance / "ue-profile.json").write_text(
+        json.dumps({"appearance": _appearance_catalog()}), encoding="utf-8"
+    )
+    (provenance / "appearance.json").write_text("{}", encoding="utf-8")
+    (provenance / "appearance_application.json").write_text("{}", encoding="utf-8")
+
+    report = run_audit(
+        root,
+        require_render=False,
+        require_mask=False,
+        require_mot=False,
+        require_pose=False,
+        validation_level="none",
+    )
+
+    assert report["passed"] is True
+    assert report["checks"]["appearance"]["status"] == "skipped"
+
+
+@pytest.mark.parametrize("appearance_enabled", [False, True])
+def test_task_audit_cli_passes_current_resolved_appearance_config(
+    monkeypatch, tmp_path, appearance_enabled
+):
+    from types import SimpleNamespace
+
+    from grf_ue_bridge import cli as cli_module
+
+    root = tmp_path / "episode"
+    root.mkdir()
+    task_file = tmp_path / "task.json"
+    catalog = _appearance_catalog() if appearance_enabled else None
+    resolved = SimpleNamespace(
+        audit={"expected_cameras": 1, "expected_frames_per_camera": 1},
+        artifact_policy={"profile": "full"},
+        dataset_episode_dir=str(root),
+        trajectory_output=str(root),
+        ue_profile={"appearance": catalog} if appearance_enabled else {},
+        repo_root=str(tmp_path),
+        task_id="audit-cli-test",
+    )
+    captured = {}
+
+    monkeypatch.setattr(cli_module, "_resolve_runtime", lambda *args: (task_file, resolved))
+    monkeypatch.setattr(cli_module, "_run_manifest", lambda *args: ({}, tmp_path / "run.json"))
+    monkeypatch.setattr(cli_module, "_save_run_manifest_best_effort", lambda *args: None)
+    monkeypatch.setattr(cli_module, "_start_pipeline_step", lambda *args, **kwargs: (object(), tmp_path / "state.json"))
+    monkeypatch.setattr(cli_module, "_finish_pipeline_step", lambda *args, **kwargs: None)
+    monkeypatch.setattr(cli_module, "_sync_render_state_from_audit", lambda *args: None)
+    monkeypatch.setattr(cli_module, "update_validation", lambda *args: None)
+    monkeypatch.setattr(cli_module, "_finish_run_manifest", lambda *args: None)
+
+    def fake_audit_main(argv, **kwargs):
+        captured["argv"] = argv
+        captured.update(kwargs)
+        return 0
+
+    monkeypatch.setattr(
+        "grf_ue_bridge.workflows.task_audit.main", fake_audit_main
+    )
+
+    cli_module.task_audit(
+        task=task_file,
+        validation_level="none",
+        dataset_root=None,
+        ue_project_root=None,
+        local_config=None,
+        force=False,
+    )
+
+    assert captured["appearance_catalog"] == catalog
+    assert captured["episode_dir"] == root
+
+
+def test_audit_enabled_appearance_accepts_matching_restored_report(tmp_path):
+    root = _write_audit_camera_fixture(tmp_path)
+    _write_appearance_fixture(root, render_required=True)
+    (root / "provenance" / "ue-profile.json").unlink()
+
+    report = run_audit(
+        root,
+        require_render=True,
+        require_mask=False,
+        require_mot=False,
+        require_pose=False,
+        validation_level="none",
+        episode=root,
+        appearance_catalog=_appearance_catalog(),
+    )
+
+    assert report["passed"] is True
+    assert report["checks"]["appearance"]["status"] == "passed"
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        (lambda actor: actor.update(apply_status="failed"), "apply_status"),
+        (lambda actor: actor["assets"].update(mesh="/Game/Other/Mesh"), "mesh"),
+        (lambda actor: actor["slots"].update(Jersey="/Game/Other/Jersey"), "Jersey"),
+    ],
+)
+def test_audit_appearance_requires_applied_manifest_matching_actor_and_slots(
+    tmp_path, mutation, message
+):
+    root = _write_audit_camera_fixture(tmp_path)
+    _write_appearance_fixture(root)
+    report_path = root / "provenance" / "appearance_application.json"
+    application = json.loads(report_path.read_text(encoding="utf-8"))
+    mutation(application["actors"][0])
+    report_path.write_text(json.dumps(application), encoding="utf-8")
+
+    report = run_audit(
+        root,
+        require_render=False,
+        require_mask=False,
+        require_mot=False,
+        require_pose=False,
+        validation_level="none",
+        episode=root,
+        appearance_catalog=_appearance_catalog(),
+    )
+
+    assert report["passed"] is False
+    assert report["checks"]["appearance"]["status"] == "failed"
+    assert message in " ".join(report["errors"])
+
+
+@pytest.mark.parametrize("invariant", [
+    "actor_count",
+    "actor_entity_ids",
+    "actor_restore_status",
+    "mrq_pending",
+    "mrq_job_status",
+])
+def test_audit_enabled_appearance_validates_complete_restored_structure(
+    tmp_path, invariant
+):
+    root = _write_audit_camera_fixture(tmp_path)
+    _write_appearance_fixture(root)
+    report_path = root / "provenance" / "appearance_application.json"
+    application = json.loads(report_path.read_text(encoding="utf-8"))
+    if invariant == "actor_count":
+        application["actors"] = application["actors"][:-1]
+    elif invariant == "actor_entity_ids":
+        application["actors"][0]["entity_id"] = "UNKNOWN"
+    elif invariant == "actor_restore_status":
+        application["actors"][0]["restore_status"] = "restoring"
+    elif invariant == "mrq_pending":
+        application["mrq_pending"] = True
+    else:
+        application["mrq_jobs"] = [{"camera_id": "Camera_01", "status": "rendering"}]
+    report_path.write_text(json.dumps(application), encoding="utf-8")
+
+    report = run_audit(
+        root,
+        require_render=False,
+        require_mask=False,
+        require_mot=False,
+        require_pose=False,
+        validation_level="none",
+        episode=root,
+        appearance_catalog=_appearance_catalog(),
+    )
+
+    assert report["passed"] is False
+    assert report["checks"]["appearance"]["status"] == "failed"
+    assert any(
+        marker in " ".join(report["errors"])
+        for marker in ("actors", "entity", "restore_status", "mrq_pending", "terminal")
+    )
+
+
+def test_audit_enabled_appearance_rejects_application_summary_status_mismatch(tmp_path):
+    root = _write_audit_camera_fixture(tmp_path)
+    _write_appearance_fixture(
+        root,
+        render_required=True,
+        report_overrides={
+            "mrq_jobs": [{"camera_id": "Camera_01", "status": "failed"}],
+            "render_result": {
+                "status": "failed",
+                "jobs": [{"camera_id": "Camera_01", "status": "failed"}],
+                "cameras": {"Camera_01": {"ok": False}},
+            },
+        },
+    )
+
+    report = run_audit(
+        root,
+        require_render=True,
+        require_mask=False,
+        require_mot=False,
+        require_pose=False,
+        validation_level="none",
+        episode=root,
+        appearance_catalog=_appearance_catalog(),
+    )
+
+    assert report["passed"] is False
+    assert report["checks"]["appearance"]["status"] == "failed"
+    assert any(
+        "render_result.status" in error and "render_summary.status" in error
+        for error in report["errors"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("application_status", "summary_status", "matches"),
+    [
+        ("success", "success", True),
+        ("skipped", "failed", True),
+        ("no_render", "failed", True),
+        ("success", "no_render", False),
+        ("failed", "success", False),
+    ],
+)
+def test_audit_appearance_render_status_uses_terminal_normalization(
+    tmp_path, application_status, summary_status, matches
+):
+    root = _write_audit_camera_fixture(tmp_path)
+    _write_appearance_fixture(root, render_required=True)
+    report_path = root / "provenance" / "appearance_application.json"
+    application = json.loads(report_path.read_text(encoding="utf-8"))
+    application["render_result"]["status"] = application_status
+    report_path.write_text(json.dumps(application), encoding="utf-8")
+    summary_path = root / "render_summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary["status"] = summary_status
+    summary_path.write_text(json.dumps(summary), encoding="utf-8")
+
+    report = run_audit(
+        root,
+        require_render=True,
+        require_mask=False,
+        require_mot=False,
+        require_pose=False,
+        validation_level="none",
+        episode=root,
+        appearance_catalog=_appearance_catalog(),
+    )
+
+    mismatch_errors = [
+        error for error in report["errors"]
+        if "render_result.status" in error and "render_summary.status" in error
+    ]
+    assert bool(mismatch_errors) is (not matches)
+
+
+def _recursive_json():
+    return "[" * 1000 + "]" * 1000
+
+
+@pytest.mark.parametrize("broken_file", [
+    "manifest",
+    "manifest_validation",
+    "application",
+    "meta",
+    "render_summary",
+])
+def test_audit_recursive_json_writes_canonical_failed_report(tmp_path, broken_file):
+    root = _write_audit_camera_fixture(tmp_path)
+    _write_appearance_fixture(root, render_required=broken_file == "render_summary")
+    if broken_file in {"manifest", "manifest_validation"}:
+        path = root / "provenance" / "appearance.json"
+    elif broken_file == "application":
+        path = root / "provenance" / "appearance_application.json"
+    elif broken_file == "meta":
+        path = root / "meta.json"
+    else:
+        path = root / "render_summary.json"
+    if broken_file == "manifest_validation":
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        deeply_nested = []
+        for _ in range(850):
+            deeply_nested = [deeply_nested]
+        manifest["extra_recursive"] = deeply_nested
+        path.write_text(json.dumps(manifest), encoding="utf-8")
+    else:
+        path.write_text(_recursive_json(), encoding="utf-8")
+
+    report = run_audit(
+        root,
+        require_render=broken_file == "render_summary",
+        require_mask=False,
+        require_mot=False,
+        require_pose=False,
+        validation_level="none",
+        episode=root,
+        appearance_catalog=_appearance_catalog(),
+    )
+
+    assert (root / "audit" / "soak_audit_report.json").is_file()
+    assert report["passed"] is False
+    assert report["exit_code"] == 1
+    assert report["errors"]
+
+
+def test_audit_recursive_camera_json_writes_canonical_failed_report(tmp_path):
+    root = _write_audit_camera_fixture(tmp_path)
+    (root / "Camera_01" / "camera.json").write_text(
+        _recursive_json(), encoding="utf-8"
+    )
+
+    report = run_audit(
+        root,
+        require_render=False,
+        require_mask=False,
+        require_mot=False,
+        require_pose=False,
+        validation_level="none",
+    )
+
+    assert report["passed"] is False
+    assert report["exit_code"] == 1
+    assert report["checks"]["calibration"]["status"] == "failed"
+    assert any("camera.json" in error for error in report["errors"])
+
+
+def test_audit_recursive_annotations_jsonl_writes_canonical_failed_report(tmp_path):
+    root = _write_audit_camera_fixture(tmp_path)
+    (root / "Camera_01" / "annotations.jsonl").write_text(
+        _recursive_json() + "\n", encoding="utf-8"
+    )
+
+    report = run_audit(
+        root,
+        require_render=False,
+        require_mask=False,
+        require_mot=False,
+        require_pose=False,
+        validation_level="none",
+    )
+
+    assert report["passed"] is False
+    assert report["exit_code"] == 1
+    assert report["checks"]["camera_core"]["status"] == "failed"
+    assert any("annotations.jsonl" in error for error in report["errors"])
+
+
+def test_audit_recursive_pose_session_writes_canonical_failed_report(tmp_path):
+    root = _write_audit_camera_fixture(tmp_path)
+    (root / "pose_session.json").write_text(
+        _recursive_json(), encoding="utf-8"
+    )
+
+    report = run_audit(
+        root,
+        require_render=False,
+        require_mask=False,
+        require_mot=False,
+        require_pose=True,
+        validation_level="none",
+    )
+
+    assert report["passed"] is False
+    assert report["exit_code"] == 1
+    assert report["checks"]["runtime_pose"]["status"] == "failed"
+    assert any("pose_session.json" in error for error in report["errors"])
+
+
+@pytest.mark.parametrize(
+    "broken_file", ["application", "render_summary", "pose_session"]
+)
+def test_cleanup_recursive_json_fails_closed_and_preserves_transient(
+    tmp_path, broken_file
+):
+    root = tmp_path / "episode"
+    transient = root / "Camera_01" / "render" / "frame.png"
+    transient.parent.mkdir(parents=True)
+    transient.write_bytes(b"render")
+    _write_successful_audit(root)
+    if broken_file == "application":
+        path = root / "provenance" / "appearance_application.json"
+        path.parent.mkdir(parents=True)
+    elif broken_file == "render_summary":
+        path = root / "render_summary.json"
+    else:
+        path = root / "pose_session.json"
+    path.write_text(_recursive_json(), encoding="utf-8")
+
+    result = apply_cleanup(
+        root,
+        ["Camera_01"],
+        resolved=_cleanup_resolved(tmp_path, pose_enabled=broken_file == "pose_session"),
+    )
+
+    assert result["ok"] is False
+    assert result["deleted_files"] == 0
+    assert transient.is_file()
+    assert any("appearance" in problem or "render_summary" in problem
+               for problem in result["gate_problems"])
+
+
+def test_audit_enabled_appearance_requires_manifest_even_when_report_exists(tmp_path):
+    root = _write_audit_camera_fixture(tmp_path)
+    _write_appearance_fixture(root)
+    (root / "provenance" / "appearance.json").unlink()
+
+    report = run_audit(
+        root,
+        require_render=False,
+        require_mask=False,
+        require_mot=False,
+        require_pose=False,
+        validation_level="none",
+        episode=root,
+        appearance_catalog=_appearance_catalog(),
+    )
+
+    assert report["passed"] is False
+    assert report["checks"]["appearance"]["status"] == "failed"
+    assert "appearance.json" in " ".join(report["errors"])
+
+
+def test_audit_enabled_appearance_rejects_stale_trajectory_report(tmp_path):
+    root = _write_audit_camera_fixture(tmp_path)
+    _write_appearance_fixture(root, change_frames_after_manifest=True)
+
+    report = run_audit(
+        root,
+        require_render=False,
+        require_mask=False,
+        require_mot=False,
+        require_pose=False,
+        validation_level="none",
+        episode=root,
+        appearance_catalog=_appearance_catalog(),
+    )
+
+    assert report["passed"] is False
+    assert report["checks"]["appearance"]["status"] == "failed"
+    assert "trajectory_sha256" in " ".join(report["errors"])
+
+
+def test_audit_enabled_appearance_rejects_failed_application_report(tmp_path):
+    root = _write_audit_camera_fixture(tmp_path)
+    _write_appearance_fixture(root, report_overrides={"state": "failed"})
+
+    report = run_audit(
+        root,
+        require_render=False,
+        require_mask=False,
+        require_mot=False,
+        require_pose=False,
+        validation_level="none",
+        episode=root,
+        appearance_catalog=_appearance_catalog(),
+    )
+
+    assert report["passed"] is False
+    assert report["checks"]["appearance"]["status"] == "failed"
+    assert "restored" in " ".join(report["errors"])
+
+
+@pytest.mark.parametrize("state", ["applied", "rendering", "restore_failed"])
+def test_audit_enabled_appearance_rejects_unrestored_report(tmp_path, state):
+    root = _write_audit_camera_fixture(tmp_path)
+    _write_appearance_fixture(root, report_overrides={"state": state})
+
+    report = run_audit(
+        root,
+        require_render=False,
+        require_mask=False,
+        require_mot=False,
+        require_pose=False,
+        validation_level="none",
+        episode=root,
+        appearance_catalog=_appearance_catalog(),
+    )
+
+    assert report["passed"] is False
+    assert report["checks"]["appearance"]["status"] == "failed"
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("schema", "wrong_schema", "schema"),
+        ("version", 2, "version"),
+        ("version", True, "version"),
+        ("manifest_fingerprint", "0" * 64, "manifest fingerprint"),
+        ("trajectory_sha256", "0" * 64, "trajectory_sha256"),
+    ],
+)
+def test_audit_enabled_appearance_rejects_application_contract_mismatch(
+    tmp_path, field, value, message
+):
+    root = _write_audit_camera_fixture(tmp_path)
+    _write_appearance_fixture(root, report_overrides={field: value})
+
+    report = run_audit(
+        root,
+        require_render=False,
+        require_mask=False,
+        require_mot=False,
+        require_pose=False,
+        validation_level="none",
+        episode=root,
+        appearance_catalog=_appearance_catalog(),
+    )
+
+    assert report["passed"] is False
+    assert report["checks"]["appearance"]["status"] == "failed"
+    assert message in " ".join(report["errors"])
+
+
+def test_audit_enabled_appearance_rejects_application_catalog_fingerprint_mismatch(
+    tmp_path,
+):
+    root = _write_audit_camera_fixture(tmp_path)
+    _write_appearance_fixture(
+        root,
+        report_overrides={"catalog_fingerprint": "0" * 64},
+        render_required=True,
+    )
+
+    report = run_audit(
+        root,
+        require_render=True,
+        require_mask=False,
+        require_mot=False,
+        require_pose=False,
+        validation_level="none",
+        episode=root,
+        appearance_catalog=_appearance_catalog(),
+    )
+
+    assert report["passed"] is False
+    assert report["checks"]["appearance"]["status"] == "failed"
+    assert "catalog fingerprint" in " ".join(report["errors"])
+
+
+def test_audit_enabled_appearance_requires_every_render_camera_in_application_report(
+    tmp_path,
+):
+    root = _write_audit_camera_fixture(tmp_path)
+    _write_appearance_fixture(
+        root,
+        report_overrides={"mrq_jobs": [], "render_result": {
+            "status": "success",
+            "jobs": [],
+            "cameras": {},
+        }},
+        render_required=True,
+    )
+
+    report = run_audit(
+        root,
+        require_render=True,
+        require_mask=False,
+        require_mot=False,
+        require_pose=False,
+        validation_level="none",
+        episode=root,
+        appearance_catalog=_appearance_catalog(),
+    )
+
+    assert report["passed"] is False
+    assert report["checks"]["appearance"]["status"] == "failed"
+    assert "required camera" in " ".join(report["errors"])
+
+
+def test_audit_enabled_appearance_requires_every_render_summary_camera(tmp_path):
+    root = _write_audit_camera_fixture(tmp_path)
+    _write_appearance_fixture(root, render_required=True)
+    (root / "render_summary.json").write_text(
+        json.dumps({"status": "success", "cameras": {}}), encoding="utf-8"
+    )
+
+    report = run_audit(
+        root,
+        require_render=True,
+        require_mask=False,
+        require_mot=False,
+        require_pose=False,
+        validation_level="none",
+        episode=root,
+        appearance_catalog=_appearance_catalog(),
+    )
+
+    assert report["passed"] is False
+    assert report["checks"]["appearance"]["status"] == "failed"
+    assert "render_summary 缺少 required camera" in " ".join(report["errors"])
+
+
+def test_audit_enabled_appearance_malformed_render_job_status_fails_diagnostically(
+    tmp_path,
+):
+    root = _write_audit_camera_fixture(tmp_path)
+    malformed_jobs = [{"camera_id": "Camera_01", "status": []}]
+    _write_appearance_fixture(
+        root,
+        report_overrides={
+            "mrq_jobs": malformed_jobs,
+            "render_result": {
+                "status": "success",
+                "jobs": malformed_jobs,
+                "cameras": {"Camera_01": {"ok": True}},
+            },
+        },
+        render_required=True,
+    )
+
+    report = run_audit(
+        root,
+        require_render=True,
+        require_mask=False,
+        require_mot=False,
+        require_pose=False,
+        validation_level="none",
+        episode=root,
+        appearance_catalog=_appearance_catalog(),
+    )
+
+    assert report["passed"] is False
+    assert report["checks"]["appearance"]["status"] == "failed"
+    assert any("必须为终态" in error for error in report["errors"])
+
+
+def test_audit_enabled_appearance_requires_terminal_render_success(tmp_path):
+    root = _write_audit_camera_fixture(tmp_path)
+    _write_appearance_fixture(
+        root,
+        render_required=True,
+        report_overrides={"render_result": {"status": "rendering"}},
+    )
+
+    report = run_audit(
+        root,
+        require_render=True,
+        require_mask=False,
+        require_mot=False,
+        require_pose=False,
+        validation_level="none",
+        episode=root,
+        appearance_catalog=_appearance_catalog(),
+    )
+
+    assert report["passed"] is False
+    assert report["checks"]["appearance"]["status"] == "failed"
+    assert "终态 render_result" in " ".join(report["errors"])
+
+
+@pytest.mark.parametrize("status", [["success"], {"status": "success"}])
+def test_audit_invalid_render_status_writes_failed_report(tmp_path, status):
+    root = _write_audit_camera_fixture(tmp_path)
+    _write_appearance_fixture(
+        root,
+        render_required=True,
+        report_overrides={"render_result": {"status": status}},
+    )
+
+    report = run_audit(
+        root,
+        require_render=True,
+        require_mask=False,
+        require_mot=False,
+        require_pose=False,
+        validation_level="none",
+        episode=root,
+        appearance_catalog=_appearance_catalog(),
+    )
+
+    assert (root / "audit" / "soak_audit_report.json").is_file()
+    assert report["passed"] is False
+    assert report["exit_code"] == 1
+    assert report["checks"]["appearance"]["status"] == "failed"
+    assert "终态 render_result" in " ".join(report["errors"])
+
+
+def test_audit_overflowing_seed_writes_failed_report_without_crashing(tmp_path):
+    root = _write_audit_camera_fixture(tmp_path)
+    _write_appearance_fixture(root)
+    meta_path = root / "meta.json"
+    meta_text = meta_path.read_text(encoding="utf-8")
+    meta_path.write_text(
+        meta_text.replace('"ue_visual_seed": 1001', '"ue_visual_seed": 1e999'),
+        encoding="utf-8",
+    )
+
+    report = run_audit(
+        root,
+        require_render=False,
+        require_mask=False,
+        require_mot=False,
+        require_pose=False,
+        validation_level="none",
+        episode=root,
+        appearance_catalog=_appearance_catalog(),
+    )
+
+    assert (root / "audit" / "soak_audit_report.json").is_file()
+    assert report["passed"] is False
+    assert report["exit_code"] == 1
+    assert report["checks"]["appearance"]["status"] == "failed"
+    assert "seed" in " ".join(report["errors"])
+
+
+def test_audit_boolean_manifest_version_writes_failed_report(tmp_path):
+    root = _write_audit_camera_fixture(tmp_path)
+    artifacts = _write_appearance_fixture(root)
+    manifest = artifacts["manifest"]
+    manifest["version"] = True
+    fingerprint_payload = {
+        key: value for key, value in manifest.items() if key != "fingerprint"
+    }
+    manifest["fingerprint"] = hashlib.sha256(
+        json.dumps(
+            fingerprint_payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    manifest_path = root / "provenance" / "appearance.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    application_path = root / "provenance" / "appearance_application.json"
+    application = json.loads(application_path.read_text(encoding="utf-8"))
+    application["manifest_fingerprint"] = manifest["fingerprint"]
+    application_path.write_text(json.dumps(application), encoding="utf-8")
+
+    report = run_audit(
+        root,
+        require_render=False,
+        require_mask=False,
+        require_mot=False,
+        require_pose=False,
+        validation_level="none",
+        episode=root,
+        appearance_catalog=_appearance_catalog(),
+    )
+
+    assert (root / "audit" / "soak_audit_report.json").is_file()
+    assert report["passed"] is False
+    assert report["exit_code"] == 1
+    assert report["checks"]["appearance"]["status"] == "failed"
+    assert "version" in " ".join(report["errors"])
+
+
+def test_audit_enabled_appearance_accepts_terminal_failed_render_result(tmp_path):
+    root = _write_audit_camera_fixture(tmp_path)
+    _write_appearance_fixture(
+        root,
+        render_required=True,
+        report_overrides={"mrq_jobs": [{"camera_id": "Camera_01", "status": "failed"}],
+                          "render_result": {
+                              "status": "failed",
+                              "jobs": [{"camera_id": "Camera_01", "status": "failed"}],
+                              "cameras": {"Camera_01": {"ok": False}},
+                          }},
+    )
+    (root / "render_summary.json").write_text(
+        json.dumps({"status": "failed", "cameras": {"Camera_01": {"ok": False}}}),
+        encoding="utf-8",
+    )
+
+    report = run_audit(
+        root,
+        require_render=True,
+        require_mask=False,
+        require_mot=False,
+        require_pose=False,
+        validation_level="none",
+        episode=root,
+        appearance_catalog=_appearance_catalog(),
+    )
+
+    assert report["passed"] is False
+    assert report["checks"]["appearance"]["status"] == "passed"
+    assert report["checks"]["render"]["status"] == "failed"
+
+
+def test_audit_enabled_appearance_rejects_non_object_manifest(tmp_path):
+    root = _write_audit_camera_fixture(tmp_path)
+    _write_appearance_fixture(root)
+    (root / "provenance" / "appearance.json").write_text("[]", encoding="utf-8")
+
+    report = run_audit(
+        root,
+        require_render=False,
+        require_mask=False,
+        require_mot=False,
+        require_pose=False,
+        validation_level="none",
+        episode=root,
+        appearance_catalog=_appearance_catalog(),
+    )
+
+    assert report["passed"] is False
+    assert report["checks"]["appearance"]["status"] == "failed"
 
 
 def test_audit_json_only_missing_mot_and_pose_is_passed_with_skips(tmp_path):
@@ -1229,8 +2212,10 @@ def test_validation_result_from_malformed_or_ambiguous_report_fails_safe(report)
 
 def _cleanup_resolved(tmp_path: Path, *, pose_enabled=False, render_enabled=True):
     return {
+        "task_id": "cleanup-appearance-test",
+        "repo_root": str(tmp_path),
         "postprocess": {"formats": ["json"], "yolo_pose": {"enabled": pose_enabled}},
-        "ue_profile": {"annotation_export": {
+        "ue_profile": {"appearance": {"mode": "seeded"}, "annotation_export": {
             "render_rgb": {"enabled": render_enabled},
             "instance_mask": {"enabled": False},
             "export_mot": False,
@@ -1238,6 +2223,35 @@ def _cleanup_resolved(tmp_path: Path, *, pose_enabled=False, render_enabled=True
         }},
         "artifact_policy": {"profile": "research_minimal"},
     }
+
+
+def test_cleanup_still_blocks_any_local_rollback_for_p1(tmp_path):
+    root = tmp_path / "episode"
+    transient = root / "Camera_01" / "render" / "frame.png"
+    transient.parent.mkdir(parents=True)
+    transient.write_bytes(b"render")
+    _write_cleanup_summary(root)
+    _write_successful_audit(root)
+    rollback = (
+        tmp_path / ".futsalmot" / "runtime" / "cleanup-appearance-test"
+        / "appearance-rollback.json"
+    )
+    rollback.parent.mkdir(parents=True)
+    rollback.write_text('{"state":"restored"}', encoding="utf-8")
+    for report_path in (
+        rollback.parent / "appearance-application.json",
+        root / "provenance" / "appearance_application.json",
+    ):
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(json.dumps({"state": "restored"}), encoding="utf-8")
+
+    result = apply_cleanup(root, ["Camera_01"], resolved=_cleanup_resolved(tmp_path))
+
+    assert result["ok"] is False
+    assert result["deleted_files"] == 0
+    assert transient.is_file()
+    assert rollback.is_file()
+    assert any("baseline" in item for item in result["gate_problems"])
 
 
 def _write_successful_audit(root: Path):
@@ -1422,6 +2436,86 @@ def test_cleanup_malformed_render_summary_fails_safe(tmp_path):
 
     assert result["ok"] is False
     assert any("render_summary" in problem for problem in result["gate_problems"])
+
+
+@pytest.mark.parametrize("evidence", ["rollback", "local_report", "public_report"])
+def test_cleanup_unresolved_appearance_transaction_preserves_recovery_evidence(
+    tmp_path, evidence
+):
+    root = tmp_path / "episode"
+    transient = root / "Camera_01" / "render" / "frame.png"
+    transient.parent.mkdir(parents=True)
+    transient.write_bytes(b"render")
+    _write_cleanup_summary(root)
+    _write_successful_audit(root)
+
+    if evidence == "rollback":
+        evidence_path = (
+            tmp_path / ".futsalmot" / "runtime" / "cleanup-appearance-test"
+            / "appearance-rollback.json"
+        )
+        evidence_path.parent.mkdir(parents=True)
+        evidence_path.write_text("{}", encoding="utf-8")
+    elif evidence == "local_report":
+        evidence_path = (
+            tmp_path / ".futsalmot" / "runtime" / "cleanup-appearance-test"
+            / "appearance-application.json"
+        )
+        evidence_path.parent.mkdir(parents=True)
+        evidence_path.write_text(json.dumps({"state": "rendering"}), encoding="utf-8")
+    else:
+        evidence_path = root / "provenance" / "appearance_application.json"
+        evidence_path.parent.mkdir(parents=True)
+        evidence_path.write_text(json.dumps({"state": "restore_failed"}), encoding="utf-8")
+
+    result = apply_cleanup(
+        root,
+        ["Camera_01"],
+        resolved=_cleanup_resolved(tmp_path),
+    )
+
+    assert result["ok"] is False
+    assert result["deleted_files"] == 0
+    assert transient.is_file()
+    assert evidence_path.is_file()
+    assert any("appearance" in problem.lower() for problem in result["gate_problems"])
+
+
+def test_cleanup_blocks_rollback_even_when_reports_claim_restored(
+    tmp_path,
+):
+    root = tmp_path / "episode"
+    transient = root / "Camera_01" / "render" / "frame.png"
+    transient.parent.mkdir(parents=True)
+    transient.write_bytes(b"render")
+    _write_cleanup_summary(root)
+    _write_successful_audit(root)
+    rollback_path = (
+        tmp_path / ".futsalmot" / "runtime" / "cleanup-appearance-test"
+        / "appearance-rollback.json"
+    )
+    rollback_path.parent.mkdir(parents=True)
+    rollback_path.write_text("verified snapshot", encoding="utf-8")
+    for report_path in (
+        rollback_path.parent / "appearance-application.json",
+        root / "provenance" / "appearance_application.json",
+    ):
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(json.dumps({"state": "restored"}), encoding="utf-8")
+
+    result = apply_cleanup(
+        root,
+        ["Camera_01"],
+        resolved=_cleanup_resolved(tmp_path),
+    )
+
+    assert result["ok"] is False
+    assert result["deleted_files"] == 0
+    assert transient.exists()
+    assert rollback_path.is_file()
+    assert (rollback_path.parent / "appearance-application.json").is_file()
+    assert (root / "provenance" / "appearance_application.json").is_file()
+    assert any("baseline" in problem for problem in result["gate_problems"])
 
 
 def test_audit_required_pose_is_not_skipped_after_cleanup_applied(tmp_path):

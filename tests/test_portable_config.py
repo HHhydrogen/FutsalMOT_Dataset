@@ -10,10 +10,104 @@ import pytest
 from typer.testing import CliRunner
 
 from grf_ue_bridge.cli import app
+from grf_ue_bridge.appearance import APPEARANCE_POLICY, build_appearance_manifest
 from grf_ue_bridge.config import resolver
+from grf_ue_bridge.seeds import derive_episode_seeds
 
 
-def _make_task(tmp_path: Path, dataset_root: str, ue_project_root: str) -> Path:
+def _appearance_catalog() -> dict:
+    return {
+        "mode": "seeded",
+        "policy": APPEARANCE_POLICY,
+        "catalog_id": "mpfb_players_003_009_v1",
+        "models": [
+            {
+                "player_id": player_id,
+                "mesh": f"/Game/Players/Player_{player_id:03d}",
+                "anim_class": "/Game/Core/ABP_RuntimeRetarget",
+                "skeleton": "/Game/Core/SKEL_MPFB_Base",
+            }
+            for player_id in range(3, 10)
+        ],
+        "skins": [
+            {
+                "skin_id": f"skin-{index:02d}",
+                "texture": f"/Game/Textures/T_Skin_{index:02d}",
+            }
+            for index in range(1, 10)
+        ],
+        "kits": [
+            {
+                "set_id": f"{index:02d}",
+                "jersey_material": f"/Game/Materials/M_Jersey_Set_{index:02d}",
+                "shorts_material": f"/Game/Materials/M_Shorts_Set_{index:02d}",
+            }
+            for index in range(1, 6)
+        ],
+        "body_texture_parameter": "SkinTexture",
+    }
+
+
+def _appearance_meta(*, episode_id: str = "episode_portable_t1") -> dict:
+    entities = [
+        {
+            "id": entity_id,
+            "team": "left" if entity_id.startswith("L") else "right",
+            "is_goalkeeper": entity_id in {"L2", "R1"},
+        }
+        for entity_id in (
+            "L0", "L1", "L2", "L3", "L4",
+            "R0", "R1", "R2", "R3", "R4",
+        )
+    ]
+    return {
+        "schema": "grf_ue_episode",
+        "version": 1,
+        "episode_id": episode_id,
+        "source": {"seed": 42},
+        "randomness": derive_episode_seeds(42).model_dump(),
+        "timing": {
+            "source_step_seconds": 0.1,
+            "playback_fps": 10,
+            "num_steps": 1,
+        },
+        "field": {
+            "length_m": 40.0,
+            "width_m": 20.0,
+        },
+        "entities": entities + [{"id": "BALL", "team": None, "is_goalkeeper": False}],
+    }
+
+
+def _appearance_frame() -> dict:
+    return {
+        "step": 0,
+        "time_seconds": 0.0,
+        "score": [0, 0],
+        "ball": {"position_m": [0.0, 0.0, 0.11]},
+        "players": [
+            {
+                "id": entity_id,
+                "position_m": [0.0, 0.0, 0.0],
+            }
+            for entity_id in (
+                "L0", "L1", "L2", "L3", "L4",
+                "R0", "R1", "R2", "R3", "R4",
+            )
+        ],
+        "ball_owned_team": -1,
+        "ball_owned_player": -1,
+        "game_mode": 0,
+    }
+
+
+def _make_task(
+    tmp_path: Path,
+    dataset_root: str,
+    ue_project_root: str,
+    *,
+    appearance: bool = False,
+) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir()
     task = {
@@ -32,6 +126,8 @@ def _make_task(tmp_path: Path, dataset_root: str, ue_project_root: str) -> Path:
         "postprocess": {"workers": 1, "validation_level": "full"},
         "audit": {"expected_cameras": 1, "expected_frames_per_camera": 300},
     }
+    if appearance:
+        task["ue"]["appearance"] = _appearance_catalog()
     path = repo / "task.json"
     path.write_text(json.dumps(task), encoding="utf-8")
     return path
@@ -209,7 +305,9 @@ def test_export_creates_missing_dataset_root(monkeypatch, tmp_path):
     dataset_root = tmp_path / "created-at-export"
     ue = _make_ue_root(tmp_path)
     task_file = _make_task(tmp_path, str(dataset_root), str(ue))
-    resolved = resolver.resolve_task(task_file)
+    resolved = resolver.resolve_task(
+        task_file, dataset_root=str(dataset_root), ue_project_root=str(ue)
+    )
 
     class FakeExportConfig:
         seed = 1
@@ -243,7 +341,151 @@ def test_export_creates_missing_dataset_root(monkeypatch, tmp_path):
         "grf_ue_bridge.grf_runner",
         SimpleNamespace(run_episode=lambda **kwargs: {}),
     )
-    monkeypatch.setattr(task_export, "_write_provenance", lambda resolved, traj: None)
-
     assert task_export.run_export(resolved, print_fn=lambda message: None) == 0
     assert dataset_root.is_dir()
+    provenance = Path(resolved.trajectory_output) / "provenance"
+    assert (provenance / "ue-profile.json").is_file()
+    assert (provenance / "export-profile.json").is_file()
+    assert not (provenance / "appearance.json").exists()
+
+
+def test_export_writes_appearance_manifest_after_provenance(monkeypatch, tmp_path):
+    import sys
+    from types import SimpleNamespace
+    from grf_ue_bridge.workflows import task_export
+
+    dataset_root = tmp_path / "appearance-data"
+    ue = _make_ue_root(tmp_path)
+    task_file = _make_task(
+        tmp_path, str(dataset_root), str(ue), appearance=True
+    )
+    resolved = resolver.resolve_task(
+        task_file, dataset_root=str(dataset_root), ue_project_root=str(ue)
+    )
+
+    class FakeExportConfig:
+        seed = 42
+        scenario = "5_vs_5"
+        num_steps = 1
+        trajectory_time_scale = 1.0
+        render = False
+        game_duration = None
+        left_team_difficulty = 0
+        right_team_difficulty = 0
+        number_of_left_players_agent_controls = 0
+        number_of_right_players_agent_controls = 0
+
+    def fake_export(_config, _result, traj):
+        traj.mkdir(parents=True, exist_ok=True)
+        (traj / "meta.json").write_text(
+            json.dumps(_appearance_meta(episode_id=traj.name)), encoding="utf-8"
+        )
+        (traj / "frames.jsonl").write_text(
+            json.dumps(_appearance_frame()) + "\n", encoding="utf-8"
+        )
+
+    monkeypatch.setitem(
+        sys.modules,
+        "grf_ue_bridge.config.models",
+        SimpleNamespace(ExportConfig=lambda **kwargs: FakeExportConfig()),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "grf_ue_bridge.exporter",
+        SimpleNamespace(compute_source_steps=lambda cfg: 1, export_episode=fake_export),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "grf_ue_bridge.grf_runner",
+        SimpleNamespace(run_episode=lambda **kwargs: {}),
+    )
+
+    assert task_export.run_export(resolved, print_fn=lambda message: None) == 0
+
+    episode_dir = Path(resolved.trajectory_output)
+    manifest_path = episode_dir / "provenance" / "appearance.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    expected = build_appearance_manifest(
+        _appearance_meta(episode_id=episode_dir.name),
+        episode_dir / "frames.jsonl",
+        resolved.ue_profile["appearance"],
+    )
+    assert manifest["episode_id"] == episode_dir.name
+    assert manifest["root_seed"] == 42
+    assert manifest["catalog_fingerprint"] == expected["catalog_fingerprint"]
+    assert manifest["trajectory_sha256"] == expected["trajectory_sha256"]
+    assert manifest["fingerprint"] == expected["fingerprint"]
+    assert (episode_dir / "provenance" / "ue-profile.json").is_file()
+
+
+@pytest.mark.parametrize("failure", ["bad_roster", "missing_frames", "corrupt_frames"])
+def test_appearance_export_failure_removes_only_appearance_manifest(
+    monkeypatch, tmp_path, failure
+):
+    import sys
+    from types import SimpleNamespace
+    from grf_ue_bridge.workflows import task_export
+
+    dataset_root = tmp_path / f"appearance-failure-{failure}"
+    ue = _make_ue_root(tmp_path)
+    task_file = _make_task(
+        tmp_path, str(dataset_root), str(ue), appearance=True
+    )
+    resolved = resolver.resolve_task(
+        task_file, dataset_root=str(dataset_root), ue_project_root=str(ue)
+    )
+
+    class FakeExportConfig:
+        seed = 42
+        scenario = "5_vs_5"
+        num_steps = 1
+        trajectory_time_scale = 1.0
+        render = False
+        game_duration = None
+        left_team_difficulty = 0
+        right_team_difficulty = 0
+        number_of_left_players_agent_controls = 0
+        number_of_right_players_agent_controls = 0
+
+    def fake_export(_config, _result, traj):
+        provenance = traj / "provenance"
+        provenance.mkdir(parents=True, exist_ok=True)
+        (provenance / "keep.json").write_text("keep", encoding="utf-8")
+        (provenance / "appearance.json").write_text(
+            '{"stale":true}', encoding="utf-8"
+        )
+        meta = _appearance_meta(episode_id=traj.name)
+        if failure == "bad_roster":
+            meta["entities"] = [
+                entity for entity in meta["entities"] if entity.get("id") != "L2"
+            ]
+        (traj / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+        if failure == "corrupt_frames":
+            (traj / "frames.jsonl").write_bytes(b"not json\n")
+        elif failure != "missing_frames":
+            (traj / "frames.jsonl").write_text(
+                json.dumps(_appearance_frame()) + "\n", encoding="utf-8"
+            )
+
+    monkeypatch.setitem(
+        sys.modules,
+        "grf_ue_bridge.config.models",
+        SimpleNamespace(ExportConfig=lambda **kwargs: FakeExportConfig()),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "grf_ue_bridge.exporter",
+        SimpleNamespace(compute_source_steps=lambda cfg: 1, export_episode=fake_export),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "grf_ue_bridge.grf_runner",
+        SimpleNamespace(run_episode=lambda **kwargs: {}),
+    )
+
+    with pytest.raises(ValueError):
+        task_export.run_export(resolved, print_fn=lambda message: None)
+
+    provenance = Path(resolved.trajectory_output) / "provenance"
+    assert not (provenance / "appearance.json").exists()
+    assert (provenance / "keep.json").read_text(encoding="utf-8") == "keep"

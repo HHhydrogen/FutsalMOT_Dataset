@@ -26,7 +26,7 @@ import math
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from grf_ue_bridge.validation_result import CheckStatus, ValidationResult
 
@@ -34,6 +34,7 @@ _UE_DIR = Path(__file__).resolve().parents[3] / "ue"
 if str(_UE_DIR) not in sys.path:
     sys.path.insert(0, str(_UE_DIR))
 from pose_bones import NUM_POSE_KEYPOINTS  # noqa: E402
+from episode_appearance import _validate_report as _validate_application_report  # noqa: E402
 
 # 实体 → track_id / mask_id 的稳定映射（与 annotation_utils 一致，本地复述避免依赖）
 TRACK_MAP = {f"L{i}": i + 1 for i in range(5)}
@@ -176,7 +177,7 @@ def _read_frame_meta(cam_dir: Path) -> Tuple[Optional[List[dict]], List[str]]:
                     continue
                 try:
                     obj = json.loads(line)
-                except json.JSONDecodeError as exc:
+                except (json.JSONDecodeError, RecursionError) as exc:
                     errors.append(
                         f"annotations.jsonl 第 {line_no} 行 JSON 解析失败: {exc}"
                     )
@@ -235,7 +236,7 @@ def _read_jsonl_rows(path: Path, label: str, errors: List[str]) -> Tuple[int, bo
         count += 1
         try:
             value = json.loads(line)
-        except json.JSONDecodeError as exc:
+        except (json.JSONDecodeError, RecursionError) as exc:
             errors.append(f"pose: {label} 第 {line_no} 行 JSON 解析失败: {exc}")
             valid = False
             continue
@@ -291,16 +292,73 @@ def _derive_keep_indices(
     return keep
 
 
-def _load_episode_meta(episode_dir: Path) -> Optional[dict]:
+def _load_episode_meta(
+    episode_dir: Path,
+    errors: Optional[List[str]] = None,
+) -> Optional[dict]:
     meta_path = episode_dir / "meta.json"
     if not meta_path.exists():
         return None
     try:
         with open(meta_path, encoding="utf-8") as f:
             meta = json.load(f)
-        return meta if isinstance(meta, dict) else None
-    except (OSError, UnicodeError, json.JSONDecodeError):
-        return None
+        if isinstance(meta, dict):
+            return meta
+        if errors is not None:
+            errors.append("meta.json 顶层必须是 JSON 对象")
+    except (OSError, UnicodeError, json.JSONDecodeError, RecursionError) as exc:
+        if errors is not None:
+            errors.append(f"meta.json 读取失败: {exc}")
+    return None
+
+
+def _normalize_render_status(status: Any) -> str:
+    """按 UE application report 的既有规则归一化渲染终态。"""
+    if status in {"skipped", "no_render"}:
+        return "failed"
+    if status in {"success", "failed", "partial", "cancelled", "canceled", "error"}:
+        return status
+    return "error"
+
+
+def _validate_restored_application_report(
+    application: Mapping[str, Any],
+    errors: List[str],
+) -> None:
+    """复用 application report 的完整 restored 状态契约。"""
+    if application.get("state") != "restored":
+        return
+    try:
+        _validate_application_report(application)
+    except (TypeError, ValueError, KeyError, OverflowError, RecursionError) as exc:
+        errors.append(f"appearance: restored application report 结构无效: {exc}")
+
+
+def _check_application_render_status(
+    application: Mapping[str, Any],
+    render_summary: Optional[Mapping[str, Any]],
+    errors: List[str],
+) -> None:
+    """检查 application report 与 render_summary 的整体渲染状态一致。"""
+    render_result = application.get("render_result")
+    if not isinstance(render_result, Mapping):
+        return
+    application_status = render_result.get("status")
+    summary_status = (
+        render_summary.get("status")
+        if isinstance(render_summary, Mapping)
+        else None
+    )
+    if not isinstance(application_status, str) or not isinstance(summary_status, str):
+        return
+    normalized_application = _normalize_render_status(application_status)
+    if normalized_application != summary_status:
+        errors.append(
+            "appearance: application report render_result.status 与 "
+            "render_summary.status 不匹配 "
+            f"({application_status!r} -> {normalized_application!r}，"
+            f"{summary_status!r})"
+        )
 
 
 def check_camera(
@@ -561,7 +619,7 @@ def check_camera(
                     image_width = None
                 if not isinstance(image_height, int) or isinstance(image_height, bool):
                     image_height = None
-        except (OSError, UnicodeError, json.JSONDecodeError):
+        except (OSError, UnicodeError, json.JSONDecodeError, RecursionError):
             pass
         mot_errors = _validate_required_mot(
             gt_txt,
@@ -689,7 +747,7 @@ def check_camera_json(cam_dirs: List[Path], expected_frames: int, errors: List[s
         try:
             with open(path, encoding="utf-8") as f:
                 cfg = json.load(f)
-        except (OSError, UnicodeError, json.JSONDecodeError) as e:
+        except (OSError, UnicodeError, json.JSONDecodeError, RecursionError) as e:
             local_errors.append(f"标定: {cam.name} camera.json 读取失败: {e}")
         else:
             if not isinstance(cfg, dict):
@@ -770,7 +828,7 @@ def check_render_summary(
     try:
         with open(summary_path, encoding="utf-8") as f:
             summary = json.load(f)
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeError, json.JSONDecodeError, RecursionError) as exc:
         message = f"render_summary: 无法读取 render_summary.json: {exc}"
         if required:
             errors.append(message)
@@ -816,6 +874,287 @@ def check_render_summary(
         return {"ok": False, "status": status, "required": bool(required),
                 "skipped": not required, "cameras": per, "message": message}
     return {"ok": True, "status": status, "required": bool(required), "cameras": per}
+
+
+def _load_json_object(path: Path, label: str) -> dict:
+    """读取 JSON 对象；递归过深等解析错误由调用方转换为失败检查。"""
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} 顶层必须是 JSON 对象")
+    return value
+
+
+def check_appearance(
+    episode_dir: Path,
+    errors: List[str],
+    *,
+    render_required: bool,
+    appearance_catalog: Any = None,
+    expected_camera_ids: Optional[Sequence[str]] = None,
+    render_summary: Optional[Mapping[str, Any]] = None,
+) -> dict:
+    """检查已启用外观的 manifest、应用报告与当前轨迹是否一致。
+
+    appearance 是否启用只由调用方传入的当前 resolved catalog 决定，不从残留文件推断。
+    """
+    provenance = episode_dir / "provenance"
+    state: dict = {
+        "ok": True,
+        "required": False,
+        "enabled": False,
+        "skipped": True,
+    }
+    appearance_errors_start = len(errors)
+    if not isinstance(appearance_catalog, Mapping):
+        return state
+
+    state.update({"required": True, "enabled": True, "skipped": False})
+    manifest_path = provenance / "appearance.json"
+    application_path = provenance / "appearance_application.json"
+    meta_path = episode_dir / "meta.json"
+    frames_path = episode_dir / "frames.jsonl"
+    try:
+        manifest = _load_json_object(manifest_path, "appearance.json")
+    except (OSError, UnicodeError, ValueError, RecursionError) as exc:
+        message = f"appearance: 无法读取 appearance.json: {exc}"
+        errors.append(message)
+        state.update({"ok": False, "message": message})
+        return state
+    try:
+        application = _load_json_object(
+            application_path, "appearance_application.json"
+        )
+    except (OSError, UnicodeError, ValueError, RecursionError) as exc:
+        message = f"appearance: 无法读取 appearance_application.json: {exc}"
+        errors.append(message)
+        state.update({"ok": False, "message": message})
+        return state
+    try:
+        meta = _load_json_object(meta_path, "meta.json")
+    except (OSError, UnicodeError, ValueError, RecursionError) as exc:
+        message = f"appearance: 无法读取 meta.json: {exc}"
+        errors.append(message)
+        state.update({"ok": False, "message": message})
+        return state
+
+    from grf_ue_bridge.appearance import validate_appearance_manifest
+    from grf_ue_bridge.dataset_manifest import sha256_file
+
+    try:
+        manifest_errors = validate_appearance_manifest(
+            manifest,
+            meta=meta,
+            frames_path=frames_path,
+            catalog=appearance_catalog,
+        )
+    except RecursionError as exc:
+        manifest_errors = [f"appearance 输入递归过深，无法验证 manifest: {exc}"]
+    if manifest_errors:
+        errors.extend(f"appearance: {message}" for message in manifest_errors)
+    if not isinstance(application, Mapping):
+        errors.append("appearance: appearance_application.json 顶层必须是对象")
+        application = {}
+    _validate_restored_application_report(application, errors)
+    if application.get("schema") != "futsalmot_appearance_application":
+        errors.append("appearance: application report schema 无效")
+    if type(application.get("version")) is not int or application.get("version") != 1:
+        errors.append("appearance: application report version 无效")
+    if application.get("manifest_fingerprint") != manifest.get("fingerprint"):
+        errors.append("appearance: application report manifest fingerprint 不匹配")
+    if application.get("catalog_fingerprint") != manifest.get("catalog_fingerprint"):
+        errors.append("appearance: application report catalog fingerprint 不匹配")
+    try:
+        current_trajectory_sha256 = sha256_file(frames_path)
+    except OSError as exc:
+        errors.append(f"appearance: 无法计算当前 frames.jsonl SHA-256: {exc}")
+        current_trajectory_sha256 = None
+    if application.get("trajectory_sha256") != current_trajectory_sha256:
+        errors.append("appearance: application report trajectory_sha256 不匹配当前 frames.jsonl")
+    if application.get("state") != "restored":
+        errors.append("appearance: application report state 必须为 restored")
+    manifest_entities = {
+        entity.get("entity_id"): entity
+        for entity in manifest.get("entities", [])
+        if isinstance(entity, Mapping)
+    }
+    application_actors = application.get("actors")
+    if isinstance(application_actors, list) and set(manifest_entities) == {
+        "L0", "L1", "L2", "L3", "L4", "R0", "R1", "R2", "R3", "R4"
+    }:
+        for actor in application_actors:
+            if not isinstance(actor, Mapping):
+                continue
+            entity_id = actor.get("entity_id")
+            entity = manifest_entities.get(entity_id)
+            if entity is None:
+                continue
+            if actor.get("apply_status") != "applied":
+                errors.append(
+                    f"appearance: {entity_id} apply_status 必须为 applied"
+                )
+            if actor.get("restore_status") != "restored":
+                errors.append(
+                    f"appearance: {entity_id} restore_status 必须为 restored"
+                )
+            assets = actor.get("assets")
+            if not isinstance(assets, Mapping):
+                errors.append(f"appearance: {entity_id} assets 必须为对象")
+            else:
+                for field in (
+                    "mesh", "anim_class", "skeleton", "skin_texture",
+                    "jersey_material", "shorts_material",
+                ):
+                    if assets.get(field) != entity.get(field):
+                        errors.append(
+                            f"appearance: {entity_id} assets.{field} 与 manifest 不匹配"
+                        )
+            slots = actor.get("slots")
+            expected_slots = {
+                "body_texture_parameter": manifest.get("body_texture_parameter"),
+                "Body": entity.get("skin_texture"),
+                "Jersey": entity.get("jersey_material"),
+                "Shorts": entity.get("shorts_material"),
+            }
+            if not isinstance(slots, Mapping):
+                errors.append(f"appearance: {entity_id} slots 必须为对象")
+            else:
+                for slot, expected in expected_slots.items():
+                    if slots.get(slot) != expected:
+                        errors.append(
+                            f"appearance: {entity_id} slots.{slot} 与 manifest 不匹配"
+                        )
+    if render_required:
+        render_result = application.get("render_result")
+        terminal_render_statuses = {
+            "success", "failed", "partial", "cancelled", "canceled", "error"
+        }
+        if (
+            not isinstance(render_result, Mapping)
+            or not isinstance(render_result.get("status"), str)
+            or render_result.get("status") not in terminal_render_statuses
+        ):
+            errors.append(
+                "appearance: render required 时 application report 必须包含终态 render_result.status"
+            )
+        else:
+            terminal_job_statuses = {
+                "success", "failed", "cancelled", "canceled", "skipped"
+            }
+            required_cameras = set(expected_camera_ids or [])
+            camera_results = render_result.get("cameras")
+            if not isinstance(camera_results, Mapping):
+                errors.append("appearance: render_result 必须包含 cameras 对象")
+                camera_results = {}
+            missing_camera_results = sorted(required_cameras - set(camera_results))
+            if missing_camera_results:
+                errors.append(
+                    "appearance: render_result 缺少 required camera "
+                    f"{missing_camera_results}"
+                )
+            malformed_camera_results = sorted(
+                camera_id for camera_id in required_cameras
+                if camera_id in camera_results
+                and not isinstance(camera_results[camera_id], Mapping)
+            )
+            if malformed_camera_results:
+                errors.append(
+                    "appearance: render_result required camera 记录无效 "
+                    f"{malformed_camera_results}"
+                )
+            incomplete_camera_results = sorted(
+                camera_id for camera_id in required_cameras & set(camera_results)
+                if isinstance(camera_results[camera_id], Mapping)
+                and type(camera_results[camera_id].get("ok")) is not bool
+            )
+            if incomplete_camera_results:
+                errors.append(
+                    "appearance: render_result required camera 缺少布尔 ok "
+                    f"{incomplete_camera_results}"
+                )
+            summary_cameras = (
+                render_summary.get("cameras")
+                if isinstance(render_summary, Mapping)
+                else None
+            )
+            if isinstance(summary_cameras, Mapping):
+                missing_summary_cameras = sorted(
+                    required_cameras - set(summary_cameras)
+                )
+                if missing_summary_cameras:
+                    errors.append(
+                        "appearance: render_summary 缺少 required camera "
+                        f"{missing_summary_cameras}"
+                    )
+                for camera_id in sorted(required_cameras & set(camera_results) & set(summary_cameras)):
+                    application_camera = camera_results[camera_id]
+                    summary_camera = summary_cameras[camera_id]
+                    if not isinstance(application_camera, Mapping):
+                        continue
+                    if not isinstance(summary_camera, Mapping):
+                        errors.append(
+                            f"appearance: render_summary required camera {camera_id} 记录无效"
+                        )
+                    elif type(summary_camera.get("ok")) is not bool:
+                        errors.append(
+                            "appearance: render_summary required camera 缺少布尔 ok "
+                            f"({camera_id})"
+                        )
+                    elif (
+                        "ok" in application_camera
+                        and "ok" in summary_camera
+                        and application_camera.get("ok") is not summary_camera.get("ok")
+                    ):
+                        errors.append(
+                            "appearance: application report 与 render_summary camera 状态不匹配 "
+                            f"({camera_id})"
+                        )
+
+            def _render_jobs(value: Any, label: str) -> Optional[List[Tuple[str, str]]]:
+                if not isinstance(value, list):
+                    errors.append(f"appearance: {label} 必须是列表")
+                    return None
+                jobs = []
+                for index, job in enumerate(value):
+                    if not isinstance(job, Mapping):
+                        errors.append(f"appearance: {label}[{index}] 必须是对象")
+                        continue
+                    camera_id = job.get("camera_id")
+                    status = job.get("status")
+                    if not isinstance(camera_id, str) or not camera_id:
+                        errors.append(f"appearance: {label}[{index}] camera_id 无效")
+                        continue
+                    if not isinstance(status, str) or status not in terminal_job_statuses:
+                        errors.append(
+                            f"appearance: {label}[{index}] status 必须为终态"
+                        )
+                        continue
+                    jobs.append((camera_id, status))
+                missing_job_cameras = sorted(
+                    required_cameras - {camera_id for camera_id, _ in jobs}
+                )
+                if missing_job_cameras:
+                    errors.append(
+                        f"appearance: {label} 缺少 required camera "
+                        f"{missing_job_cameras}"
+                    )
+                return sorted(jobs)
+
+            report_jobs = _render_jobs(application.get("mrq_jobs"), "mrq_jobs")
+            result_jobs = _render_jobs(render_result.get("jobs"), "render_result.jobs")
+            if (
+                report_jobs is not None
+                and result_jobs is not None
+                and report_jobs != result_jobs
+            ):
+                errors.append(
+                    "appearance: application report mrq_jobs 与 render_result.jobs 不匹配"
+                )
+    if render_required:
+        _check_application_render_status(application, render_summary, errors)
+    state["ok"] = len(errors) == appearance_errors_start
+    state["manifest_fingerprint"] = manifest.get("fingerprint")
+    state["trajectory_sha256"] = current_trajectory_sha256
+    return state
 
 
 def check_pose_coco17(
@@ -865,7 +1204,7 @@ def check_pose_coco17(
     # pose_session 存在 → 校验 capture_complete
     try:
         ps = json.loads(ps_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeError, json.JSONDecodeError, RecursionError) as exc:
         errors.append(f"pose: pose_session.json 解析失败: {exc}")
         st["ok"] = False
         st["required"] = bool(required)
@@ -919,7 +1258,7 @@ def check_pose_coco17(
                     continue
                 try:
                     row = json.loads(line)
-                except json.JSONDecodeError:
+                except (json.JSONDecodeError, RecursionError):
                     continue  # _read_jsonl_rows 已报告解析错误
                 points = row.get("keypoints_3d_m") if isinstance(row, dict) else None
                 if not isinstance(points, list) or len(points) != NUM_POSE_KEYPOINTS:
@@ -968,7 +1307,7 @@ def check_pose_coco17(
                         continue
                     try:
                         row = json.loads(line)
-                    except json.JSONDecodeError:
+                    except (json.JSONDecodeError, RecursionError):
                         continue  # _read_jsonl_rows 已报告解析错误
                     points = row.get("keypoints_2d_px") if isinstance(row, dict) else None
                     visible = row.get("visible") if isinstance(row, dict) else None
@@ -1013,7 +1352,7 @@ def check_cross_camera_identity(cam_dirs: List[Path], errors: List[str]) -> dict
                     continue
                 try:
                     fr = json.loads(line)
-                except (UnicodeError, json.JSONDecodeError):
+                except (UnicodeError, json.JSONDecodeError, RecursionError):
                     continue
                 if not isinstance(fr, dict):
                     continue
@@ -1105,6 +1444,14 @@ def write_reports(
             f"- pose_capture rows: {pc.get('pose_capture_rows')}\n"
             f"- coco17_3d rows: {pc.get('coco17_3d_rows')}，total_kp: {pc.get('coco17_total_kp')}，OK: {pc.get('ok')}"
         )
+    if report.get("appearance"):
+        appearance = report["appearance"]
+        lines.append("")
+        lines.append(
+            "## Appearance\n\n"
+            f"- enabled: {appearance.get('enabled')}，required: {appearance.get('required')}，"
+            f"status: {'SKIPPED' if appearance.get('skipped') else ('PASS' if appearance.get('ok') else 'FAIL')}"
+        )
     if report.get("cross_camera_identity"):
         ci = report["cross_camera_identity"]
         lines.append("")
@@ -1131,7 +1478,12 @@ def write_reports(
     return jpath, mpath
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
+def main(
+    argv: Optional[Sequence[str]] = None,
+    *,
+    appearance_catalog: Any = None,
+    episode_dir: Optional[Path] = None,
+) -> int:
     ap = argparse.ArgumentParser(description="soak episode 完整性审计")
     ap.add_argument("--input", required=True, help="相机数据集根目录（含多个 camera 子目录）")
     ap.add_argument("--expected-cameras", type=int, default=4)
@@ -1197,7 +1549,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         errors.append(f"相机数量 {len(cam_dirs)} != 预期 {args.expected_cameras}")
 
     # episode 时序 → keep_indices
-    meta = _load_episode_meta(Path(args.episode)) if args.episode else None
+    resolved_episode_dir = (
+        Path(episode_dir)
+        if episode_dir is not None
+        else Path(args.episode) if args.episode else dataset_dir
+    )
+    meta = (
+        _load_episode_meta(resolved_episode_dir, errors)
+        if (args.episode or episode_dir is not None)
+        else None
+    )
     source_step_seconds = None
     keep_indices = list(range(args.expected_frames_per_camera))
     if meta:
@@ -1272,6 +1633,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         required=render_required,
         expected_camera_ids=[cam.name for cam in cam_dirs],
     )
+    appearance = check_appearance(
+        resolved_episode_dir,
+        errors,
+        render_required=render_required,
+        appearance_catalog=appearance_catalog,
+        expected_camera_ids=[cam.name for cam in cam_dirs],
+        render_summary=rsummary,
+    )
     pose_coco = check_pose_coco17(
         dataset_dir,
         args.expected_frames_per_camera,
@@ -1285,6 +1654,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     report["mapping"] = mapping
     report["calibration"] = calib
     report["render_summary"] = rsummary
+    report["appearance"] = appearance
     report["pose_coco17"] = pose_coco
     report["cross_camera_identity"] = cross_identity
     try:
@@ -1360,6 +1730,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         required=render_required,
         message=rsummary.get("message") if render_required and not rsummary.get("ok") else None,
         detail=rsummary,
+    )
+    result.add_check(
+        "appearance",
+        CheckStatus.SKIPPED if appearance.get("skipped") else (
+            CheckStatus.PASSED if appearance.get("ok") else CheckStatus.FAILED
+        ),
+        required=bool(appearance.get("required")),
+        message=appearance.get("message") if not appearance.get("ok") else None,
+        detail=appearance,
     )
     result.add_check(
         "instance_mask",

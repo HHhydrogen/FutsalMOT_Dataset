@@ -810,6 +810,10 @@ def _sync_render_state_from_audit(resolved, state, path):
 
 def _resume_action(resolved, state, step, action):
     """为 RUNNING 步骤提供保守的 artifact-based recovery decision。"""
+    if step == "export" and action == "skip":
+        if (resolved.ue_profile or {}).get("appearance") is None:
+            return "skip"
+        return "skip" if _step_is_complete(resolved, step) == "complete" else "retry"
     if action != "unknown":
         return action
     if step == "render":
@@ -841,9 +845,43 @@ def _resume_action(resolved, state, step, action):
             pass
         return "retry"
     if step == "export":
-        traj = Path(resolved.trajectory_output)
-        return "complete" if (traj / "meta.json").is_file() and (traj / "frames.jsonl").is_file() else "retry"
+        return _step_is_complete(resolved, step)
     return "retry"
+
+
+def _step_is_complete(resolved, step: str) -> str:
+    """按步骤产物校验完成状态，损坏或缺失时返回 retry。"""
+    if step != "export":
+        return "retry"
+    traj = Path(resolved.trajectory_output)
+    meta_path = traj / "meta.json"
+    frames_path = traj / "frames.jsonl"
+    if not meta_path.is_file() or not frames_path.is_file():
+        return "retry"
+    appearance_catalog = (resolved.ue_profile or {}).get("appearance")
+    if appearance_catalog is None:
+        return "complete"
+    manifest_path = traj / "provenance" / "appearance.json"
+    try:
+        from .appearance import validate_appearance_manifest
+
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if not isinstance(meta, dict) or not isinstance(manifest, dict):
+            return "retry"
+        from .validator import validate_episode
+
+        if validate_episode(traj) != 0:
+            return "retry"
+        errors = validate_appearance_manifest(
+            manifest,
+            meta=meta,
+            frames_path=frames_path,
+            catalog=appearance_catalog,
+        )
+        return "retry" if errors else "complete"
+    except Exception:
+        return "retry"
 
 
 @task_app.command("validate")
@@ -1050,20 +1088,25 @@ def task_audit(
         pose_skip = False
     state, state_file = _start_pipeline_step(resolved, "audit", force=force)
     try:
-        rc = audit_main([
-        "--input", resolved.dataset_episode_dir,
-        "--expected-cameras", str(audit_cfg.get("expected_cameras", 4)),
-        "--expected-frames-per-camera", str(audit_cfg.get("expected_frames_per_camera", 300)),
-        "--episode", resolved.trajectory_output,
-        "--validation-level", validation_level,
-        "--mask-enabled", "true" if mask_enabled else "false",
-        "--pose-skip", "true" if pose_skip else "false",
-        "--render-required", "true" if requirements.requires_render else "false",
-        "--mot-required", "true" if requirements.requires_mot else "false",
-        "--yolo-det-required", "true" if requirements.requires_yolo_det else "false",
-        "--yolo-seg-required", "true" if requirements.requires_yolo_seg else "false",
-        "--pose-required", "true" if requirements.requires_pose else "false",
-        ])
+        rc = audit_main(
+            [
+                "--input", resolved.dataset_episode_dir,
+                "--expected-cameras", str(audit_cfg.get("expected_cameras", 4)),
+                "--expected-frames-per-camera",
+                str(audit_cfg.get("expected_frames_per_camera", 300)),
+                "--episode", resolved.trajectory_output,
+                "--validation-level", validation_level,
+                "--mask-enabled", "true" if mask_enabled else "false",
+                "--pose-skip", "true" if pose_skip else "false",
+                "--render-required", "true" if requirements.requires_render else "false",
+                "--mot-required", "true" if requirements.requires_mot else "false",
+                "--yolo-det-required", "true" if requirements.requires_yolo_det else "false",
+                "--yolo-seg-required", "true" if requirements.requires_yolo_seg else "false",
+                "--pose-required", "true" if requirements.requires_pose else "false",
+            ],
+            appearance_catalog=(resolved.ue_profile or {}).get("appearance"),
+            episode_dir=Path(resolved.trajectory_output),
+        )
     except Exception as exc:
         _fail_pipeline_step(state, state_file, "audit", exc)
         _finish_run_manifest(manifest, manifest_path, resolved)

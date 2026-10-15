@@ -213,6 +213,30 @@ class TestDuplicateDetection:
 
 
 class TestChecksumProfiles:
+    def test_appearance_provenance_is_included_in_every_profile(self, tmp_path):
+        ep = _make_episode(tmp_path, "epA", 1001)
+        appearance = ep / "provenance" / "appearance.json"
+        appearance.write_text(json.dumps({"schema": "futsalmot_episode_appearance"}), encoding="utf-8")
+
+        for profile in ("metadata", "final", "all"):
+            files = profile_file_paths(ep, profile)
+            assert appearance in files
+
+        build_manifest(tmp_path, ["epA"], dataset_id="d")
+        rows = [json.loads(line) for line in _checksum_lines(tmp_path, "epA")]
+        assert any(row["path"] == "epA/provenance/appearance.json" for row in rows)
+
+    def test_absent_appearance_provenance_does_not_create_checksum_entry(self, tmp_path):
+        ep = _make_episode(tmp_path, "epA", 1001)
+
+        for profile in ("metadata", "final", "all"):
+            files = profile_file_paths(ep, profile)
+            assert not any(path.name == "appearance.json" for path in files)
+
+        build_manifest(tmp_path, ["epA"], dataset_id="d")
+        rows = [json.loads(line) for line in _checksum_lines(tmp_path, "epA")]
+        assert not any("appearance.json" in row["path"] for row in rows)
+
     def test_profile_sets(self, tmp_path):
         ep = _make_episode(tmp_path, "epA", 1001, with_render=True)
         meta_files = profile_file_paths(ep, "metadata")

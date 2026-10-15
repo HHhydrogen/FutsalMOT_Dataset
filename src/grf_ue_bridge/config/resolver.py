@@ -191,6 +191,8 @@ def resolve_task(
     # 把 export.playback_fps 注入 annotation_export，让 render_episode 帧映射正确
     # （render_episode 用 annotation_export.playback_fps 做 Sequence display rate 帧映射）
     ue_profile = task.ue.model_dump()
+    if task.ue.appearance is None:
+        ue_profile.pop("appearance", None)
     ann_export = ue_profile.get("annotation_export") or {}
     if "playback_fps" not in ann_export:
         ann_export["playback_fps"] = task.export.playback_fps

@@ -19,6 +19,8 @@
     ue-profile.json
     actor-mapping.json
     external_sources.lock.json
+    appearance.json              # ue.appearance 启用时由 P1 原子生成
+    appearance_application.json # ue.appearance 启用时由 P2 写入/更新
   <camera_id>/
     camera.json
     annotations.jsonl
@@ -304,3 +306,51 @@ task export 会保存 task、sanitized resolved task、export profile、UE profi
 顶层 `grf-ue build-manifest` 生成数据集根目录的 `dataset_manifest.json`，对明确纳入的 episode 统计产物，按 `metadata`、`final` 或 `all` profile 写 SHA-256 JSONL 校验文件，并计算 trajectory hash、canonical hash、重复 seed/轨迹组和 dataset fingerprint。`verify-manifest` 的退出码为 `0=通过`、`1=内容缺失或不匹配`、`2=manifest/schema/参数错误`。
 
 task 级 `manifest` 使用 `src/grf_ue_bridge/workflows/artifact_cleanup.py` 的 episode manifest builder，和顶层 `build-manifest` 不是同一个入口。不要用其中一个命令的输出字段去推断另一个命令的完整性结论。
+
+## Seeded Episode Appearance
+
+当 task 配置包含 `ue.appearance` 时，P1 在成功写出并验证 `meta.json` 与 `frames.jsonl` 后，原子生成 `<episode>/provenance/appearance.json`。未配置 `ue.appearance` 的旧 task 不要求该文件；`ue.appearance` 与非空 legacy `ue.player_visuals` 互斥。P1 只读写 episode JSON/JSONL，不加载 Unreal Python 或修改 Actor。
+
+### Catalog
+
+`ue.appearance` v1 固定使用 `mode="seeded"`、`policy="futsalmot_appearance_v1"`、`catalog_id="mpfb_players_003_009_v1"`，并要求完整且无重复 ID 的候选目录：
+
+- `models` 恰有 7 项，`player_id` 精确覆盖整数 3–9；每项包含 `mesh`、`anim_class`、`skeleton`。当前角色各自使用自己的 mesh，所有候选共享 `/Game/FutsalMOT/Characters/MPFB/Core/Retarget/ABP_MPFB_RuntimeRetarget` 和 `/Game/FutsalMOT/Characters/MPFB/Core/Skeleton/SKEL_MPFB_Base`。Player_003 mesh 位于 `Players/Player_003/MPFB_Player_003`；Player_004–009 mesh 位于各自目录的 `Mesh/MPFB_Player_NNN`。
+- `skins` 恰有 9 项，每项包含唯一非空 `skin_id` 和 `texture`，路径指向导入的男士 `Texture2D`。皮肤与模型独立抽样。
+- `kits` 恰有 5 项，`set_id` 精确覆盖字符串 `"01"`–`"05"`；每项包含配对的 `jersey_material` 和 `shorts_material`，两条路径都必须与同一 Set ID 对应。
+- `body_texture_parameter` 固定为经验证的 `"SkinTexture"`。所有资产路径必须是带资产叶段的非空 `/Game/` 路径。
+
+task config 是完整 catalog 的权威输入，路径必须来自已导入并验证的 UE 资产。P1 能验证字段、候选数量、唯一性、ID 覆盖和路径形状，不能证明 UE 资产实际存在、类正确、材质参数可写或网格 slot 语义兼容。
+
+### Seed、排序与指纹
+
+外观使用 `meta.randomness.ue_visual_seed`，不会调用或改变 GRF seed 派生，也不读写 Python/NumPy 全局 RNG。对于命名空间 `N` 为 `model`、`skin`、`kit`，先计算：
+
+```text
+SHA256(UTF8("futsalmot_appearance_v1:<ue_visual_seed>:<N>"))
+namespace_seed = unsigned_big_endian(digest[0:4]) & 0x7fffffff
+```
+
+候选排名不使用 Python `hash()`。每个实体与候选的排名键为下列 UTF-8 字节的 SHA-256 原始 digest，再以候选 ID 字符串作为平局排序键：
+
+```text
+SHA256(UTF8("futsalmot_appearance_v1:rank:<namespace>:<namespace_seed>:<entity_id>:<candidate_id>"))
+sort_key = (digest_bytes, candidate_id_string)
+```
+
+模型和皮肤分别对每名球员选排名最小的候选，允许重复，即有放回抽样。Kit 对五个 Set ID 使用 namespace `kit`、entity ID 字面值 `kit` 排名，取排名前四的不同 ID，再按固定次序映射：`left_outfield`、`right_outfield`、`left_goalkeeper`、`right_goalkeeper`。守门员身份取自 `meta.entities.is_goalkeeper`，左右队伍取自实体 team；不按实体下标猜测。四类各自固定一个 kit，球衣和短裤总是来自同一个 Set。
+
+Catalog fingerprint 与 manifest fingerprint 均为小写十六进制 SHA-256。参与 fingerprint 的对象按 `json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))` 编为 UTF-8 后散列。Catalog fingerprint 散列经 catalog schema 校验后的完整 catalog。Manifest fingerprint 散列完整 manifest 对象，但先移除顶层 `fingerprint` 字段。轨迹摘要 `trajectory_sha256` 则直接散列 `frames.jsonl` 的原始文件字节，不经过 JSON 重新序列化。
+
+### `provenance/appearance.json`
+
+Manifest schema 为 `futsalmot_episode_appearance`，`version` 为整数 `1`，包括：
+
+- `episode_id`、`root_seed`、`ue_visual_seed`、`policy` 和 `namespace_seeds`（model/skin/kit 三个派生 seed）。
+- `trajectory_sha256`、`catalog_id`、`catalog_fingerprint`、`body_texture_parameter` 和最终 `fingerprint`。
+- `kit_classes`：四种 kit class 到四个互异 Set ID 的固定映射。
+- `entities`：恰好十项 `L0..L4`、`R0..R4`，每项记录 `entity_id`、`team`、`is_goalkeeper`、`kit_class`、`player_id`、`mesh`、`anim_class`、`skeleton`、`skin_id`、`skin_texture`、`kit_set_id`、`jersey_material` 和 `shorts_material`。
+
+允许 `meta.entities` 另外含一个 `BALL`，但 appearance manifest 不为球分配外观。两队必须各有且仅有一名 goalkeeper；十人 roster 缺失、重复、队伍不匹配或守门员元数据含糊时导出失败。Manifest 写到同目录临时文件，flush/close 后 replace；失败时不保留半成品。P2 必须将 manifest 与当前 meta、完整 catalog 及当前轨迹原始 SHA-256 重验，不能重抽或接受旧轨迹对应的 manifest。
+
+P2 的 apply/restore、便携 application report、地图/Actor/dirty package 诊断门禁、异步 MRQ 生命周期和 Cleanup 恢复证据 fail-closed 规则见 `docs/VALIDATION_AND_LIMITATIONS.md` 的「Episode Appearance P1/P2」小节。本机 rollback 快照与本机 report 位于被忽略的 `.futsalmot/runtime/<task_id>/appearance-rollback.json` 和 `appearance-application.json`；它们是 Editor 恢复证据，不属于 episode provenance、dataset manifest 或 Git。episode 只保存便携的 `provenance/appearance_application.json`。

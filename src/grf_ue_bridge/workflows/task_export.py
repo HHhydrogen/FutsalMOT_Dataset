@@ -51,6 +51,10 @@ def run_export(
     export_cfg = ExportConfig(**resolved.export_profile)
     Path(resolved.dataset_root).mkdir(parents=True, exist_ok=True)
     traj = Path(resolved.trajectory_output)
+    appearance_catalog = (resolved.ue_profile or {}).get("appearance")
+    appearance_manifest_path = traj / "provenance" / "appearance.json"
+    if appearance_catalog is not None:
+        appearance_manifest_path.unlink(missing_ok=True)
 
     grf_steps = compute_source_steps(export_cfg)
     print_fn(f"Export task: {resolved.task_id}  episode={resolved.episode_name}")
@@ -61,18 +65,52 @@ def run_export(
     )
     print_fn(f"  trajectory output: {traj}")
 
-    result = run_episode(
-        scenario=export_cfg.scenario,
-        seed=export_cfg.seed,
-        num_steps=grf_steps,
-        render=export_cfg.render,
-        game_duration=export_cfg.game_duration,
-        left_team_difficulty=export_cfg.left_team_difficulty,
-        right_team_difficulty=export_cfg.right_team_difficulty,
-        number_of_left_players_agent_controls=export_cfg.number_of_left_players_agent_controls,
-        number_of_right_players_agent_controls=export_cfg.number_of_right_players_agent_controls,
-    )
-    export_episode(export_cfg, result, traj)
-    _write_provenance(resolved, traj)
+    try:
+        result = run_episode(
+            scenario=export_cfg.scenario,
+            seed=export_cfg.seed,
+            num_steps=grf_steps,
+            render=export_cfg.render,
+            game_duration=export_cfg.game_duration,
+            left_team_difficulty=export_cfg.left_team_difficulty,
+            right_team_difficulty=export_cfg.right_team_difficulty,
+            number_of_left_players_agent_controls=export_cfg.number_of_left_players_agent_controls,
+            number_of_right_players_agent_controls=export_cfg.number_of_right_players_agent_controls,
+        )
+        export_episode(export_cfg, result, traj)
+        _write_provenance(resolved, traj)
+        if appearance_catalog is not None:
+            from grf_ue_bridge.appearance import (
+                build_appearance_manifest,
+                validate_appearance_manifest,
+                write_appearance_manifest,
+            )
+            from grf_ue_bridge.validator import validate_episode
+
+            if validate_episode(traj) != 0:
+                raise ValueError(f"appearance episode inputs are invalid: {traj}")
+            meta_path = traj / "meta.json"
+            frames_path = traj / "frames.jsonl"
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            manifest = build_appearance_manifest(meta, frames_path, appearance_catalog)
+            write_appearance_manifest(traj, manifest)
+            written_manifest = json.loads(
+                appearance_manifest_path.read_text(encoding="utf-8")
+            )
+            errors = validate_appearance_manifest(
+                written_manifest,
+                meta=meta,
+                frames_path=frames_path,
+                catalog=appearance_catalog,
+            )
+            if errors:
+                raise ValueError(
+                    "生成的 appearance manifest 校验失败: " + "; ".join(errors)
+                )
+    except Exception:
+        if appearance_catalog is not None:
+            appearance_manifest_path.unlink(missing_ok=True)
+        raise
+
     print_fn(f"Provenance written: {traj / 'provenance'}")
     return 0

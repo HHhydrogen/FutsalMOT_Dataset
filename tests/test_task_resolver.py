@@ -39,6 +39,39 @@ def _make_task_dir(tmp_path: Path, *, dataset_root: Path = None) -> Path:
     return base / "task.json"
 
 
+def _appearance_catalog():
+    return {
+        "mode": "seeded",
+        "policy": "futsalmot_appearance_v1",
+        "catalog_id": "mpfb_players_003_009_v1",
+        "models": [
+            {
+                "player_id": player_id,
+                "mesh": f"/Game/FutsalMOT/Characters/MPFB/Players/Player_{player_id:03d}/MPFB_Player_{player_id:03d}",
+                "anim_class": "/Game/FutsalMOT/Characters/MPFB/Core/Retarget/ABP_MPFB_RuntimeRetarget",
+                "skeleton": "/Game/FutsalMOT/Characters/MPFB/Core/Skeleton/SKEL_MPFB_Base",
+            }
+            for player_id in range(3, 10)
+        ],
+        "skins": [
+            {
+                "skin_id": f"skin-{index:02d}",
+                "texture": f"/Game/FutsalMOT/Characters/MPFB/Textures/Skins/Male/T_Skin_{index:02d}",
+            }
+            for index in range(1, 10)
+        ],
+        "kits": [
+            {
+                "set_id": f"{index:02d}",
+                "jersey_material": f"/Game/FutsalMOT/Characters/MPFB/Materials/M_MPFB_Jersey_Set_{index:02d}",
+                "shorts_material": f"/Game/FutsalMOT/Characters/MPFB/Materials/M_MPFB_Shorts_Set_{index:02d}",
+            }
+            for index in range(1, 6)
+        ],
+        "body_texture_parameter": "SkinTexture",
+    }
+
+
 def _camera_task_fields():
     profiles = {}
     mapping = {}
@@ -226,6 +259,21 @@ class TestResolvePaths:
     def test_legacy_task_keeps_empty_simulation(self, tmp_path, pin_repo_root):
         resolved = resolver.resolve_task(_make_task_dir(tmp_path))
         assert resolved.simulation == {}
+        assert "appearance" not in resolved.ue_profile
+
+    def test_resolved_ue_profile_preserves_appearance_catalog(self, tmp_path, pin_repo_root):
+        task_file = _make_task_dir(tmp_path)
+        task = json.loads(task_file.read_text(encoding="utf-8"))
+        catalog = _appearance_catalog()
+        task["ue"]["appearance"] = catalog
+        task_file.write_text(json.dumps(task), encoding="utf-8")
+
+        resolved = resolver.resolve_task(task_file)
+
+        assert resolved.ue_profile["appearance"] == catalog
+        assert resolved.ue_profile["actor_mapping"] == "ue/actor_mapping.example.json"
+        assert resolved.ue_profile["annotation_export"]["playback_fps"] == 30
+        assert Path(resolved.dataset_episode_dir).is_absolute()
 
     @pytest.mark.parametrize(
         ("change", "message"),

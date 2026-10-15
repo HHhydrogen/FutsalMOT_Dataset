@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import ClassVar, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictInt, StrictStr, field_validator, model_validator
 
 from .paths import RESOLVED_TASK_SCHEMA, TASK_SCHEMA
 
@@ -316,6 +316,125 @@ class SimulationTaskConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+def _validate_appearance_asset_path(value: str) -> str:
+    if not value.startswith("/Game/"):
+        raise ValueError("必须是非空的 /Game/ 资产路径")
+    segments = value[len("/Game/"):].split("/")
+    if any(not segment.strip() for segment in segments):
+        raise ValueError("/Game/ 资产路径不能包含空路径段")
+    package_leaf, has_object_name, object_name = segments[-1].partition(".")
+    if not package_leaf.strip() or (has_object_name and not object_name.strip()):
+        raise ValueError("必须是非空的 /Game/ 资产路径，且包含资产叶段")
+    return value
+
+
+class AppearanceModelCandidate(BaseModel):
+    """一个可随机选择的 MPFB 球员模型候选。"""
+
+    player_id: StrictInt
+    mesh: StrictStr
+    anim_class: StrictStr
+    skeleton: StrictStr
+
+    model_config = {"extra": "forbid"}
+
+    _validate_paths = field_validator("mesh", "anim_class", "skeleton")(
+        _validate_appearance_asset_path
+    )
+
+
+class AppearanceSkinCandidate(BaseModel):
+    """一个可随机选择的皮肤纹理候选。"""
+
+    skin_id: StrictStr = Field(..., min_length=1)
+    texture: StrictStr
+
+    model_config = {"extra": "forbid"}
+
+    _validate_texture_path = field_validator("texture")(_validate_appearance_asset_path)
+
+    @field_validator("skin_id")
+    @classmethod
+    def validate_skin_id(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("skin_id 不能为空")
+        return value
+
+
+class AppearanceKitCandidate(BaseModel):
+    """一个 Set_01 至 Set_05 的球衣和短裤材质候选。"""
+
+    set_id: Literal["01", "02", "03", "04", "05"]
+    jersey_material: StrictStr
+    shorts_material: StrictStr
+
+    model_config = {"extra": "forbid"}
+
+    _validate_paths = field_validator("jersey_material", "shorts_material")(
+        _validate_appearance_asset_path
+    )
+
+    @model_validator(mode="after")
+    def validate_material_set_ids(self) -> "AppearanceKitCandidate":
+        expected_suffix = f"_Set_{self.set_id}"
+        for field_name in ("jersey_material", "shorts_material"):
+            material_path = getattr(self, field_name)
+            asset_leaf = material_path[len("/Game/"):].rsplit("/", 1)[-1]
+            package_leaf, has_object_name, object_path = asset_leaf.partition(".")
+            object_name = object_path.partition(":")[0]
+            if (
+                not package_leaf.endswith(expected_suffix)
+                or (
+                    has_object_name
+                    and not object_name.endswith(expected_suffix)
+                )
+            ):
+                raise ValueError(
+                    f"set_id {self.set_id} 与 {field_name} 不匹配："
+                    f"package 和 object 名称必须属于 {expected_suffix}"
+                )
+        return self
+
+
+class AppearanceCatalog(BaseModel):
+    """seeded episode 外观目录及其完整候选集合。"""
+
+    mode: Literal["seeded"]
+    policy: Literal["futsalmot_appearance_v1"]
+    catalog_id: Literal["mpfb_players_003_009_v1"]
+    models: List[AppearanceModelCandidate]
+    skins: List[AppearanceSkinCandidate]
+    kits: List[AppearanceKitCandidate]
+    body_texture_parameter: Literal["SkinTexture"]
+
+    model_config = {"extra": "forbid"}
+
+    @model_validator(mode="after")
+    def validate_candidate_contract(self) -> "AppearanceCatalog":
+        if len(self.models) != 7:
+            raise ValueError("appearance models 必须包含 7 个候选")
+        model_ids = [model.player_id for model in self.models]
+        if len(set(model_ids)) != len(model_ids):
+            raise ValueError("appearance models.player_id 存在重复值")
+        if set(model_ids) != set(range(3, 10)):
+            raise ValueError("appearance models 必须完整覆盖 player_id 3-9")
+
+        if len(self.skins) != 9:
+            raise ValueError("appearance skins 必须包含 9 个候选")
+        skin_ids = [skin.skin_id for skin in self.skins]
+        if len(set(skin_ids)) != len(skin_ids):
+            raise ValueError("appearance skins.skin_id 存在重复值")
+
+        if len(self.kits) != 5:
+            raise ValueError("appearance kits 必须包含 5 个候选")
+        kit_ids = [kit.set_id for kit in self.kits]
+        if len(set(kit_ids)) != len(kit_ids):
+            raise ValueError("appearance kits.set_id 存在重复值")
+        if set(kit_ids) != {"01", "02", "03", "04", "05"}:
+            raise ValueError("appearance kits 必须完整覆盖 set_id 01-05")
+        return self
+
+
 class UeProfile(BaseModel):
     """UE 相机/Sequence/渲染参数（内联在 task 的 ue 块，非独立文件）。"""
 
@@ -325,11 +444,23 @@ class UeProfile(BaseModel):
     camera_mapping: Optional[Dict[str, CameraMappingConfig]] = Field(
         None, description="canonical camera ID 到 UE Actor/Sequence 的映射"
     )
+    appearance: Optional[AppearanceCatalog] = Field(
+        None, description="seeded MPFB 外观目录（与 legacy player_visuals 互斥）"
+    )
     replace_existing: bool = True
     ball_rolling: Dict = Field(default_factory=dict)
     annotation_export: Dict = Field(default_factory=dict, description="标注/渲染配置")
 
     model_config = {"populate_by_name": True, "extra": "allow"}
+
+    @model_validator(mode="after")
+    def reject_mixed_appearance_configuration(self) -> "UeProfile":
+        legacy_visuals = (self.model_extra or {}).get("player_visuals")
+        if self.appearance is not None and legacy_visuals:
+            raise ValueError(
+                "ue.appearance 不能与非空 ue.player_visuals 同时配置"
+            )
+        return self
 
 
 class DatasetTaskConfig(BaseModel):

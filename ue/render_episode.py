@@ -715,7 +715,7 @@ def _add_job_console_variables(config, cvar_map: dict) -> None:
             print(f"  WARNING: 设置 cvar {name} 失败: {e}")
 
 
-def _apply_cv_gt_camera_post_process(sequences_cfg, preset, cv_gt) -> None:
+def _apply_cv_gt_camera_post_process(sequences_cfg, preset, cv_gt, save_level=True) -> None:
     """cv_gt 时把确定性后处理覆盖写到每个 Camera 的 CineCameraComponent。
 
     不依赖关卡手工设置的 Post Process Volume：脚本每次渲染都显式把
@@ -774,7 +774,7 @@ def _apply_cv_gt_camera_post_process(sequences_cfg, preset, cv_gt) -> None:
             except Exception as e:
                 print(f"  WARNING: 设置 {cam_id}.post_process_blend_weight 失败: {e}")
         applied += 1
-    if applied:
+    if applied and save_level:
         _save_current_level()
     print(f"  [cv_gt] 已为 {applied} 个 Camera 应用确定性后处理 preset（blend=1.0 覆盖关卡体积）")
 
@@ -1522,14 +1522,19 @@ class _AsyncRenderPipeline:
     任何同步阻塞都会让渲染卡死（上一版本 _render_and_wait 的根因）。
     """
 
-    def __init__(self, jobs, episode_id, output_dir, keep_indices):
+    def __init__(self, jobs, episode_id, output_dir, keep_indices, on_complete=None):
         self.jobs = jobs  # [{name, cam_id, seq_asset_path, cam_out, render_dir, img1_dir, job}]
+        self.requested_jobs = list(jobs)
         self.episode_id = episode_id
         self.output_dir = Path(output_dir)
         self.keep_indices = list(keep_indices)
+        self.on_complete = on_complete
         self.error_messages = []
+        self.failed_job_names = set()
         self.executor = None
         self.finished = False
+        self.terminal_result = None
+        self.summary_write_error = None
         self._watch_handle = None  # slate post-tick 兜底检测的句柄
         self._watch_state = None
 
@@ -1541,8 +1546,27 @@ class _AsyncRenderPipeline:
 
     def start(self, subsystem, queue, executor, map_path,
               image_width, image_height, frame_rate,
-              file_name_format, zero_pad) -> None:
+              file_name_format, zero_pad) -> bool:
         """清空队列、构建并加入全部 job、绑定 delegate、提交渲染后立即返回。"""
+        try:
+            return self._start(
+                subsystem, queue, executor, map_path, image_width, image_height,
+                frame_rate, file_name_format, zero_pad,
+            )
+        except BaseException as exc:
+            if not self.finished:
+                self._finalize(
+                    failed=True,
+                    reason="MRQ setup/submission 异常: {}: {}".format(
+                        type(exc).__name__, exc
+                    ),
+                )
+            raise
+
+    def _start(self, subsystem, queue, executor, map_path,
+               image_width, image_height, frame_rate,
+               file_name_format, zero_pad) -> bool:
+        """执行队列构建与提交；提交成功返回 True。"""
         _clear_queue(queue)
 
         prepared = []
@@ -1573,17 +1597,19 @@ class _AsyncRenderPipeline:
             except Exception as e:
                 print(f"  ERROR: 构建 MRQ job 失败 {info['name']}: {e}")
                 self.error_messages.append(f"{info['name']}: {e}")
+                self.failed_job_names.add(info["name"])
                 continue
             info["job"] = job
             prepared.append(info)
         if not prepared:
             self._finalize(failed=True, reason="没有任何可提交的 MRQ job")
-            return
+            return False
         self.jobs = prepared
 
         self.executor = executor
 
         # 绑定 delegate：MRQ 完成 / 出错时驱动后续阶段（而非同步等待）
+        completion_delegate_bound = False
         for delegate_name, cb in (
             ("on_executor_finished_delegate", self._on_finished),
             ("on_executor_errored_delegate", self._on_errored),
@@ -1595,13 +1621,36 @@ class _AsyncRenderPipeline:
             try:
                 delegate.add_callable(cb)
                 print(f"  已绑定 {delegate_name}")
+                if delegate_name == "on_executor_finished_delegate":
+                    completion_delegate_bound = True
             except Exception as e:
                 print(f"  WARNING: 绑定 {delegate_name} 失败: {e}")
+
+        watchdog_registered = False
+        if not completion_delegate_bound:
+            watchdog_registered = self._start_completion_watchdog()
+        if (
+            callable(self.on_complete)
+            and not completion_delegate_bound
+            and not watchdog_registered
+        ):
+            self._finalize(
+                failed=True,
+                reason=(
+                    "MRQ completion source unavailable: finished delegate binding "
+                    "and watchdog registration both failed"
+                ),
+            )
+            return False
 
         if not _submit_render(subsystem, executor):
             self._finalize(failed=True,
                            reason="无法提交 MRQ 渲染（render_queue_with_executor_instance 等均失败）")
-            return
+            return False
+
+        # UE submit API 可在调用栈内同步触发 finished delegate。
+        if self.finished:
+            return False
 
         print("\n=== MRQ 渲染已异步提交（不阻塞编辑器主线程）===")
         print(f"  Sequence 数: {len(self.jobs)}，全部加入同一个 MRQ queue")
@@ -1611,7 +1660,9 @@ class _AsyncRenderPipeline:
         print("  请保持编辑器运行；完成后控制台会打印结果汇总。")
 
         # 兜底：finished delegate 不触发的 UE 版本也能完成收尾（非阻塞轮询）
-        self._start_completion_watchdog()
+        if not watchdog_registered:
+            self._start_completion_watchdog()
+        return True
 
     # ── delegate 回调（游戏线程触发，可安全访问 unreal 与文件系统）──
 
@@ -1627,7 +1678,14 @@ class _AsyncRenderPipeline:
         try:
             print(f"  [MRQ] on_executor_finished_delegate 回调触发（success={success}）")
             if not success:
-                self._finalize(failed=True, reason="MRQ finished 委托报告 success=False")
+                cancelled = self._executor_cancelled(executor)
+                if cancelled:
+                    self._copy_and_finalize(cancelled=True)
+                    return
+                self._finalize(
+                    failed=True,
+                    reason="MRQ finished 委托报告 success=False",
+                )
                 return
             self._copy_and_finalize()
         except Exception as e:
@@ -1635,6 +1693,10 @@ class _AsyncRenderPipeline:
             # 仍可收尾，但打印 traceback 便于定位。
             print(f"  [MRQ 回调异常] _on_finished: {e}")
             traceback.print_exc()
+            self._finalize(
+                failed=True,
+                reason="MRQ finished 收尾异常: {}: {}".format(type(e).__name__, e),
+            )
 
     def _on_errored(self, executor, pipeline, is_fatal, errors):
         """MRQ 渲染出错（不中断最终收尾，成败由 finished 委托决定）。
@@ -1670,7 +1732,12 @@ class _AsyncRenderPipeline:
           3. 硬超时 30 分钟（按现有文件收尾）。
         与 delegate 幂等：_copy_and_finalize / _finalize 有 self.finished 守卫。
         """
-        import unreal
+        try:
+            import unreal
+        except Exception as exc:
+            print("  WARNING: 无法加载 slate watchdog API: {}".format(exc))
+            self._watch_handle = None
+            return False
 
         self._watch_state = {
             "last_total": -1,
@@ -1683,6 +1750,10 @@ class _AsyncRenderPipeline:
             if self.finished:
                 return False  # 已收尾，注销本回调
             st = self._watch_state
+            if self._executor_cancelled(self.executor):
+                print("  [MRQ] watchdog：检测到 executor 已取消，开始收尾")
+                self._copy_and_finalize(cancelled=True)
+                return False
             rendering = self._executor_rendering()
             present = self._all_keep_frames_present()
             total = self._total_render_files()
@@ -1694,6 +1765,13 @@ class _AsyncRenderPipeline:
             if rendering is True:
                 st["seen_rendering"] = True
             elapsed = time.monotonic() - st["start"]
+
+            if rendering is False and self.error_messages:
+                self._finalize(
+                    failed=True,
+                    reason="MRQ executor error: {}".format(" | ".join(self.error_messages)),
+                )
+                return False
 
             if rendering is False and present:
                 print("  [MRQ] watchdog：executor 不再渲染且目标帧齐全，开始收尾")
@@ -1712,14 +1790,31 @@ class _AsyncRenderPipeline:
                 return False
             return True
 
+        def _guarded_tick(delta):
+            try:
+                return _on_tick(delta)
+            except Exception as exc:
+                self._finalize(
+                    failed=True,
+                    reason="MRQ watchdog 收尾异常: {}: {}".format(
+                        type(exc).__name__, exc
+                    ),
+                )
+                return False
+
         try:
-            handle = unreal.register_slate_post_tick_callback(_on_tick)
+            handle = unreal.register_slate_post_tick_callback(_guarded_tick)
         except Exception as e:
             print(f"  WARNING: 无法注册 slate post-tick 兜底检测: {e}（依赖 finished delegate）")
             self._watch_handle = None
-            return
+            return False
+        if handle is None:
+            print("  WARNING: slate post-tick watchdog 未返回有效 registration handle")
+            self._watch_handle = None
+            return False
         self._watch_handle = handle
         print("  已注册非阻塞完成检测（watchdog，每编辑帧检查一次）")
+        return True
 
     def _executor_rendering(self) -> Optional[bool]:
         """executor 是否正在渲染。is_rendering API 不可用时返回 None。"""
@@ -1727,6 +1822,18 @@ class _AsyncRenderPipeline:
         if m is None:
             return None
         return bool(m())
+
+    @staticmethod
+    def _executor_cancelled(executor) -> bool:
+        for name in ("is_cancelled", "is_canceled", "was_cancelled", "was_canceled"):
+            value = getattr(executor, name, None)
+            if value is None:
+                continue
+            try:
+                return bool(value() if callable(value) else value)
+            except Exception:
+                continue
+        return False
 
     def _all_keep_frames_present(self) -> bool:
         """所有 camera 的目标渲染帧（keep_indices）是否已输出到 render/（mask 用 find_mask_files）。"""
@@ -1754,7 +1861,7 @@ class _AsyncRenderPipeline:
 
     # ── 收尾：复制 RGB + 轻量校验 + 写完成标记 ─────────────────────
 
-    def _copy_and_finalize(self):
+    def _copy_and_finalize(self, cancelled=False):
         """finished 成功后：逐 camera 复制 RGB（img1/）与统计 Instance-ID Mask 对齐。"""
         if self.finished:
             return
@@ -1833,8 +1940,12 @@ class _AsyncRenderPipeline:
             mark = "MISSING" if copied == 0 else ("OK" if copied == expected else "PARTIAL")
             print(f"  [{mark}] {cam_id}: {label} {copied}/{expected} 帧")
 
-        if total_copied == 0:
+        if cancelled:
+            status, reason = "cancelled", "MRQ executor cancelled; available frames were retained"
+        elif total_copied == 0:
             status, reason = "failed", "渲染未产生任何可用的 RGB / mask 帧"
+        elif self.failed_job_names:
+            status, reason = "partial", "部分 MRQ job 在构建阶段失败"
         elif all(e["ok"] for e in per_camera.values()):
             status, reason = "success", None
         else:
@@ -1867,7 +1978,8 @@ class _AsyncRenderPipeline:
         if self.finished:
             return
         self.finished = True
-        _ACTIVE_RENDER = None
+        if _ACTIVE_RENDER is self:
+            _ACTIVE_RENDER = None
 
         # 注销 watchdog（若有）
         if self._watch_handle is not None:
@@ -1891,22 +2003,148 @@ class _AsyncRenderPipeline:
             "note": "MRQ 渲染完成回调写入。完整标注校验请在 P1 运行："
                     "uv run grf-ue validate-annotations <output_dir>",
         }
-        write_json_atomic(self.summary_path(), summary)
+        try:
+            write_json_atomic(self.summary_path(), summary)
+        except Exception as exc:
+            self.summary_write_error = "{}: {}".format(type(exc).__name__, exc)
+            failed = True
+            status = "failed"
+            reason = "render_summary 写入失败: {}".format(self.summary_write_error)
+            self.error_messages.append(reason)
+            summary.update({
+                "status": status,
+                "reason": reason,
+                "mrq_errors": self.error_messages,
+                "summary_write_error": self.summary_write_error,
+            })
+            print("  [MRQ summary 写入异常] {}".format(self.summary_write_error))
+            traceback.print_exc()
+
+        camera_results = per_camera or {}
+        job_results = []
+        for info in self.requested_jobs:
+            job_name = info.get("name")
+            camera_id = info.get("cam_id")
+            camera_result = camera_results.get(camera_id) or {}
+            expected = camera_result.get("expected_frames")
+            if info.get("kind") == "mask":
+                copied = camera_result.get("mask_frames")
+            elif info.get("kind") == "combined":
+                copied = min(
+                    camera_result.get("img1_frames", 0),
+                    camera_result.get("mask_frames", 0),
+                )
+            else:
+                copied = camera_result.get("img1_frames")
+            if job_name in self.failed_job_names:
+                job_status = "failed"
+            elif status == "cancelled":
+                job_status = "cancelled"
+            elif status == "skipped":
+                job_status = "skipped"
+            elif status == "failed":
+                job_status = "failed"
+            elif copied is not None and expected is not None and copied == expected:
+                job_status = "success"
+            else:
+                job_status = "failed"
+            job_results.append({
+                "camera_id": camera_id,
+                "job_name": job_name,
+                "status": job_status,
+            })
+        self.terminal_result = {
+            "episode_id": self.episode_id,
+            "status": status,
+            "reason": reason,
+            "cameras": camera_results,
+            "jobs": job_results,
+            "mrq_errors": self.error_messages or None,
+            "finished_at": summary["finished_at"],
+        }
+        if self.summary_write_error is not None:
+            self.terminal_result["summary_write_error"] = self.summary_write_error
 
         print(f"\n=== MRQ 渲染{'失败' if failed else '完成'}: {status} ===")
         print(f"  完成标记: {self.summary_path()}")
         if failed:
             print(f"  原因: {reason}")
         print(f"  后续步骤（P1）：uv run grf-ue validate-annotations {self.output_dir}")
+        if callable(self.on_complete):
+            try:
+                self.on_complete(self.terminal_result)
+            except Exception as exc:
+                print("  [MRQ callback 异常] {}: {}".format(type(exc).__name__, exc))
+                traceback.print_exc()
 
 
-def render_sequences(
+def _finalize_sync_render(callback, episode_id, output_dir, status, reason=None):
+    """为同步跳过或错误写入终态摘要，并在摘要落盘后调用回调。"""
+    pipeline = _AsyncRenderPipeline([], episode_id, output_dir, [], on_complete=callback)
+    pipeline._finalize(failed=status == "failed", status=status, reason=reason)
+    return pipeline.terminal_result
+
+
+def _prepare_stencil_for_render(mapping_path, appearance_active=False):
+    """准备 stencil mask；外观事务下拒绝保存含随机外观的 Actor。"""
+    if appearance_active:
+        raise RuntimeError(
+            "appearance mask_source=post_process_material 需要修改并保存 External Actor stencil，"
+            "当前无法证明保存内容排除随机外观"
+        )
+    _ensure_custom_depth_stencil_enabled()
+    if mapping_path is not None and Path(mapping_path).exists():
+        mapping = load_mapping(Path(mapping_path))
+        actors = find_all_actors(mapping)
+        _assign_custom_stencil(actors)
+        _save_current_level()
+    else:
+        print("  WARNING: instance_mask.enabled=true 但未提供有效 mapping_path，无法设置 stencil")
+
+
+def _bake_first_frame_for_render(meta, frames, mapping_path, appearance_active=False):
+    """把首帧位置临时烘焙到 Actor，供 MRQ/PIE spawn 使用。"""
+    if not frames or mapping_path is None:
+        return False
+    try:
+        mapping = load_mapping(Path(mapping_path))
+        actors = find_all_actors(mapping)
+        if appearance_active:
+            player_entity_ids = (
+                "L0", "L1", "L2", "L3", "L4",
+                "R0", "R1", "R2", "R3", "R4",
+            )
+            actors = {
+                entity_id: actor
+                for entity_id, actor in actors.items()
+                if entity_id in player_entity_ids
+            }
+        if not actors:
+            return False
+        gk_ids = gk_entity_ids_from_meta(meta)
+        apply_preview_frame(actors, frames[0], {}, gk_entity_ids=gk_ids)
+        if appearance_active:
+            print("  [MRQ] 首帧 spawn 状态已临时烘焙（appearance 事务期间不保存关卡）")
+        else:
+            _save_current_level()
+            print("  [MRQ] 首帧 spawn 状态已烘焙（actor 设到帧 0 并保存关卡）")
+        return True
+    except Exception as exc:
+        if appearance_active:
+            raise
+        print("  WARNING: 首帧 spawn 状态烘焙失败（帧 0 可能渲染成关卡默认位置）: {}".format(exc))
+        return False
+
+
+def _render_sequences_impl(
     sequences_cfg,
     annotation_cfg: dict,
     sequence_package_path: str,
     episode_dir: Path,
     output_dir: Path,
     mapping_path: Path = None,
+    on_complete=None,
+    appearance_active=False,
 ) -> None:
     """异步用 MRQ 渲染所有 Sequence 的 RGB 帧（+ Instance-ID Mask），提交后立即返回。
 
@@ -1925,12 +2163,30 @@ def render_sequences(
     global _ACTIVE_RENDER
     if _ACTIVE_RENDER is not None:
         print("WARNING: 已有 MRQ 渲染正在进行，忽略本次请求（等待上一批完成）")
-        return
+        if callable(on_complete):
+            terminal = _finalize_sync_render(
+                on_complete, Path(episode_dir).name, output_dir, "failed",
+                "已有 MRQ 渲染正在进行，拒绝并发提交",
+            )
+            return {
+                "callback_ownership_transferred": False,
+                "terminal_result": terminal,
+            }
+        return None
 
     render_cfg = annotation_cfg.get("render_rgb") or {}
     if not render_cfg.get("enabled", False):
         print("render_rgb.enabled = false，跳过渲染")
-        return
+        if callable(on_complete):
+            terminal = _finalize_sync_render(
+                on_complete, Path(episode_dir).name, output_dir, "skipped",
+                "render_rgb.enabled = false",
+            )
+            return {
+                "callback_ownership_transferred": False,
+                "terminal_result": terminal,
+            }
+        return None
 
     # CV GT preset：缺省 cv_gt（deterministic），null/cinematic 为保留/不覆盖模式
     preset, cv_gt = resolve_preset(render_cfg)
@@ -1945,15 +2201,9 @@ def render_sequences(
     post_process_material = mask_cfg.get("post_process_material")
     if mask_enabled:
         if mask_source == "post_process_material":
-            # stencil 方案（fallback，实测本 5.8 不可用）需要 custom depth + actor stencil 值
-            _ensure_custom_depth_stencil_enabled()
-            if mapping_path is not None and Path(mapping_path).exists():
-                mapping = load_mapping(Path(mapping_path))
-                actors = find_all_actors(mapping)
-                _assign_custom_stencil(actors)
-                _save_current_level()
-            else:
-                print("  WARNING: instance_mask.enabled=true 但未提供有效 mapping_path，无法设置 stencil")
+            _prepare_stencil_for_render(
+                mapping_path, appearance_active=appearance_active
+            )
             if not post_process_material:
                 post_process_material = create_stencil_to_color_material()
                 if post_process_material:
@@ -1982,26 +2232,30 @@ def render_sequences(
     # 并保存关卡，使 PIE spawn 状态 == Sequence 帧 0 值——无论接管是否滞后一帧，
     # 帧 0 都不会闪回默认位置（第 3/6 帧由 Sequence 接管，本就正确）。
     if frames and mapping_path is not None:
-        try:
-            mapping = load_mapping(Path(mapping_path))
-            actors = find_all_actors(mapping)
-            if actors:
-                gk_ids = gk_entity_ids_from_meta(meta)
-                apply_preview_frame(actors, frames[0], {}, gk_entity_ids=gk_ids)
-                _save_current_level()
-                print("  [MRQ] 首帧 spawn 状态已烘焙（actor 设到帧 0 并保存关卡）")
-        except Exception as e:  # noqa: BLE001
-            print(f"  WARNING: 首帧 spawn 状态烘焙失败（帧 0 可能渲染成关卡默认位置）: {e}")
+        _bake_first_frame_for_render(
+            meta, frames, mapping_path, appearance_active=appearance_active
+        )
     episode_id = meta.get("episode_id") or episode_dir.name
     source_step = float(meta["timing"].get("source_step_seconds", 0.1))
     keep_indices = select_rendered_frame_indices(len(frames), source_step, frame_rate)
 
     if not sequences_cfg:
         print("WARNING: sequences 为空，无可渲染的 Sequence")
-        return
+        if callable(on_complete):
+            terminal = _finalize_sync_render(
+                on_complete, episode_id, output_dir, "skipped",
+                "sequences 为空，无可渲染的 Sequence",
+            )
+            return {
+                "callback_ownership_transferred": False,
+                "terminal_result": terminal,
+            }
+        return None
 
     # CV GT preset：先把确定性后处理写到每个 Camera（覆盖关卡 Post Process Volume）
-    _apply_cv_gt_camera_post_process(sequences_cfg, preset, cv_gt)
+    _apply_cv_gt_camera_post_process(
+        sequences_cfg, preset, cv_gt, save_level=not appearance_active
+    )
 
     # 收集要渲染的 Sequence（资产必须已存在）
     jobs = []
@@ -2076,7 +2330,16 @@ def render_sequences(
 
     if not jobs:
         print("WARNING: 没有任何可渲染的 Sequence")
-        return
+        if callable(on_complete):
+            terminal = _finalize_sync_render(
+                on_complete, episode_id, output_dir, "skipped",
+                "没有任何可渲染的 Sequence",
+            )
+            return {
+                "callback_ownership_transferred": False,
+                "terminal_result": terminal,
+            }
+        return None
 
     map_path = _get_current_map_path()
     subsystem = _mrq_subsystem()
@@ -2089,13 +2352,65 @@ def render_sequences(
         )
     executor = _mrq_executor()
 
-    pipeline = _AsyncRenderPipeline(jobs, episode_id, output_dir, keep_indices)
+    pipeline = _AsyncRenderPipeline(
+        jobs, episode_id, output_dir, keep_indices, on_complete=on_complete
+    )
     _ACTIVE_RENDER = pipeline  # 模块级引用：脚本返回后防止 pipeline 被 GC
-    pipeline.start(
+    submitted = pipeline.start(
         subsystem, queue, executor, map_path,
         image_width, image_height, frame_rate,
         file_name_format, zero_pad,
     )
+    if callable(on_complete):
+        return {
+            "callback_ownership_transferred": bool(submitted),
+            "terminal_result": pipeline.terminal_result,
+        }
+    return None
+
+
+def render_sequences(
+    sequences_cfg,
+    annotation_cfg: dict,
+    sequence_package_path: str,
+    episode_dir: Path,
+    output_dir: Path,
+    mapping_path: Path = None,
+    on_complete=None,
+    appearance_active=False,
+):
+    """异步提交 MRQ；若提供回调，同步终态也会在返回前回调。"""
+    if on_complete is None:
+        return _render_sequences_impl(
+            sequences_cfg, annotation_cfg, sequence_package_path, episode_dir,
+            output_dir, mapping_path, appearance_active=appearance_active,
+        )
+    callback_called = False
+
+    def _once(result):
+        nonlocal callback_called
+        if callback_called:
+            return
+        callback_called = True
+        try:
+            on_complete(result)
+        except Exception as exc:
+            print("  [MRQ callback 异常] {}: {}".format(type(exc).__name__, exc))
+            traceback.print_exc()
+
+    try:
+        return _render_sequences_impl(
+            sequences_cfg, annotation_cfg, sequence_package_path, episode_dir,
+            output_dir, mapping_path, on_complete=_once,
+            appearance_active=appearance_active,
+        )
+    except BaseException as exc:
+        if not callback_called:
+            _finalize_sync_render(
+                _once, Path(episode_dir).name, output_dir, "failed",
+                "render setup failed: {}: {}".format(type(exc).__name__, exc),
+            )
+        raise
 
 
 def force_finalize_render() -> bool:

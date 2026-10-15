@@ -31,6 +31,26 @@ uv run grf-ue task validate configs/<task>.json
 
 `task resolve` 的输出 schema 为 `futsalmot_resolved_task` v1，并将 episode 输出路径限制在 `dataset_root` 下。它是 P1/P2 共享的运行时路径契约，不应手工编辑。
 
+`configs/player_appearance_smoke_10frames_1cam.json` 是 seeded appearance 的 10 帧、单相机 smoke task：使用完整 7/9/5 catalog、`SkinTexture`、现有 `Player_L0..R4` actor mapping、`LS_Cam_01` / `CineCam_01` Sequence-camera 配对，以及该 smoke 已有 RGB/Object-ID mask 设置。Pose 和 debug/video postprocess 均关闭；这个 smoke 不依赖 Runtime Pose Recorder 或 pose-finalize。task 路径继续通过 `${FUTSALMOT_DATASET_ROOT}`、`${FUTSALMOT_UE_ROOT}` 与被忽略的 `.futsalmot/local.json` 按现有优先级解析。配置校验和解析不等于 UE 资产或视觉验收。
+
+### Episode Appearance P1/P2
+
+启用 `ue.appearance` 时，P1 `task export` 在轨迹和 meta 成功写入后生成 `provenance/appearance.json`，并立即重验 manifest、catalog 与当前 `frames.jsonl`。重复输入产生确定性分配；seeded appearance 与非空 `ue.player_visuals` 同时配置会被拒绝。旧 task 没有 `ue.appearance` 时不要求 manifest/application report；Audit 仅以当前 resolved catalog 判断是否要求 appearance，不根据 episode 中残留的 appearance 文件推断启用状态。Cleanup 对所有 task 都会检查实际存在的恢复证据；legacy task 没有恢复文件时按原有流程处理，但若发现损坏或未终结证据仍 fail-closed。
+
+P2 必须在 Unreal Editor 真实 Python 环境运行 `ue/run_task.py`。外观 apply/restore 之前的只读操作门禁是 `ue/diagnose_episode_appearance.py`：当前 Level 必须精确为 `/Game/FutsalMOT/Maps/L_FutsalCourt`；十个映射 entity 各自必须唯一对应 Actor，Actor path 和 External Actor package 不得重复或 dirty；关键 Mesh、Texture2D、Material、Skeleton、AnimBlueprint 等资产必须存在且 class 匹配，查询过程不能有错误。只有诊断报告 `task7_preflight_can_start=true` 才可继续 apply/restore、Task 7 mutation 或 MRQ。诊断只检查当前 Editor 状态，不负责切图，也不以文件路径存在替代 Unreal AssetData class 检查。`run_task.py` 及 appearance adapter 还会执行自己的 manifest、资产、材质 slot、地图、十人 roster 和 dirty-package preflight；任一失败必须在 Actor mutation 和 MRQ 提交前停止。
+
+如需切换地图，只能调用 Unreal MCP 原生 `SceneTools.load_level`。调用返回后另发只读查询核验当前 Level 和十名 Actor，再运行 appearance 诊断。诊断或 apply/restore 过程中不得保留从 `unreal.load_asset()` / `unreal.load_object()` 获取的 `UWorld`，也不得用 `EditorLoadingAndSavingUtils.load_map()` 作为 Python 回退；原生 load-level 能力不可用时停止并报告 `MANUAL_REQUIRED`。
+
+apply 在变更前捕获十名 Actor 的视觉组件/原网格、动画类、attachment/relative transform、完整 material override 数组、可见性与 package dirty 基线，并捕获参与事务的资产 package 基线。若任一相关 package 预先 dirty，必须在 mutation 前 fail-closed。恢复快照写到被忽略的本机 `.futsalmot/runtime/<task_id>/appearance-rollback.json`；它不是 episode artifact，绝不进入 portable provenance。appearance 只临时修改视觉组件，不保存 randomized External Actor 或组合材质；恢复时逐项回读状态，并按验证过的方式恢复 package clean 基线。不能证明恢复成功时保留快照并以失败结束。
+
+Episode `provenance/appearance_application.json` 是便携报告，schema 为 `futsalmot_appearance_application` v1。它关联 `manifest_fingerprint`、`catalog_fingerprint`、`trajectory_sha256`、transaction ID、十名 actor 的映射/应用资产与 slot、错误/警告、每个 MRQ job 的 camera 和终态、`mrq_pending`、终态 `render_result` 及恢复状态；不含本机文件路径。状态包括 `not_started`、`preflight_failed`、`applied`、`rendering`、`restored`、`restore_failed`。Audit 对启用 appearance 的 episode 要求 manifest 与当前输入一致、报告指纹和轨迹摘要一致、所有十名 Actor `restore_status=restored`、报告整体 `state=restored`；要求 render 时还要求每个 camera/job 到达终态并与 `render_summary.json` 对应。
+
+Sequence/annotations 等同步工作在完成或异常后立即恢复 appearance。full/render 提交的 MRQ 是异步的：事务在所有 camera job 成功、失败或取消等终态前保持已应用状态，UE Editor 必须继续 tick；MRQ submit 异常立即尝试恢复，异步完成回调拥有恢复责任，在全部 job settle 后恢复 Actor 并发布终态报告。MRQ 提交前先持久化本机 rollback 快照和 application report；进入 rendering 后同时更新本机报告与 episode portable report。不能在 Editor 主线程阻塞等待，也不能因一个 camera 先完成就提前恢复。若 Editor 进程中断，重新打开已保存地图应回到未随机化的基线；下次运行必须先审查既有恢复证据并核对 Actor 状态，禁止覆盖未解决的快照或 report。
+
+Cleanup 对 appearance 恢复证据采用 fail-closed：本机 report 或 episode report 无法读取、状态未知/非终态、存在 `applied`/`rendering`/`restore_failed` 状态，或本机 rollback snapshot 仍存在时，均拒绝 `cleanup --apply` 并保留证据；即使 portable report 写着 `restored`，只要 rollback snapshot 留存，P1 也无法验证当前 Editor 中的 baseline，因此仍阻止清理。缺少 task ID/repo root 而无法检查本机证据同样阻止已启用 appearance 的清理。不得手工删除恢复证据来绕过门禁。
+
+本节合同测试可以证明纯 Python 的 seed/hash/schema、输入校验、report 状态机、fail-closed 分支及 orchestration 逻辑；它们不证明当前 UE 资产真实可加载、Material 实际呈现指定皮肤、slot/retarget 外观正确、External Actor package clean/已恢复、MRQ callback/watchdog 在真实 Editor 中生效，或最终 RGB/Mask/Pose 视觉对齐。自动化测试不能代替短 episode 的 UE apply/restore 和实际 MRQ 渲染检查。
+
 ### Episode 验证
 
 ```powershell

@@ -203,7 +203,11 @@ def _is_contained(candidate: Path, root: Path) -> bool:
 
 _EPISODE_LEVEL_METADATA = ("meta.json", "frames.jsonl", "render_summary.json")
 _CAMERA_METADATA = ("camera.json", "annotations.jsonl", "mask_config.json", "seqinfo.ini")
-_PROVENANCE_FILES = ("provenance/export_config.json", "provenance/external_sources.lock.json")
+_PROVENANCE_FILES = (
+    "provenance/export_config.json",
+    "provenance/external_sources.lock.json",
+    "provenance/appearance.json",
+)
 
 
 def profile_file_paths(

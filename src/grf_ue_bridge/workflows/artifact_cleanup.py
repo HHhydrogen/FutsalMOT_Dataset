@@ -86,6 +86,63 @@ def _validation_gate(dataset_episode_dir: Path, resolved=None) -> list:
     """返回阻止 cleanup 的原因列表（空 = 可通过）。"""
     problems = []
     requirements = resolve_task_requirements(resolved) if resolved is not None else None
+    resolved_get = (
+        resolved.get if isinstance(resolved, dict)
+        else lambda key, default=None: getattr(resolved, key, default)
+    ) if resolved is not None else lambda key, default=None: default
+    ue_profile = resolved_get("ue_profile", {}) or {}
+    appearance_enabled = ue_profile.get("appearance") is not None
+    task_id = resolved_get("task_id")
+    repo_root = resolved_get("repo_root")
+    rollback_path = None
+    local_report_path = None
+    if (
+        isinstance(task_id, str)
+        and task_id
+        and all(char in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-" for char in task_id)
+        and isinstance(repo_root, str)
+        and repo_root
+    ):
+        runtime_dir = Path(repo_root) / ".futsalmot" / "runtime" / task_id
+        rollback_path = runtime_dir / "appearance-rollback.json"
+        local_report_path = runtime_dir / "appearance-application.json"
+    elif appearance_enabled:
+        problems.append("appearance: 缺少 task_id/repo_root，无法检查本机恢复证据")
+
+    public_report_path = (
+        Path(dataset_episode_dir) / "provenance" / "appearance_application.json"
+    )
+    evidence_paths = [
+        path for path in (rollback_path, local_report_path, public_report_path)
+        if path is not None and path.exists()
+    ]
+    report_states = {}
+    for label, path in (
+        ("本机", local_report_path),
+        ("公共", public_report_path),
+    ):
+        if path is None or not path.exists():
+            continue
+        try:
+            report = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError, RecursionError) as exc:
+            problems.append(f"appearance: {label} application report 无法读取: {exc}")
+            continue
+        state = report.get("state") if isinstance(report, dict) else None
+        report_states[label] = state
+        if state not in {"preflight_failed", "restored"}:
+            problems.append(
+                f"appearance: {label} application report 状态未终结或无效 "
+                f"({state!r})，拒绝 cleanup 并保留恢复证据"
+            )
+
+    if rollback_path is not None and rollback_path.exists():
+        problems.append(
+            "appearance: 存在本机 rollback snapshot；即使 report 标记 restored，"
+            "P1 仍无法验证当前 UE Actor 完整 baseline，拒绝 cleanup 并保留恢复证据"
+        )
+    elif evidence_paths and not report_states:
+        problems.append("appearance: 存在无法判定状态的事务恢复证据，拒绝 cleanup")
     requires_render = requirements.requires_render if requirements else True
     requires_pose = requirements.requires_pose if requirements else True
     rs_path = dataset_episode_dir / "render_summary.json"
@@ -98,7 +155,7 @@ def _validation_gate(dataset_episode_dir: Path, resolved=None) -> list:
                 problems.append("render_summary.json 顶层必须是 JSON 对象")
             elif rs.get("status") != "success":
                 problems.append(f"render_summary.status != success ({rs.get('status')})")
-        except (OSError, UnicodeError, json.JSONDecodeError) as e:
+        except (OSError, UnicodeError, json.JSONDecodeError, RecursionError) as e:
             problems.append(f"render_summary.json 解析失败: {e}")
     else:
         problems.append("缺少 render_summary.json（渲染未成功/未完成）")
@@ -112,7 +169,7 @@ def _validation_gate(dataset_episode_dir: Path, resolved=None) -> list:
                 problems.append("pose_session.json 顶层必须是 JSON 对象")
             elif not ps.get("capture_complete"):
                 problems.append("pose_session.capture_complete != true")
-        except (OSError, UnicodeError, json.JSONDecodeError) as e:
+        except (OSError, UnicodeError, json.JSONDecodeError, RecursionError) as e:
             problems.append(f"pose_session.json 解析失败: {e}")
     else:
         problems.append("缺少 pose_session.json（Runtime Pose 未导出）")
@@ -126,7 +183,7 @@ def _validation_gate(dataset_episode_dir: Path, resolved=None) -> list:
             result = validation_result_from_report(ar)
             if not result.passed:
                 problems.extend(f"audit 未通过: {error}" for error in result.errors)
-        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        except (OSError, UnicodeError, json.JSONDecodeError, RecursionError) as exc:
             problems.append(f"audit 报告读取失败: {exc}")
     return problems
 

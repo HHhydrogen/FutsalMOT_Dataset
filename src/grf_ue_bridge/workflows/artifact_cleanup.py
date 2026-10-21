@@ -24,6 +24,7 @@ from pathlib import Path
 
 from grf_ue_bridge.task_requirements import resolve_task_requirements
 from grf_ue_bridge.validation_result import validation_result_from_report
+from grf_ue_bridge.environment import validate_environment_manifest
 
 # 每 camera 下 transient 的相对路径（相对 cam_dir）
 _TRANSIENT_CAM_RELS = {
@@ -53,31 +54,42 @@ def _cam_dir(dataset_episode_dir: Path, cam: str) -> Path:
     return dataset_episode_dir / cam
 
 
-def collect_transient(dataset_episode_dir: Path, cams, profile="research_minimal"):
+
+
+def _resolved_environment_profile(resolved):
+    if isinstance(resolved, dict):
+        ue_profile = resolved.get("ue_profile") or {}
+    else:
+        ue_profile = getattr(resolved, "ue_profile", {}) or {}
+    profile = ue_profile.get("environment_profile") if isinstance(ue_profile, dict) else None
+    if isinstance(profile, dict) and profile.get("policy") == "futsalmot_environment_v1_5":
+        return profile
+    return None
+
+
+def collect_transient(dataset_episode_dir: Path, cams, profile='research_minimal', resolved=None):
     """收集将删除的文件（canonical 永不包含）。返回 {path: bytes}。"""
     to_delete = {}
     for cam in cams:
         cam_dir = _cam_dir(dataset_episode_dir, cam)
         if not cam_dir.is_dir():
             continue
-        for rel, pat in _TRANSIENT_CAM_RELS.items():
+        for (rel, pat) in _TRANSIENT_CAM_RELS.items():
             target = cam_dir / rel
             if target.is_dir():
-                for f in target.rglob("*"):
-                    if f.is_file() and (pat is None or f.name.endswith(pat.replace("*", ""))):
+                for f in target.rglob('*'):
+                    if f.is_file() and (pat is None or f.name.endswith(pat.replace('*', ''))):
                         to_delete[str(f)] = f.stat().st_size
             elif target.is_file():
                 to_delete[str(target)] = target.stat().st_size
-    # global transient（research_minimal：raw pose 在 12 点最终 Pose 验证后可删）
-    for rel, pat in _TRANSIENT_EP_RELS.items():
+    for (rel, pat) in _TRANSIENT_EP_RELS.items():
         target = dataset_episode_dir / rel
         if target.is_file():
             to_delete[str(target)] = target.stat().st_size
-    # yolo_* 复制的 RGB images（YOLO 配置应引用原始 img1，不复制）
     for ydir in _YOLO_IMAGE_DIRS:
         t = dataset_episode_dir / ydir
         if t.is_dir():
-            for f in t.rglob("*.png"):
+            for f in t.rglob('*.png'):
                 to_delete[str(f)] = f.stat().st_size
     return to_delete
 
@@ -86,105 +98,116 @@ def _validation_gate(dataset_episode_dir: Path, resolved=None) -> list:
     """返回阻止 cleanup 的原因列表（空 = 可通过）。"""
     problems = []
     requirements = resolve_task_requirements(resolved) if resolved is not None else None
-    resolved_get = (
-        resolved.get if isinstance(resolved, dict)
-        else lambda key, default=None: getattr(resolved, key, default)
-    ) if resolved is not None else lambda key, default=None: default
-    ue_profile = resolved_get("ue_profile", {}) or {}
-    appearance_enabled = ue_profile.get("appearance") is not None
-    task_id = resolved_get("task_id")
-    repo_root = resolved_get("repo_root")
+    resolved_get = (resolved.get if isinstance(resolved, dict) else lambda key, default=None: getattr(resolved, key, default)) if resolved is not None else lambda key, default=None: default
+    ue_profile = resolved_get('ue_profile', {}) or {}
+    appearance_enabled = ue_profile.get('appearance') is not None
+    environment_profile = _resolved_environment_profile(resolved)
+    task_id = resolved_get('task_id')
+    repo_root = resolved_get('repo_root')
     rollback_path = None
     local_report_path = None
-    if (
-        isinstance(task_id, str)
-        and task_id
-        and all(char in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-" for char in task_id)
-        and isinstance(repo_root, str)
-        and repo_root
-    ):
-        runtime_dir = Path(repo_root) / ".futsalmot" / "runtime" / task_id
-        rollback_path = runtime_dir / "appearance-rollback.json"
-        local_report_path = runtime_dir / "appearance-application.json"
+    if isinstance(task_id, str) and task_id and all((char in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-' for char in task_id)) and isinstance(repo_root, str) and repo_root:
+        runtime_dir = Path(repo_root) / '.futsalmot' / 'runtime' / task_id
+        rollback_path = runtime_dir / 'appearance-rollback.json'
+        local_report_path = runtime_dir / 'appearance-application.json'
     elif appearance_enabled:
-        problems.append("appearance: 缺少 task_id/repo_root，无法检查本机恢复证据")
-
-    public_report_path = (
-        Path(dataset_episode_dir) / "provenance" / "appearance_application.json"
-    )
-    evidence_paths = [
-        path for path in (rollback_path, local_report_path, public_report_path)
-        if path is not None and path.exists()
-    ]
+        problems.append('appearance: 缺少 task_id/repo_root，无法检查本机恢复证据')
+    public_report_path = Path(dataset_episode_dir) / 'provenance' / 'appearance_application.json'
+    evidence_paths = [path for path in (rollback_path, local_report_path, public_report_path) if path is not None and path.exists()]
     report_states = {}
-    for label, path in (
-        ("本机", local_report_path),
-        ("公共", public_report_path),
-    ):
+    for (label, path) in (('本机', local_report_path), ('公共', public_report_path)):
         if path is None or not path.exists():
             continue
         try:
-            report = json.loads(path.read_text(encoding="utf-8"))
+            report = json.loads(path.read_text(encoding='utf-8'))
         except (OSError, UnicodeError, json.JSONDecodeError, RecursionError) as exc:
-            problems.append(f"appearance: {label} application report 无法读取: {exc}")
+            problems.append(f'appearance: {label} application report 无法读取: {exc}')
             continue
-        state = report.get("state") if isinstance(report, dict) else None
+        state = report.get('state') if isinstance(report, dict) else None
         report_states[label] = state
-        if state not in {"preflight_failed", "restored"}:
-            problems.append(
-                f"appearance: {label} application report 状态未终结或无效 "
-                f"({state!r})，拒绝 cleanup 并保留恢复证据"
-            )
-
+        if state not in {'preflight_failed', 'restored'}:
+            problems.append(f'appearance: {label} application report 状态未终结或无效 ({state!r})，拒绝 cleanup 并保留恢复证据')
     if rollback_path is not None and rollback_path.exists():
-        problems.append(
-            "appearance: 存在本机 rollback snapshot；即使 report 标记 restored，"
-            "P1 仍无法验证当前 UE Actor 完整 baseline，拒绝 cleanup 并保留恢复证据"
-        )
-    elif evidence_paths and not report_states:
-        problems.append("appearance: 存在无法判定状态的事务恢复证据，拒绝 cleanup")
+        problems.append('appearance: 存在本机 rollback snapshot；即使 report 标记 restored，P1 仍无法验证当前 UE Actor 完整 baseline，拒绝 cleanup 并保留恢复证据')
+    elif evidence_paths and (not report_states):
+        problems.append('appearance: 存在无法判定状态的事务恢复证据，拒绝 cleanup')
+    if environment_profile is not None:
+        if not isinstance(task_id, str) or not task_id or (not isinstance(repo_root, str)) or (not repo_root):
+            problems.append('environment: 缺少 task_id/repo_root，无法检查本机恢复证据')
+            environment_dir = None
+        else:
+            environment_dir = Path(repo_root) / '.futsalmot' / 'runtime' / task_id
+        environment_snapshot_path = environment_dir / 'environment-rollback.json' if environment_dir else None
+        environment_report_path = environment_dir / 'environment-application.json' if environment_dir else None
+        if environment_snapshot_path is not None and environment_snapshot_path.exists():
+            problems.append('environment: 存在本机 rollback snapshot，拒绝 cleanup')
+        environment_public_path = Path(dataset_episode_dir) / 'provenance' / 'environment_application.json'
+        for (label, path, required) in (('本机', environment_report_path, False), ('公共', environment_public_path, True)):
+            if path is None or not path.exists():
+                if required:
+                    problems.append(f'environment: 缺少{label} application report，拒绝 cleanup')
+                continue
+            try:
+                environment_report = json.loads(path.read_text(encoding='utf-8'))
+            except (OSError, UnicodeError, json.JSONDecodeError, RecursionError) as exc:
+                problems.append(f'environment: {label} application report 无法读取: {exc}')
+                continue
+            if not isinstance(environment_report, dict) or environment_report.get('state') != 'restored':
+                actual = environment_report.get('state') if isinstance(environment_report, dict) else None
+                problems.append(f"environment: {label} application report state actual={actual!r}, expected='restored'")
+        environment_manifest_path = Path(dataset_episode_dir) / 'provenance' / 'environment.json'
+        try:
+            manifest = json.loads(environment_manifest_path.read_text(encoding='utf-8'))
+            meta_path = Path(dataset_episode_dir) / 'meta.json'
+            frames_path = Path(dataset_episode_dir) / 'frames.jsonl'
+            if not meta_path.is_file() or not frames_path.is_file():
+                problems.append('environment: 缺少 meta.json/frames.jsonl，拒绝 cleanup')
+            else:
+                manifest_errors = validate_environment_manifest(manifest, meta=json.loads(meta_path.read_text(encoding='utf-8')), frames_path=frames_path, profile=environment_profile)
+                problems.extend((f'environment: {message}' for message in manifest_errors))
+        except (OSError, UnicodeError, json.JSONDecodeError, RecursionError, TypeError, ValueError) as exc:
+            problems.append(f'environment: environment.json 校验失败: {exc}')
     requires_render = requirements.requires_render if requirements else True
     requires_pose = requirements.requires_pose if requirements else True
-    rs_path = dataset_episode_dir / "render_summary.json"
+    rs_path = dataset_episode_dir / 'render_summary.json'
     if not requires_render:
         pass
     elif rs_path.exists():
         try:
-            rs = json.loads(rs_path.read_text(encoding="utf-8"))
+            rs = json.loads(rs_path.read_text(encoding='utf-8'))
             if not isinstance(rs, dict):
-                problems.append("render_summary.json 顶层必须是 JSON 对象")
-            elif rs.get("status") != "success":
+                problems.append('render_summary.json 顶层必须是 JSON 对象')
+            elif rs.get('status') != 'success':
                 problems.append(f"render_summary.status != success ({rs.get('status')})")
         except (OSError, UnicodeError, json.JSONDecodeError, RecursionError) as e:
-            problems.append(f"render_summary.json 解析失败: {e}")
+            problems.append(f'render_summary.json 解析失败: {e}')
     else:
-        problems.append("缺少 render_summary.json（渲染未成功/未完成）")
-    ps_path = dataset_episode_dir / "pose_session.json"
+        problems.append('缺少 render_summary.json（渲染未成功/未完成）')
+    ps_path = dataset_episode_dir / 'pose_session.json'
     if not requires_pose:
         pass
     elif ps_path.exists():
         try:
-            ps = json.loads(ps_path.read_text(encoding="utf-8"))
+            ps = json.loads(ps_path.read_text(encoding='utf-8'))
             if not isinstance(ps, dict):
-                problems.append("pose_session.json 顶层必须是 JSON 对象")
-            elif not ps.get("capture_complete"):
-                problems.append("pose_session.capture_complete != true")
+                problems.append('pose_session.json 顶层必须是 JSON 对象')
+            elif not ps.get('capture_complete'):
+                problems.append('pose_session.capture_complete != true')
         except (OSError, UnicodeError, json.JSONDecodeError, RecursionError) as e:
-            problems.append(f"pose_session.json 解析失败: {e}")
+            problems.append(f'pose_session.json 解析失败: {e}')
     else:
-        problems.append("缺少 pose_session.json（Runtime Pose 未导出）")
-    # 若 audit 报告存在但 FAIL，阻止
-    audit_path = dataset_episode_dir / "audit" / "soak_audit_report.json"
+        problems.append('缺少 pose_session.json（Runtime Pose 未导出）')
+    audit_path = dataset_episode_dir / 'audit' / 'soak_audit_report.json'
     if not audit_path.exists():
-        problems.append("缺少 canonical audit 报告，无法确认数据完整性")
+        problems.append('缺少 canonical audit 报告，无法确认数据完整性')
     else:
         try:
-            ar = json.loads(audit_path.read_text(encoding="utf-8"))
+            ar = json.loads(audit_path.read_text(encoding='utf-8'))
             result = validation_result_from_report(ar)
             if not result.passed:
-                problems.extend(f"audit 未通过: {error}" for error in result.errors)
+                problems.extend((f'audit 未通过: {error}' for error in result.errors))
         except (OSError, UnicodeError, json.JSONDecodeError, RecursionError) as exc:
-            problems.append(f"audit 报告读取失败: {exc}")
+            problems.append(f'audit 报告读取失败: {exc}')
     return problems
 
 
@@ -192,7 +215,7 @@ def plan_cleanup(dataset_episode_dir, cams, profile="research_minimal", dry_run=
     """计算 cleanup 计划。返回 dict 报告。"""
     dataset_episode_dir = Path(dataset_episode_dir)
     gate_problems = _validation_gate(dataset_episode_dir, resolved=resolved)
-    to_delete = collect_transient(dataset_episode_dir, cams, profile)
+    to_delete = collect_transient(dataset_episode_dir, cams, profile, resolved=resolved)
 
     delete_bytes = sum(to_delete.values())
     # keep = 全部文件 - 待删
@@ -200,7 +223,7 @@ def plan_cleanup(dataset_episode_dir, cams, profile="research_minimal", dry_run=
     keep_bytes = 0
     for f in dataset_episode_dir.rglob("*"):
         if f.is_file():
-            if str(f) not in to_delete:
+            if str(f) not in to_delete or gate_problems:
                 keep_files += 1
                 keep_bytes += f.stat().st_size
 
@@ -216,6 +239,7 @@ def plan_cleanup(dataset_episode_dir, cams, profile="research_minimal", dry_run=
         "would_keep_bytes": keep_bytes,
         "would_keep_gb": round(keep_bytes / 1e9, 3),
         "would_delete": sorted(to_delete.keys()),
+        "blocked_delete": bool(gate_problems),
     }
     return report
 
@@ -227,7 +251,7 @@ def apply_cleanup(dataset_episode_dir, cams, profile="research_minimal", resolve
     if gate_problems:
         return {"ok": False, "reason": "validation_gate_failed",
                 "gate_problems": gate_problems, "deleted_files": 0, "deleted_bytes": 0}
-    to_delete = collect_transient(dataset_episode_dir, cams, profile)
+    to_delete = collect_transient(dataset_episode_dir, cams, profile, resolved=resolved)
     deleted = 0
     deleted_bytes = 0
     for path in to_delete:
@@ -282,4 +306,3 @@ def build_manifest(dataset_episode_dir, resolved, cams) -> dict:
     manifest["final_dataset_bytes"] = total
     manifest["final_dataset_gb"] = round(total / 1e9, 3)
     return manifest
-

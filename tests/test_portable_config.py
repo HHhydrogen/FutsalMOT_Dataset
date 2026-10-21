@@ -489,3 +489,13 @@ def test_appearance_export_failure_removes_only_appearance_manifest(
     provenance = Path(resolved.trajectory_output) / "provenance"
     assert not (provenance / "appearance.json").exists()
     assert (provenance / "keep.json").read_text(encoding="utf-8") == "keep"
+
+
+@pytest.fixture(autouse=True)
+def isolate_runtime_machine_paths(monkeypatch, tmp_path):
+    """路径优先级测试只读取临时仓库，避免开发机 local.json 或环境变量污染。"""
+    from grf_ue_bridge.config import paths
+
+    monkeypatch.setattr(paths, "default_repo_root", lambda: tmp_path / "repo")
+    for name in ("FUTSALMOT_DATASET_ROOT", "FUTSALMOT_UE_ROOT", "FUTSALMOT_UE_PROJECT_ROOT"):
+        monkeypatch.delenv(name, raising=False)

@@ -348,3 +348,198 @@ class TestRecoverRenderToImg1:
         assert status == "partial"
         assert per_cam["Cam_01"]["mask_frames"] == 2
         assert per_cam["Cam_01"]["ok"] is False
+
+
+def test_task_export_writes_valid_appearance_and_environment_manifests_together(
+    tmp_path, monkeypatch
+):
+    import grf_ue_bridge.workflows.task_export as task_export
+    from grf_ue_bridge.appearance import (
+        build_appearance_manifest,
+        validate_appearance_manifest,
+    )
+    from grf_ue_bridge.environment import (
+        build_environment_manifest,
+        environment_catalog_fingerprint,
+        validate_environment_manifest,
+    )
+    from test_appearance import appearance_catalog, appearance_meta
+
+    episode = tmp_path / "episode"
+    appearance_profile = appearance_catalog()
+    environment_profile = {
+        "mode": "seeded",
+        "policy": "futsalmot_environment_v1_5",
+        "catalog_id": "futsalmot_indoor_environment_v1_5",
+        "environment_seed": 42,
+        "preset": "daylight_clear_v1",
+        "catalog_fingerprint": environment_catalog_fingerprint(),
+    }
+    resolved = SimpleNamespace(
+        task_id="combined-export",
+        episode_name="episode",
+        dataset_root=str(tmp_path),
+        trajectory_output=str(episode),
+        source_task_file=str(tmp_path / "task.json"),
+        repo_root=str(tmp_path),
+        actor_mapping=str(tmp_path / "mapping.json"),
+        export_profile={"scenario": "5_vs_5", "seed": 42, "num_steps": 1},
+        ue_profile={
+            "appearance": appearance_profile,
+            "environment_profile": environment_profile,
+        },
+    )
+
+    meta = appearance_meta()
+    meta["episode_id"] = "episode"
+
+    def fake_export_episode(_cfg, _result, output):
+        output.mkdir(parents=True, exist_ok=True)
+        (output / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+        (output / "frames.jsonl").write_bytes(b'{"step":0}\n')
+
+    monkeypatch.setattr(task_export, "_write_provenance", lambda *_args: None)
+    monkeypatch.setattr("grf_ue_bridge.grf_runner.run_episode", lambda **_kwargs: object())
+    monkeypatch.setattr("grf_ue_bridge.exporter.export_episode", fake_export_episode)
+    monkeypatch.setattr("grf_ue_bridge.validator.validate_episode", lambda _path: 0)
+
+    assert task_export.run_export(resolved, print_fn=lambda _message: None) == 0
+    frames_path = episode / "frames.jsonl"
+    written_meta = json.loads((episode / "meta.json").read_text(encoding="utf-8"))
+    appearance_manifest = json.loads(
+        (episode / "provenance" / "appearance.json").read_text(encoding="utf-8")
+    )
+    environment_manifest = json.loads(
+        (episode / "provenance" / "environment.json").read_text(encoding="utf-8")
+    )
+    assert validate_appearance_manifest(
+        appearance_manifest,
+        meta=written_meta,
+        frames_path=frames_path,
+        catalog=appearance_profile,
+    ) == []
+    assert validate_environment_manifest(
+        environment_manifest,
+        meta=written_meta,
+        frames_path=frames_path,
+        profile=environment_profile,
+    ) == []
+
+
+def test_task_export_writes_environment_manifest_independently_of_appearance(
+    tmp_path, monkeypatch
+):
+    import grf_ue_bridge.workflows.task_export as task_export
+    from grf_ue_bridge.environment import environment_catalog_fingerprint
+
+    episode = tmp_path / "episode"
+    profile = {
+        "mode": "seeded",
+        "policy": "futsalmot_environment_v1_5",
+        "catalog_id": "futsalmot_indoor_environment_v1_5",
+        "environment_seed": 42,
+        "preset": "daylight_clear_v1",
+        "catalog_fingerprint": environment_catalog_fingerprint(),
+    }
+    resolved = SimpleNamespace(
+        task_id="environment-export",
+        episode_name="episode",
+        dataset_root=str(tmp_path),
+        trajectory_output=str(episode),
+        source_task_file=str(tmp_path / "task.json"),
+        repo_root=str(tmp_path),
+        actor_mapping=str(tmp_path / "mapping.json"),
+        export_profile={"scenario": "5_vs_5", "seed": 42, "num_steps": 1},
+        ue_profile={"environment_profile": profile},
+    )
+
+    def fake_run_episode(**_kwargs):
+        return object()
+
+    def fake_export_episode(_cfg, _result, output):
+        output.mkdir(parents=True, exist_ok=True)
+        (output / "meta.json").write_text(
+            json.dumps({"episode_id": "episode"}), encoding="utf-8"
+        )
+        (output / "frames.jsonl").write_bytes(b'{"step":0}\n')
+
+    monkeypatch.setattr(task_export, "_write_provenance", lambda *_args: None)
+    monkeypatch.setattr("grf_ue_bridge.grf_runner.run_episode", fake_run_episode)
+    monkeypatch.setattr("grf_ue_bridge.exporter.export_episode", fake_export_episode)
+    monkeypatch.setattr("grf_ue_bridge.validator.validate_episode", lambda _path: 0)
+
+    assert task_export.run_export(resolved, print_fn=lambda _message: None) == 0
+    assert (episode / "provenance" / "environment.json").is_file()
+
+
+def test_task_export_keeps_residual_environment_manifest_when_profile_is_absent(
+    tmp_path, monkeypatch
+):
+    import grf_ue_bridge.workflows.task_export as task_export
+
+    episode = tmp_path / "episode"
+    residual = episode / "provenance" / "environment.json"
+    residual.parent.mkdir(parents=True)
+    residual.write_text("legacy", encoding="utf-8")
+    resolved = SimpleNamespace(
+        task_id="legacy-export",
+        episode_name="episode",
+        dataset_root=str(tmp_path),
+        trajectory_output=str(episode),
+        source_task_file=str(tmp_path / "task.json"),
+        repo_root=str(tmp_path),
+        actor_mapping=str(tmp_path / "mapping.json"),
+        export_profile={"scenario": "5_vs_5", "seed": 42, "num_steps": 1},
+        ue_profile={},
+    )
+
+    monkeypatch.setattr(task_export, "_write_provenance", lambda *_args: None)
+    monkeypatch.setattr("grf_ue_bridge.grf_runner.run_episode", lambda **_kwargs: object())
+    monkeypatch.setattr("grf_ue_bridge.exporter.export_episode", lambda *_args: None)
+
+    assert task_export.run_export(resolved, print_fn=lambda _message: None) == 0
+    assert residual.read_text(encoding="utf-8") == "legacy"
+
+
+def test_task_export_deletes_only_environment_manifest_created_by_active_run(
+    tmp_path, monkeypatch
+):
+    import grf_ue_bridge.workflows.task_export as task_export
+    from grf_ue_bridge.environment import environment_catalog_fingerprint
+
+    episode = tmp_path / "episode"
+    old_environment = episode / "provenance" / "environment.json"
+    old_environment.parent.mkdir(parents=True)
+    old_environment.write_text("old", encoding="utf-8")
+    profile = {
+        "mode": "seeded",
+        "policy": "futsalmot_environment_v1_5",
+        "catalog_id": "futsalmot_indoor_environment_v1_5",
+        "environment_seed": 42,
+        "preset": "daylight_clear_v1",
+        "catalog_fingerprint": environment_catalog_fingerprint(),
+    }
+    resolved = SimpleNamespace(
+        task_id="environment-export-failure",
+        episode_name="episode",
+        dataset_root=str(tmp_path),
+        trajectory_output=str(episode),
+        source_task_file=str(tmp_path / "task.json"),
+        repo_root=str(tmp_path),
+        actor_mapping=str(tmp_path / "mapping.json"),
+        export_profile={"scenario": "5_vs_5", "seed": 42, "num_steps": 1},
+        ue_profile={"environment_profile": profile},
+    )
+
+    monkeypatch.setattr(task_export, "_write_provenance", lambda *_args: None)
+    monkeypatch.setattr("grf_ue_bridge.grf_runner.run_episode", lambda **_kwargs: object())
+    monkeypatch.setattr("grf_ue_bridge.exporter.export_episode", lambda *_args: None)
+
+    try:
+        task_export.run_export(resolved, print_fn=lambda _message: None)
+    except Exception:
+        pass
+    assert not old_environment.exists()
+
+
+from types import SimpleNamespace

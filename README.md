@@ -57,6 +57,15 @@ uv run grf-ue task resolve configs/pose_smoke_3frames_1cam.json
 uv run grf-ue task export configs/pose_smoke_3frames_1cam.json
 ```
 
+v1.5 environment smoke 的 P1 静态入口为：
+
+```powershell
+uv run grf-ue task validate configs/player_environment_smoke_3frames_4cam.json
+uv run grf-ue task export configs/player_environment_smoke_3frames_4cam.json
+```
+
+按任务 seed 自动确定天气可使用 `configs/weather_seeded_smoke_3frames_4cam.json`。它设置 `ue.environment.preset="auto"` 并省略 `environment_seed`，因此使用 `export.seed`；也可把 preset 改为明确状态，或单独指定 environment seed，使轨迹、球员和天气可独立控制。八档状态为晴天、阴天、暖傍晚、冷暮光、薄雾、多云、清晨和场馆灯夜间，具体 ID、太阳/补光基准和复现边界见数据契约。该配置不启用 appearance/号码或 Pose，不能作为这些功能的联合验收。
+
 `task validate` 只读检查 task schema、格式、相机数、按 `num_steps * target_fps/10` 计算的预期帧数和部分时长条件。`task resolve` 将单文件 task 解析为运行时契约，并写入被忽略的 `.futsalmot/runtime/<task_id>/resolved-task.json`。`task export` 调用 GRF 并在 `<dataset_root>/<episode_name>/` 写入 `meta.json`、`frames.jsonl` 和 `provenance/`。
 
 `task export` 内部会在需要时为时间缩放采集更多 GRF 源步，再按 task 的 `target_fps` 产生数据集帧。GRF 运行器强制使用 `representation="raw"`、`action_set="v2"`、左队名义控制 1 名球员并发送 `action_builtin_ai` 动作，因此实际轨迹是双方内置 AI 对局，而不是用户控制球员的交互轨迹。
@@ -104,7 +113,7 @@ uv run grf-ue task manifest configs/pose_smoke_3frames_1cam.json
 uv run grf-ue task cleanup configs/pose_smoke_3frames_1cam.json
 ```
 
-`task postprocess` 按顺序运行 Cryptomatte EXR -> `mask/`、`annotate-masks`、标注验证，以及可选的 YOLO Pose 和 debug 可视化。`task audit` 写入 episode 下的 `audit/soak_audit_report.json` 和 `.md`，检查相机、帧数、RGB、Mask、同步、ID 映射、标定、渲染完成标记和可选 Pose。`task manifest` 写入 episode 级 `dataset_manifest.json` 和 `checksums/` 中的校验文件。`task cleanup` 默认只做 dry-run；只有显式 `--apply` 才会删除已列入清理集合的临时产物。当前清理门禁和配置限制见 `docs/VALIDATION_AND_LIMITATIONS.md`。
+`task postprocess` 按顺序运行 Cryptomatte EXR -> `mask/`、`annotate-masks`、标注验证，以及可选的 YOLO Pose 和 debug 可视化。`task audit` 写入 episode 下的 `audit/soak_audit_report.json` 和 `.md`，检查相机、帧数、RGB、Mask、同步、ID 映射、标定、渲染完成标记、可选 Pose，以及 active v1.5 environment 的 manifest/report/fingerprint/restore 门禁。`task manifest` 写入 episode 级 `dataset_manifest.json` 和 `checksums/` 中的校验文件。`task cleanup` 默认只做 dry-run；只有显式 `--apply` 才会删除已列入清理集合的临时产物，canonical environment provenance 永远保留。当前清理门禁和配置限制见 `docs/VALIDATION_AND_LIMITATIONS.md`。
 
 ## CLI 总览
 

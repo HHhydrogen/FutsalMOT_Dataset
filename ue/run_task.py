@@ -25,6 +25,7 @@ import os
 import re
 import sys
 from pathlib import Path
+from typing import Mapping
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -40,6 +41,8 @@ _UE_MODULE_NAMES = (
     "build_coco17",
     "player_motion", "camera_distribution", "player_visuals",
     "episode_appearance",
+    "episode_environment",
+    "diagnose_episode_environment",
 )
 for _name in _UE_MODULE_NAMES:
     if _name in sys.modules:
@@ -54,6 +57,38 @@ for _name in _UE_MODULE_NAMES:
 def _fail(msg: str, code: int = 2) -> int:
     print(f"ERROR: {msg}", file=sys.stderr)
     return code
+
+
+def _fail_with_episode_transaction(transaction, msg: str, reason: str) -> int:
+    """在已应用的 episode transaction 上记录并执行同步失败恢复。"""
+    if transaction is not None:
+        try:
+            transaction.record_downstream_failure(RuntimeError(msg))
+        except Exception as report_exc:
+            print(
+                "ERROR: 无法记录 episode downstream 失败: {}".format(report_exc),
+                file=sys.stderr,
+            )
+        if (
+            getattr(transaction, "restore_result", None) is None
+            and not getattr(transaction, "callback_ownership_transferred", False)
+        ):
+            try:
+                restored = transaction.restore(reason)
+            except Exception as restore_exc:
+                return _fail(
+                    "{}；episode transaction restore 异常: {}".format(
+                        msg, restore_exc
+                    )
+                )
+            if not restored.get("ok"):
+                return _fail(
+                    "{}；episode transaction restore 失败: {}".format(
+                        msg,
+                        "; ".join(restored.get("errors") or ["未知错误"]),
+                    )
+                )
+    return _fail(msg)
 
 
 POSE_KEYPOINTS_SCHEMA = "grf_ue_pose_keypoints"
@@ -159,6 +194,24 @@ def _appearance_enabled_for_mode(ue_profile, mode):
     return mode in ("sequence", "annotations", "full", "render") and ue_profile.get("appearance") is not None
 
 
+
+
+def _render_environment_options(prepared):
+    """返回渲染规划所需的 environment 可移植 metadata。"""
+    if prepared is None:
+        return {}
+    manifest = prepared.get("manifest") or {}
+    preflight = prepared.get("preflight") or {}
+    return {
+        "environment_active": True,
+        "environment_policy": manifest.get("policy"),
+        "environment_manifest_fingerprint": manifest.get("fingerprint"),
+        "environment_preset": manifest.get("preset"),
+        "environment_preflight_verified": preflight.get("ok") is True,
+        "environment_transaction_state": "applied",
+    }
+
+
 def _validate_appearance_exclusivity(appearance, player_visuals):
     """拒绝同时配置静态外观和 episode seeded appearance。"""
     if appearance is not None and player_visuals is not None:
@@ -177,7 +230,94 @@ def _appearance_runtime_paths(repo_root, task_id):
     )
 
 
-def _retire_appearance_runtime_evidence(rollback_path, report_path):
+def _environment_enabled_for_mode(ue_profile, mode):
+    """仅由当前 resolved environment profile 激活 v1.5。"""
+    profile = ue_profile.get("environment_profile")
+    return (
+        mode in ("sequence", "annotations", "full", "render")
+        and isinstance(profile, dict)
+        and profile.get("policy") == "futsalmot_environment_v1_5"
+    )
+
+
+def _environment_runtime_paths(repo_root, task_id):
+    """返回与 appearance 完全独立的本机 environment 恢复证据路径。"""
+    task_id = str(task_id or "task")
+    if not task_id or any(
+        char not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+        for char in task_id
+    ):
+        raise ValueError("task_id 含有不允许用于 runtime 目录的字符")
+    runtime_dir = Path(repo_root) / ".futsalmot" / "runtime" / task_id
+    return (
+        runtime_dir / "environment-rollback.json",
+        runtime_dir / "environment-application.json",
+    )
+
+
+def _prepare_episode_environment(
+    ue_profile, mode, episode_dir, repo_root, task_id
+):
+    """校验环境 manifest、轨迹和 Task 3 diagnostic，不修改 UE 状态。"""
+    if not _environment_enabled_for_mode(ue_profile, mode):
+        return None
+    import episode_environment as adapter
+
+    episode_dir = Path(episode_dir)
+    meta_path = episode_dir / "meta.json"
+    frames_path = episode_dir / "frames.jsonl"
+    manifest_path = episode_dir / "provenance" / "environment.json"
+    for required in (meta_path, frames_path, manifest_path):
+        if not required.is_file():
+            raise ValueError("environment 输入文件缺失: {}".format(required.name))
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    profile = dict(ue_profile["environment_profile"])
+    profile.update(
+        {
+            "_episode_dir": episode_dir,
+            "_frames_path": frames_path,
+            "_meta": meta,
+        }
+    )
+    preflight = adapter.preflight_episode_environment(manifest, profile)
+    if not preflight.get("ok"):
+        raise RuntimeError(
+            "MANUAL_REQUIRED: episode environment preflight failed: {}".format(
+                "; ".join(preflight.get("errors") or ["未知错误"])
+            )
+        )
+    snapshot_path, report_path = _environment_runtime_paths(repo_root, task_id)
+    public_report_path = episode_dir / "provenance" / "environment_application.json"
+    if snapshot_path.exists() or report_path.exists():
+        raise RuntimeError(
+            "MANUAL_REQUIRED: environment recovery evidence 已存在，拒绝覆盖"
+        )
+    if public_report_path.exists():
+        try:
+            existing = json.loads(public_report_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError, RecursionError) as exc:
+            raise RuntimeError(
+                "MANUAL_REQUIRED: 既有 environment report 无法验证，拒绝覆盖"
+            ) from exc
+        if not isinstance(existing, dict) or existing.get("state") not in {
+            "not_started", "preflight_failed", "restored"
+        }:
+            raise RuntimeError(
+                "MANUAL_REQUIRED: 既有 environment report 未终结或状态未知"
+            )
+    return {
+        "adapter": adapter,
+        "manifest": manifest,
+        "profile": profile,
+        "preflight": preflight,
+        "snapshot_path": snapshot_path,
+        "report_path": report_path,
+        "public_report_path": public_report_path,
+    }
+
+
+def _retire_runtime_evidence(rollback_path, report_path, label):
     """删除已验证恢复证据；任一删除失败时恢复已删文件。"""
     paths = [Path(rollback_path), Path(report_path)]
     backups = {}
@@ -185,7 +325,7 @@ def _retire_appearance_runtime_evidence(rollback_path, report_path):
         if path.is_file():
             backups[path] = path.read_bytes()
         elif path.exists():
-            raise RuntimeError("appearance 恢复证据不是普通文件: {}".format(path))
+            raise RuntimeError("{} 恢复证据不是普通文件: {}".format(label, path))
     removed = []
     try:
         for path in paths:
@@ -203,10 +343,20 @@ def _retire_appearance_runtime_evidence(rollback_path, report_path):
                 path.write_bytes(backups[path])
             except Exception as restore_exc:
                 restore_errors.append("{}: {}".format(path, restore_exc))
-        detail = "appearance 恢复证据清理失败: {}".format(exc)
+        detail = "{} 恢复证据清理失败: {}".format(label, exc)
         if restore_errors:
             detail += "; 无法恢复已删除证据: {}".format("; ".join(restore_errors))
         raise RuntimeError(detail) from exc
+
+
+def _retire_appearance_runtime_evidence(rollback_path, report_path):
+    """删除已验证 appearance 恢复证据。"""
+    return _retire_runtime_evidence(rollback_path, report_path, "appearance")
+
+
+def _retire_environment_runtime_evidence(rollback_path, report_path):
+    """删除已验证 environment 恢复证据。"""
+    return _retire_runtime_evidence(rollback_path, report_path, "environment")
 
 
 def _recovery_render_result(report):
@@ -533,6 +683,279 @@ class _AppearanceTransaction:
         return portable_result
 
 
+
+def _portable_environment_render_result(render_result):
+    """抽取 environment report 需要的 portable render terminal 记录。"""
+    if not isinstance(render_result, Mapping):
+        return None
+    cameras = render_result.get("cameras")
+    if isinstance(cameras, Mapping):
+        records = [
+            {
+                "camera_id": camera_id,
+                "status": _portable_camera_status(value),
+            }
+            for camera_id, value in cameras.items()
+        ]
+    elif isinstance(cameras, list):
+        records = [
+            {"camera_id": camera.get("camera_id"), "status": _portable_camera_status(camera)}
+            for camera in cameras
+            if isinstance(camera, Mapping)
+        ]
+    else:
+        records = []
+    return {
+        "status": render_result.get("status"),
+        "cameras": records,
+        "environment_restore_ready": render_result.get("environment_restore_ready"),
+    }
+
+
+def _portable_camera_status(value):
+    """把 camera 记录归一化为 terminal 状态字符串。"""
+    if not isinstance(value, Mapping):
+        return None
+    status = value.get("status")
+    if isinstance(status, str) and status:
+        return status
+    ok = value.get("ok")
+    if ok is True:
+        return "success"
+    if ok is False:
+        return "failed"
+    return None
+
+
+class _EnvironmentTransaction:
+    """独立持有 environment rollback/report 生命周期。"""
+    def __init__(self, adapter, snapshot_path, report_path, public_report_path):
+        self.adapter = adapter
+        self.snapshot_path = Path(snapshot_path)
+        self.report_path = Path(report_path)
+        self.public_report_path = Path(public_report_path)
+        self.restore_result = None
+
+    def mark_rendering(self):
+        if not self.report_path.is_file():
+            return
+        report = self.adapter._read_json(self.report_path)
+        report["state"] = "rendering"
+        self.adapter._write_json(self.report_path, report)
+        self.adapter._write_json(self.public_report_path, report)
+
+    def record_downstream_failure(self, exc):
+        if not self.report_path.is_file():
+            return
+        report = self.adapter._read_json(self.report_path)
+        report.setdefault("errors", []).append(
+            "downstream work raised {}".format(type(exc).__name__)
+        )
+        self.adapter._write_json(self.report_path, report)
+        self.adapter._write_json(self.public_report_path, report)
+
+    def restore(self, reason, render_result=None):
+        if self.restore_result is not None:
+            return self.restore_result
+        self.restore_result = self.adapter.restore_episode_environment(
+            self.snapshot_path, self.report_path,
+            {"reason": reason, "render_result": render_result},
+        )
+        if self.report_path.is_file():
+            try:
+                report = self.adapter._read_json(self.report_path)
+                report["state"] = (
+                    "restored" if self.restore_result.get("ok") else "restore_failed"
+                )
+                report["restore_status"] = (
+                    "restored" if self.restore_result.get("ok") else "failed"
+                )
+                if not self.restore_result.get("ok"):
+                    report.setdefault("errors", []).extend(
+                        self.restore_result.get("errors") or ["environment restore failed"]
+                    )
+                if render_result is not None:
+                    report["render_result"] = _portable_environment_render_result(
+                        render_result
+                    )
+                self.adapter._write_json(self.report_path, report)
+                self.adapter._write_json(self.public_report_path, report)
+            except Exception as report_exc:
+                self.restore_result = {
+                    "ok": False,
+                    "state": "restore_failed",
+                    "status": "MANUAL_REQUIRED",
+                    "errors": list(self.restore_result.get("errors") or [])
+                    + ["environment report publication failed: {}".format(report_exc)],
+                }
+        if self.restore_result.get("ok"):
+            try:
+                _retire_environment_runtime_evidence(
+                    self.snapshot_path, self.report_path
+                )
+            except Exception as retire_exc:
+                self.restore_result = {
+                    "ok": False,
+                    "state": "restore_failed",
+                    "status": "MANUAL_REQUIRED",
+                    "errors": ["environment 恢复证据清理失败: {}".format(retire_exc)],
+                }
+        return self.restore_result
+
+
+def _apply_prepared_environment(prepared):
+    """应用已通过只读诊断的 environment transaction。"""
+    result = prepared["adapter"].apply_episode_environment(
+        prepared["manifest"],
+        prepared["profile"],
+        prepared["snapshot_path"],
+        prepared["report_path"],
+    )
+    if not result.get("ok"):
+        if prepared["report_path"].is_file():
+            prepared["adapter"]._write_json(
+                prepared["public_report_path"],
+                prepared["adapter"]._read_json(prepared["report_path"]),
+            )
+        raise RuntimeError(
+            "episode environment apply 失败: {}".format(
+                "; ".join(result.get("errors") or ["MANUAL_REQUIRED"])
+            )
+        )
+    return _EnvironmentTransaction(
+        prepared["adapter"],
+        prepared["snapshot_path"],
+        prepared["report_path"],
+        prepared["public_report_path"],
+    )
+
+
+def _apply_prepared_environment_and_appearance(environment_prepared, appearance_prepared):
+    """按顺序应用两笔独立事务，失败时回滚已成功应用的另一笔。"""
+    environment_transaction = None
+    appearance_transaction = None
+    try:
+        if environment_prepared is not None:
+            environment_transaction = (
+                environment_prepared.apply()
+                if hasattr(environment_prepared, "apply")
+                else _apply_prepared_environment(environment_prepared)
+            )
+        if appearance_prepared is not None:
+            appearance_transaction = (
+                appearance_prepared.apply()
+                if hasattr(appearance_prepared, "apply")
+                else _apply_prepared_appearance(appearance_prepared)
+            )
+    except BaseException:
+        if appearance_transaction is not None:
+            appearance_transaction.restore("apply_failed")
+        if environment_transaction is not None:
+            environment_transaction.restore("apply_failed")
+        raise
+    if environment_transaction is None:
+        return appearance_transaction
+    if appearance_transaction is None:
+        return environment_transaction
+    return _CombinedEnvironmentAppearanceTransaction(
+        environment_transaction, appearance_transaction
+    )
+
+
+def _combine_environment_appearance_transactions(
+    environment_transaction, appearance_transaction
+):
+    if environment_transaction is None:
+        return appearance_transaction
+    if appearance_transaction is None:
+        return environment_transaction
+    return _CombinedEnvironmentAppearanceTransaction(
+        environment_transaction, appearance_transaction
+    )
+
+
+class _CombinedEnvironmentAppearanceTransaction:
+    """共同持有 MRQ lifecycle，但分别写入和恢复两类 report。"""
+
+    def __init__(self, environment_transaction, appearance_transaction):
+        self.environment = environment_transaction
+        self.appearance = appearance_transaction
+        self.restore_result = None
+        self.render_deferred = False
+        self.callback_ownership_transferred = False
+
+    def mark_rendering(self):
+        self.environment.mark_rendering()
+        self.appearance.mark_rendering()
+
+    def record_downstream_failure(self, exc):
+        if hasattr(self.appearance, "record_downstream_failure"):
+            self.appearance.record_downstream_failure(exc)
+        if hasattr(self.environment, "record_downstream_failure"):
+            self.environment.record_downstream_failure(exc)
+
+    def restore(self, final_status, render_result=None):
+        if self.restore_result is not None:
+            return self.restore_result
+        try:
+            appearance_result = self.appearance.restore(final_status, render_result)
+        except BaseException as exc:
+            appearance_result = {
+                "ok": False,
+                "state": "restore_failed",
+                "errors": [
+                    "appearance restore exception: {}: {}".format(
+                        type(exc).__name__, exc
+                    )
+                ],
+            }
+        try:
+            environment_result = self.environment.restore(final_status, render_result)
+        except BaseException as exc:
+            environment_result = {
+                "ok": False,
+                "state": "restore_failed",
+                "errors": [
+                    "environment restore exception: {}: {}".format(
+                        type(exc).__name__, exc
+                    )
+                ],
+            }
+        self.render_deferred = bool(self.appearance.render_deferred)
+        self.callback_ownership_transferred = bool(
+            self.appearance.callback_ownership_transferred
+        )
+        errors = []
+        if not appearance_result.get("ok"):
+            errors.extend(appearance_result.get("errors") or ["appearance restore failed"])
+        if not environment_result.get("ok"):
+            errors.extend(environment_result.get("errors") or ["environment restore failed"])
+        self.restore_result = {
+            "ok": not errors,
+            "state": "restored" if not errors else "restore_failed",
+            "errors": errors,
+        }
+        return self.restore_result
+
+    def _record_incomplete_render_result(self, render_result):
+        result = self.appearance._record_incomplete_render_result(render_result)
+        environment_result = self.environment.restore("failed", render_result)
+        if not environment_result.get("ok"):
+            errors = list(result.get("errors") or [])
+            errors.extend(
+                environment_result.get("errors") or ["environment restore failed"]
+            )
+            return {
+                "ok": False,
+                "operation": "restore_deferred",
+                "state": "restore_failed",
+                "errors": errors,
+                "restore_deferred": True,
+            }
+        self.render_deferred = True
+        return result
+
+
 def _prepare_episode_appearance(
     ue_profile, mode, episode_dir, mapping, repo_root, task_id, player_visuals=None
 ):
@@ -603,6 +1026,7 @@ def _prepare_episode_appearance(
     }
 
 
+
 def _apply_prepared_appearance(prepared):
     """应用已完成纯输入和 Editor roster preflight 的外观事务。"""
     result = prepared["adapter"].apply_episode_appearance(
@@ -653,6 +1077,7 @@ def _apply_prepared_appearance(prepared):
             ) from report_exc
         raise
     return transaction
+
 
 
 def _run_with_optional_appearance(transaction, downstream):
@@ -716,7 +1141,16 @@ def _submit_render_with_appearance(render_submit, transaction):
             final_status = "failed"
         if final_status not in {"success", "failed", "cancelled", "canceled", "no_render"}:
             final_status = "failed"
-        result = transaction.restore(final_status, render_result)
+        if render_result.get("appearance_restore_ready") is False:
+            transaction.callback_ownership_transferred = True
+            result = transaction._record_incomplete_render_result(render_result)
+        elif (
+            render_result.get("environment_restore_ready") is False
+            and not hasattr(transaction, "_record_incomplete_render_result")
+        ):
+            result = transaction.restore(final_status, render_result)
+        else:
+            result = transaction.restore(final_status, render_result)
         if not result.get("ok"):
             raise RuntimeError(
                 "MRQ callback appearance restore 失败: {}".format(
@@ -746,7 +1180,7 @@ def _submit_render_with_appearance(render_submit, transaction):
         if (
             transaction.restore_result is None
             or not transaction.restore_result.get("ok")
-        ):
+        ) and not transaction.render_deferred:
             raise RuntimeError("render 在 submit 返回前终止，但 appearance restore/report 未成功")
         return result
     if result.get("callback_ownership_transferred") is not True:
@@ -766,14 +1200,17 @@ def _submit_render_with_appearance(render_submit, transaction):
                         "; ".join(restored.get("errors") or ["未知错误"])
                     )
                 )
-        if transaction.restore_result is None or not transaction.restore_result.get("ok"):
+        if (
+            transaction.restore_result is None
+            or not transaction.restore_result.get("ok")
+        ) and not transaction.render_deferred:
             raise RuntimeError("render 已同步终止，但 appearance 未成功恢复")
         return result
     transaction.callback_ownership_transferred = True
     if callback_called and (
         transaction.restore_result is None
         or not transaction.restore_result.get("ok")
-    ):
+    ) and not transaction.render_deferred:
         raise RuntimeError("render callback 已执行但 appearance 未成功恢复")
     return result
 
@@ -869,296 +1306,209 @@ def _load_resolved_task(args) -> dict:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="按 resolved task 运行 UE 导入/渲染")
-    ap.add_argument("--resolved-task", required=False, help="resolved task JSON 路径（或环境变量 C5_RESOLVED_TASK）")
-    ap.add_argument(
-        "--mode", default=None,
-        choices=["sequence", "annotations", "full", "render", "pose-finalize"],
-        help="覆盖执行模式（缺省 full）",
-    )
+    ap = argparse.ArgumentParser(description='按 resolved task 运行 UE 导入/渲染')
+    ap.add_argument('--resolved-task', required=False, help='resolved task JSON 路径（或环境变量 C5_RESOLVED_TASK）')
+    ap.add_argument('--mode', default=None, choices=['sequence', 'annotations', 'full', 'render', 'pose-finalize'], help='覆盖执行模式（缺省 full）')
     args = ap.parse_args()
-    # MCP run_python_file 不支持传 argv，用环境变量 C5_RUN_MODE 兜底（--mode 优先）
-    mode = args.mode or os.environ.get("C5_RUN_MODE") or "full"
+    mode = args.mode or os.environ.get('C5_RUN_MODE') or 'full'
     rt = _load_resolved_task(args)
-
-    import unreal  # noqa: F401  （确保 unreal 可用）
-
-    ue_profile = rt.get("ue_profile") or {}
-    ann_cfg = dict(ue_profile.get("annotation_export") or {})
-    export_profile = rt.get("export_profile") or {}
-    if export_profile.get("playback_fps") is not None:
-        # render_episode 的 canonical 帧映射必须使用 Sequence display rate，
-        # 不能回退到 MRQ 输出 frame_rate；两者在 10fps 轨迹 + 30fps Sequence
-        # 的任务中明确不同。
-        ann_cfg["playback_fps"] = int(export_profile["playback_fps"])
-    pose_cfg = (rt.get("postprocess") or {}).get("yolo_pose") or {}
-    pose_enabled = bool(pose_cfg.get("enabled", False))
-    episode_dir = Path(rt["trajectory_output"])
-    dataset_root = Path(rt["dataset_root"])
-    mapping_path = Path(rt["actor_mapping"])
-    seq_list = ue_profile.get("sequences") or []
-    seq_pkg = ue_profile.get("sequence_package_path") or "/Game/FutsalMOT/Sequences"
-    replace_existing = bool(ue_profile.get("replace_existing", True))
-    ball_rolling = ue_profile.get("ball_rolling") or None
-    episode_name = rt.get("episode_name") or "episode"
-    requested_camera_ids = os.environ.get("C5_CAMERA_IDS")
-    camera_ids = (
-        [camera_id.strip() for camera_id in requested_camera_ids.split(",") if camera_id.strip()]
-        if requested_camera_ids
-        else None
-    )
-    camera_selection = _resolve_runtime_camera_selection(
-        rt,
-        legacy_sequences=seq_list,
-        legacy_cameras=ann_cfg.get("cameras") or ["CineCam_01"],
-        camera_ids=camera_ids,
-    )
-    camera_entries = camera_selection["entries"]
+    import unreal
+    ue_profile = rt.get('ue_profile') or {}
+    ann_cfg = dict(ue_profile.get('annotation_export') or {})
+    export_profile = rt.get('export_profile') or {}
+    if export_profile.get('playback_fps') is not None:
+        ann_cfg["playback_fps"] = int(export_profile['playback_fps'])
+    pose_cfg = (rt.get('postprocess') or {}).get('yolo_pose') or {}
+    pose_enabled = bool(pose_cfg.get('enabled', False))
+    episode_dir = Path(rt['trajectory_output'])
+    dataset_root = Path(rt['dataset_root'])
+    mapping_path = Path(rt['actor_mapping'])
+    seq_list = ue_profile.get('sequences') or []
+    seq_pkg = ue_profile.get('sequence_package_path') or '/Game/FutsalMOT/Sequences'
+    replace_existing = bool(ue_profile.get('replace_existing', True))
+    ball_rolling = ue_profile.get('ball_rolling') or None
+    episode_name = rt.get('episode_name') or 'episode'
+    requested_camera_ids = os.environ.get('C5_CAMERA_IDS')
+    camera_ids = [camera_id.strip() for camera_id in requested_camera_ids.split(',') if camera_id.strip()] if requested_camera_ids else None
+    camera_selection = _resolve_runtime_camera_selection(rt, legacy_sequences=seq_list, legacy_cameras=ann_cfg.get('cameras') or ['CineCam_01'], camera_ids=camera_ids)
+    camera_entries = camera_selection['entries']
     appearance_requested = _appearance_enabled_for_mode(ue_profile, mode)
-    if camera_selection["canonical"] and not appearance_requested:
+    environment_requested = _environment_enabled_for_mode(ue_profile, mode)
+    if camera_selection['canonical'] and (not appearance_requested) and (not environment_requested):
         _apply_resolved_anchor_cameras(camera_entries, ann_cfg)
-    seq_list = camera_selection["sequences"]
-    cameras = camera_selection["cameras"] or ["CineCam_01"]
-    if camera_selection["canonical"]:
-        # 旧模块仍接受 annotation_export.cameras；这里仅生成兼容适配值，
-        # 选择来源始终是 resolved simulation.camera + ue.camera_mapping。
-        ann_cfg["cameras"] = cameras
-        resolution = camera_selection["resolution"]
-        render_cfg = dict(ann_cfg.get("render_rgb") or {})
-        configured = (
-            render_cfg.get("output_resolution_x"),
-            render_cfg.get("output_resolution_y"),
-        )
+    seq_list = camera_selection['sequences']
+    cameras = camera_selection['cameras'] or ['CineCam_01']
+    if camera_selection['canonical']:
+        ann_cfg['cameras'] = cameras
+        resolution = camera_selection['resolution']
+        render_cfg = dict(ann_cfg.get('render_rgb') or {})
+        configured = (render_cfg.get('output_resolution_x'), render_cfg.get('output_resolution_y'))
         if configured != (None, None) and configured != tuple(resolution):
-            raise RuntimeError(
-                f"canonical camera resolution={tuple(resolution)} "
-                f"与 render_rgb.output_resolution={configured} 不一致"
-            )
-        render_cfg["output_resolution_x"], render_cfg["output_resolution_y"] = resolution
-        ann_cfg["render_rgb"] = render_cfg
-
-    # 帧数：实际输出帧 = num_steps × factor（target_fps>10 时 Hermite 插值）。
-    # 不能只取 export_profile.num_steps（否则 target_fps=30 时 playback 只到 num_steps，
-    # 导致 sequence 有 num_steps×factor 帧却只渲染前 num_steps 帧 → img1 缺帧）。
-    _export_ns = int(export_profile.get("num_steps") or 3)
-    _export_fps = int(export_profile.get("target_fps") or 10)
+            raise RuntimeError(f'canonical camera resolution={tuple(resolution)} 与 render_rgb.output_resolution={configured} 不一致')
+        (render_cfg['output_resolution_x'], render_cfg['output_resolution_y']) = resolution
+        ann_cfg['render_rgb'] = render_cfg
+    _export_ns = int(export_profile.get('num_steps') or 3)
+    _export_fps = int(export_profile.get('target_fps') or 10)
     _factor = max(1, _export_fps // 10)
     meta_timing_num_steps = _export_ns * _factor
-
     if not episode_dir.is_dir():
-        return _fail(f"trajectory 目录不存在（先运行 grf-ue task export）: {episode_dir}")
+        return _fail(f'trajectory 目录不存在（先运行 grf-ue task export）: {episode_dir}')
     if not mapping_path.is_file():
-        return _fail(f"actor mapping 不存在: {mapping_path}")
-
-    # 可选角色 Profile 门禁：旧 task 没有该字段时保持原有行为。
-    from player_visuals import (
-        apply_player_visuals,
-        normalize_player_visuals,
-        preflight_player_visuals,
-        write_player_visuals_provenance,
-    )
-
+        return _fail(f'actor mapping 不存在: {mapping_path}')
+    from player_visuals import apply_player_visuals, normalize_player_visuals, preflight_player_visuals, write_player_visuals_provenance
     from import_grf_episode import create_sequence, load_episode, load_mapping
     from annotation_exporter import export_annotations
     from render_episode import render_sequences
-
     mapping = load_mapping(mapping_path)
-    normalized_player_visuals = normalize_player_visuals(ue_profile.get("player_visuals"))
+    normalized_player_visuals = normalize_player_visuals(ue_profile.get('player_visuals'))
     try:
-        _validate_appearance_exclusivity(
-            ue_profile.get("appearance"), normalized_player_visuals
-        )
-        appearance_prepared = _prepare_episode_appearance(
-            ue_profile,
-            mode,
-            episode_dir,
-            mapping,
-            rt.get("repo_root", episode_dir.parent),
-            rt.get("task_id", "task"),
-            normalized_player_visuals,
-        )
+        environment_prepared = _prepare_episode_environment(ue_profile, mode, episode_dir, rt.get('repo_root', episode_dir.parent), rt.get('task_id', 'task'))
+        _validate_appearance_exclusivity(ue_profile.get('appearance'), normalized_player_visuals)
+        appearance_prepared = _prepare_episode_appearance(ue_profile, mode, episode_dir, mapping, rt.get('repo_root', episode_dir.parent), rt.get('task_id', 'task'), normalized_player_visuals)
     except (OSError, TypeError, ValueError, RuntimeError) as exc:
         return _fail(str(exc))
-
-    if camera_selection["canonical"] and appearance_prepared is not None:
-        _apply_resolved_anchor_cameras(camera_entries, ann_cfg)
-
+    episode_transaction = None
+    if environment_prepared is not None:
+        try:
+            episode_transaction = _apply_prepared_environment_and_appearance(environment_prepared, appearance_prepared)
+        except (OSError, TypeError, ValueError, RuntimeError) as exc:
+            return _fail(str(exc))
+    if camera_selection['canonical'] and (appearance_prepared is not None or environment_prepared is not None):
+        try:
+            _apply_resolved_anchor_cameras(camera_entries, ann_cfg)
+        except BaseException:
+            if episode_transaction is not None:
+                episode_transaction.restore('camera_apply_failed')
+            raise
     if normalized_player_visuals is not None:
-        rollback_path = (
-            Path(rt.get("repo_root", episode_dir.parent))
-            / ".futsalmot"
-            / "runtime"
-            / str(rt.get("task_id", "task"))
-            / "player-visuals-rollback.json"
-        )
-        if mode in ("full", "sequence"):
-            applied = apply_player_visuals(
-                normalized_player_visuals,
-                mapping,
-                rollback_path=str(rollback_path),
-            )
-            if not applied.get("ok"):
-                return _fail(f"player_visuals apply 失败: {applied.get('errors')}")
+        rollback_path = Path(rt.get('repo_root', episode_dir.parent)) / '.futsalmot' / 'runtime' / str(rt.get('task_id', 'task')) / 'player-visuals-rollback.json'
+        if mode in ('full', 'sequence'):
+            applied = apply_player_visuals(normalized_player_visuals, mapping, rollback_path=str(rollback_path))
+            if not applied.get('ok'):
+                return _fail_with_episode_transaction(episode_transaction, f"player_visuals apply 失败: {applied.get('errors')}", 'player_visuals_apply_failed')
         preflight = preflight_player_visuals(normalized_player_visuals, mapping)
-        if not preflight.get("ok"):
-            return _fail(f"player_visuals preflight 失败: {preflight.get('errors')}")
-        provenance_path = write_player_visuals_provenance(
-            episode_dir, normalized_player_visuals
-        )
-        print(f"  player_visuals provenance: {provenance_path}")
-
+        if not preflight.get('ok'):
+            return _fail_with_episode_transaction(episode_transaction, f"player_visuals preflight 失败: {preflight.get('errors')}", 'player_visuals_preflight_failed')
+        provenance_path = write_player_visuals_provenance(episode_dir, normalized_player_visuals)
+        print(f'  player_visuals provenance: {provenance_path}')
     print(f"run_task: task={rt.get('task_id')} episode={episode_name} mode={mode}")
-    print(f"  trajectory: {episode_dir}")
-    print(f"  dataset output root: {dataset_root}  (episode_id -> {dataset_root / episode_name})")
+    print(f'  trajectory: {episode_dir}')
+    print(f'  dataset output root: {dataset_root}  (episode_id -> {dataset_root / episode_name})')
     print(f"  sequences: {[s.get('name') for s in seq_list]}")
-    print(f"  cameras: {cameras}")
-    print(f"  num_steps={meta_timing_num_steps}  yolo_pose enabled: {pose_enabled}")
-
-    # ── pose-finalize 模式：渲染完成后导出 raw 13 骨 + 生成 12 点肢体 Pose ──
-    if mode == "pose-finalize":
-        os.environ["C5_POSE_TASK"] = str(args.resolved_task or os.environ.get("C5_RESOLVED_TASK"))
-        os.environ["C5_POSE_EXPECT"] = str(meta_timing_num_steps)
-        # 防止旧 pose_capture.jsonl / pose_session.json 被误读：
-        # 先删除旧文件，pose_capture_export 只在 capture_complete=True 时才写新文件。
+    print(f'  cameras: {cameras}')
+    print(f'  num_steps={meta_timing_num_steps}  yolo_pose enabled: {pose_enabled}')
+    if mode == 'pose-finalize':
+        os.environ['C5_POSE_TASK'] = str(args.resolved_task or os.environ.get('C5_RESOLVED_TASK'))
+        os.environ['C5_POSE_EXPECT'] = str(meta_timing_num_steps)
         ep_out = dataset_root / episode_name
-        for stale in ("pose_capture.jsonl", "pose_session.json"):
+        for stale in ('pose_capture.jsonl', 'pose_session.json'):
             stale_path = ep_out / stale
             if stale_path.exists():
                 stale_path.unlink()
-                print(f"  [防残留] 删除旧 {stale}（避免误读 incomplete 数据）")
-        print("\n--- Runtime Pose 导出（pose_capture_export）---")
+                print(f'  [防残留] 删除旧 {stale}（避免误读 incomplete 数据）')
+        print('\n--- Runtime Pose 导出（pose_capture_export）---')
         import pose_capture_export
         pose_capture_export.main()
-        # pose_capture_export 在 incomplete 时 fail-fast（不写文件）。
-        # 必须检查新文件存在 + pose_session.capture_complete=True 才继续生成最终 Pose。
-        pc_path = ep_out / "pose_capture.jsonl"
-        ps_path = ep_out / "pose_session.json"
+        pc_path = ep_out / 'pose_capture.jsonl'
+        ps_path = ep_out / 'pose_session.json'
         if not pc_path.is_file() or not ps_path.is_file():
-            return _fail("pose_capture_export 未生成 pose_capture.jsonl（Runtime Pose 捕获 incomplete 或失败），禁止生成最终 Pose")
+            return _fail('pose_capture_export 未生成 pose_capture.jsonl（Runtime Pose 捕获 incomplete 或失败），禁止生成最终 Pose')
         import json as _json
-        ps = _json.loads(ps_path.read_text(encoding="utf-8"))
-        if not ps.get("capture_complete"):
+        ps = _json.loads(ps_path.read_text(encoding='utf-8'))
+        if not ps.get('capture_complete'):
             return _fail(f"pose_session.capture_complete=False (captured={ps.get('captured_frame_count')}/expected={ps.get('expected_frame_count')})，禁止生成最终 Pose")
-        print("\n--- 12 点肢体 Pose 3D/2D 生成（build_coco17）---")
-        os.environ["C5_EPISODE_DIR"] = str(dataset_root / episode_name)
-        os.environ["C5_COCO17_CAMERAS"] = ",".join(cameras)
+        print('\n--- 12 点肢体 Pose 3D/2D 生成（build_coco17）---')
+        os.environ['C5_EPISODE_DIR'] = str(dataset_root / episode_name)
+        os.environ['C5_COCO17_CAMERAS'] = ','.join(cameras)
         import build_coco17
         rc = build_coco17.main()
         if rc:
-            return _fail("build_coco17 失败（见上）")
-        # 生成 12 点 pose_keypoints.jsonl（P1 annotate-pose 契约）
-        print("\n--- 生成 pose_keypoints.jsonl（Runtime Pose → P1 pose_annotator 契约）---")
-        _runtime_pose_to_pose_keypoints(dataset_root / episode_name, cameras,
-                                        meta_timing_num_steps, ann_cfg)
-        print("\nDone（pose-finalize）。")
+            return _fail('build_coco17 失败（见上）')
+        print('\n--- 生成 pose_keypoints.jsonl（Runtime Pose → P1 pose_annotator 契约）---')
+        _runtime_pose_to_pose_keypoints(dataset_root / episode_name, cameras, meta_timing_num_steps, ann_cfg)
+        print('\nDone（pose-finalize）。')
         return 0
-
-    # ── full / render / sequence / annotations 模式 ──
-
-    appearance_transaction = None
-    if appearance_prepared is not None and mode in ("full", "render"):
+    appearance_transaction = episode_transaction if mode in ('full', 'render') else None
+    if environment_prepared is None and appearance_prepared is not None and (mode in ('full', 'render')):
         try:
             appearance_transaction = _apply_prepared_appearance(appearance_prepared)
         except (OSError, TypeError, ValueError, RuntimeError) as exc:
             return _fail(str(exc))
-
-    if mode in ("full", "render"):
+    if mode in ('full', 'render'):
         try:
-            meta, frames = load_episode(episode_dir)
-            if mode == "full":
-                print("\n--- 全流程：创建 Level Sequence ---")
-                create_sequence(
-                    meta, frames, mapping, replace_existing, seq_pkg, seq_list, ball_rolling
-                )
-                export_annotations(episode_dir, mapping_path, dataset_root, ann_cfg)
-            # create_sequence 已按 source_step_seconds * playback_fps 设置时间轴。
-            # 不要把 30fps 时间轴错误覆盖成 10fps 样本数，否则只会渲染前 4 个样本。
+            (meta, frames) = load_episode(episode_dir)
+            if mode == 'full':
+                print('\n--- 全流程：创建 Level Sequence ---')
+                create_sequence(meta, frames, mapping, replace_existing, seq_pkg, seq_list, ball_rolling)
+                export_cfg = dict(ann_cfg)
+                export_cfg['resolved_appearance_policy'] = (ue_profile.get('appearance') or {}).get('policy')
+                export_annotations(episode_dir, mapping_path, dataset_root, export_cfg)
             for s in seq_list:
                 seq = unreal.load_asset(f"{seq_pkg}/{s['name']}")
                 if seq is not None:
                     seq.set_playback_start(0)
                     print(f"  序列 {s['name']} playback 保持创建时范围")
-            # Runtime Pose prep：多 camera 下，Recorder CDO 是共享的（5 个 actor），
-            # 只能 prep 一个 camera 的 slot。Runtime Pose 捕获的是世界骨骼 transform
-            # （camera 无关），故只需一个 camera 的完整捕获即可得到正确 pose_capture。
-            # 用首个 camera 的 slot prep（pose_capture_export 也以首个 camera 为 primary）。
-            if pose_enabled and mode == "full":
-                print(f"\n--- Runtime Pose prep（primary={cameras[0]}）---")
+            if pose_enabled and mode == 'full':
+                print(f'\n--- Runtime Pose prep（primary={cameras[0]}）---')
                 from pose_render import _prep_recorders
                 _prep_recorders(episode_name, cameras[0])
                 for i in range(5):
                     try:
-                        unreal.GameplayStatics.delete_game_in_slot(
-                            f"PoseCapture_{episode_name}_{cameras[0]}_G{i}", 0)
+                        unreal.GameplayStatics.delete_game_in_slot(f'PoseCapture_{episode_name}_{cameras[0]}_G{i}', 0)
                     except Exception:
                         pass
-                print(f"  {cameras[0]}: slots 已清空")
+                print(f'  {cameras[0]}: slots 已清空')
 
             def _render(on_complete=None):
-                kwargs = (
-                    {"on_complete": on_complete, "appearance_active": True}
-                    if appearance_transaction is not None
-                    else {}
-                )
-                return render_sequences(
-                    seq_list, ann_cfg, seq_pkg, episode_dir, dataset_root, mapping_path,
-                    **kwargs
-                )
-
+                kwargs = {'appearance_active': True} if appearance_transaction is not None else {}
+                kwargs.update(_render_environment_options(environment_prepared))
+                if on_complete is not None:
+                    kwargs['on_complete'] = on_complete
+                return render_sequences(seq_list, ann_cfg, seq_pkg, episode_dir, dataset_root, mapping_path, **kwargs)
             if appearance_transaction is None:
                 _render()
             else:
                 _submit_render_with_appearance(_render, appearance_transaction)
         except BaseException as downstream_exc:
-            if (
-                appearance_transaction is not None
-                and appearance_transaction.restore_result is None
-                and not appearance_transaction.callback_ownership_transferred
-            ):
+            if appearance_transaction is not None and appearance_transaction.restore_result is None and (not appearance_transaction.callback_ownership_transferred):
                 try:
                     appearance_transaction.record_downstream_failure(downstream_exc)
                 except Exception as report_exc:
-                    print(
-                        "ERROR: 无法记录 episode appearance downstream 失败: {}".format(report_exc),
-                        file=sys.stderr,
-                    )
-                restore_result = appearance_transaction.restore("failed")
-                if not restore_result.get("ok"):
-                    print(
-                        "ERROR: full/render episode appearance restore 失败: {}".format(
-                            "; ".join(restore_result.get("errors") or ["未知错误"])
-                        ),
-                        file=sys.stderr,
-                    )
+                    print('ERROR: 无法记录 episode appearance downstream 失败: {}'.format(report_exc), file=sys.stderr)
+                restore_result = appearance_transaction.restore('failed')
+                if not restore_result.get('ok'):
+                    print('ERROR: full/render episode appearance restore 失败: {}'.format('; '.join(restore_result.get('errors') or ['未知错误'])), file=sys.stderr)
             raise
-        print("\n已提交。MRQ 渲染为异步执行（不阻塞编辑器），完成后自动复制 RGB 到 img1/"
-              "（及统计 Instance-ID Mask 对齐帧）并写 render_summary.json。")
-        print(f"Runtime Pose 捕获：BurnIn 写入 {cameras[0]} 的 5×SaveGame（世界 3D，camera 无关）。")
-        print("渲染完成后运行：py run_task.py --mode pose-finalize（导出 raw 13 骨 + 12 点肢体 Pose）。")
+        print('\n已提交。MRQ 渲染为异步执行（不阻塞编辑器），完成后自动复制 RGB 到 img1/（及统计 Instance-ID Mask 对齐帧）并写 render_summary.json。')
+        print(f'Runtime Pose 捕获：BurnIn 写入 {cameras[0]} 的 5×SaveGame（世界 3D，camera 无关）。')
+        print('渲染完成后运行：py run_task.py --mode pose-finalize（导出 raw 13 骨 + 12 点肢体 Pose）。')
         return 0
+    if mode == 'annotations':
 
-    if mode == "annotations":
         def _annotations():
-            export_annotations(episode_dir, mapping_path, dataset_root, ann_cfg)
+            export_cfg = dict(ann_cfg)
+            export_cfg['resolved_appearance_policy'] = (ue_profile.get('appearance') or {}).get('policy')
+            export_annotations(episode_dir, mapping_path, dataset_root, export_cfg)
             if pose_enabled:
-                print("\n--- 导出 Pose 关键点（Legacy pose_export，Editor 逐帧采样）---")
+                print('\n--- 导出 Pose 关键点（Legacy pose_export，Editor 逐帧采样）---')
                 from pose_export import export_pose_keypoints
                 export_pose_keypoints(episode_dir, mapping_path, dataset_root, ann_cfg, pose_cfg)
-            print("\nDone（annotations）。")
+            print('\nDone（annotations）。')
             return 0
-
+        if environment_prepared is not None:
+            return _run_with_optional_appearance(episode_transaction, _annotations)
         return _run_prepared_appearance_synchronously(appearance_prepared, _annotations)
+    if mode == 'sequence':
 
-    if mode == "sequence":
         def _sequence():
-            meta, frames = load_episode(episode_dir)
+            (meta, frames) = load_episode(episode_dir)
             create_sequence(meta, frames, mapping, replace_existing, seq_pkg, seq_list, ball_rolling)
-            print("\nDone（sequence）。")
+            print('\nDone（sequence）。')
             return 0
-
+        if environment_prepared is not None:
+            return _run_with_optional_appearance(episode_transaction, _sequence)
         return _run_prepared_appearance_synchronously(appearance_prepared, _sequence)
-
-    return _fail(f"未知模式: {mode!r}")
+    return _fail(f'未知模式: {mode!r}')
 
 
 if __name__ == "__main__":

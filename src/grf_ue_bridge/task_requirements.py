@@ -17,6 +17,7 @@ class TaskRequirements:
     requires_yolo_det: bool = False
     requires_yolo_seg: bool = False
     requires_pose: bool = False
+    requires_environment: bool = False
 
 
 def _as_mapping(value: Any) -> Mapping[str, Any]:
@@ -69,6 +70,15 @@ def resolve_task_requirements(source: Any) -> TaskRequirements:
     annotation_export = _annotation_export(data)
     postprocess = _as_mapping(data.get("postprocess"))
     formats = _formats(postprocess)
+    ue_profile = _as_mapping(data.get("ue_profile"))
+    ue = _as_mapping(data.get("ue"))
+    environment_profile = ue_profile.get("environment_profile")
+    if not isinstance(environment_profile, Mapping):
+        environment_profile = ue.get("environment")
+    requires_environment = (
+        isinstance(environment_profile, Mapping)
+        and environment_profile.get("policy") == "futsalmot_environment_v1_5"
+    )
 
     render_block = annotation_export.get("render_rgb")
     requires_render = False if render_block is None else _enabled(render_block)
@@ -85,4 +95,5 @@ def resolve_task_requirements(source: Any) -> TaskRequirements:
         requires_yolo_det="yolo-det" in formats,
         requires_yolo_seg="yolo-seg" in formats,
         requires_pose=_enabled(postprocess.get("yolo_pose")),
+        requires_environment=requires_environment,
     )

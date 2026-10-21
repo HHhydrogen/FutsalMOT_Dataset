@@ -307,6 +307,37 @@ task export 会保存 task、sanitized resolved task、export profile、UE profi
 
 task 级 `manifest` 使用 `src/grf_ue_bridge/workflows/artifact_cleanup.py` 的 episode manifest builder，和顶层 `build-manifest` 不是同一个入口。不要用其中一个命令的输出字段去推断另一个命令的完整性结论。
 
+## Seeded Episode Environment v1.5
+
+当 task 配置包含 `ue.environment` 时，resolver 会生成独立的 `ue_profile.environment_profile`，并由 P1 在轨迹成功写出后生成 `provenance/environment.json`。环境 profile 的 policy 必须为 `futsalmot_environment_v1_5`，catalog 为 `futsalmot_indoor_environment_v1_5`；没有该 resolved policy 时，残留的 environment 文件不会激活任何 environment requirement。
+
+当前 catalog revision 为 `2`。`preset` 可显式指定下表状态，或填 `auto`；省略 `environment_seed` 时使用 `export.seed`。auto 对 UTF-8 字节 `sha256_weather_preset_v1:<environment_seed>` 做 SHA-256，取前 8 字节的大端无符号整数，对固定的八项 preset 顺序取模。顺序为 daylight、overcast、warm evening、cool evening、haze、cloudy、dawn、night。resolver 在生成 resolved task 时就将 auto 替换为具体 preset；P2 不重新抽样。显式 preset 不随 seed 切换天气类别。
+
+环境参数使用独立 SHA-256 命名空间派生，不消费 Python/NumPy 全局 RNG，也不改变轨迹或球员外观分配。完整 catalog、参数生成范围、天气选择算法和有序列表均参与 catalog fingerprint。同 seed 的复现前提是相同 catalog fingerprint、task、资产、地图基线和渲染配置；revision 更新后必须重新 export/resolve，不能把旧 manifest 改 fingerprint 后冒充新版本。这里只保证确定性的场景参数和输入契约，不承诺跨 UE/GPU 版本的 PNG 字节一致。
+
+| preset | 场景 | 太阳基准 pitch / intensity | SkyLight 基准 intensity | 十灯 EV |
+| --- | --- | --- | --- | --- |
+| `daylight_clear_v1` | 晴天 | -32° / 8.0 | 1.4 | 5 |
+| `overcast_soft_v1` | 阴天柔光 | -38° / 1.5 | 2.0 | 8 |
+| `warm_evening_v1` | 暖色低太阳傍晚 | -10° / 3.2 | 0 | 10 |
+| `cool_evening_v1` | 冷色暮光 | -8° / 1.5 | 0 | 10 |
+| `light_haze_v1` | 薄雾 | -30° / 6.8 | 1.65 | 5 |
+| `cloudy_variation_v1` | 多云 | -45° / 2.0 | 1.8 | 8.5 |
+| `dawn_cool_v1` | 清晨低太阳薄雾 | -6° / 2.2 | 0.35 | 10 |
+| `night_floodlit_v1` | 纯场馆灯夜间 | -20° / 0 | 0 | 10 |
+
+表中为 catalog 基准值，太阳 pitch/yaw/roll 各有 ±2° 的确定性微变化，非零太阳和天空光 intensity 有 ±4% 微变化，云、雾、曝光也有受限变化。十灯 EV 固定，夜间太阳和 SkyLight intensity 始终为零。清晨、暖傍晚和冷暮光分别使用 5600/8000/5000 K 的画面白平衡；该值是相机白平衡，不等于灯光色温，低白平衡值会使中性场馆灯画面偏冷。
+
+环境 manifest schema 为 `futsalmot_episode_environment` v1，包含 `episode_id`、`environment_seed`、`policy`、`catalog_id`、`preset`、`namespace_seed`、六组 environment Actor 参数、`venue_fill_lighting` compatibility 参数和 `venue_spot_lighting` 固定灯组参数、`trajectory_sha256`、`catalog_fingerprint` 和顶层 `fingerprint`。参数是 JSON 基础类型，fingerprint 排除自身，轨迹 hash 直接散列当前 `frames.jsonl` 原始字节。P2 必须在 apply 前重验 manifest、resolved profile、`meta.json`、frames hash 和 catalog fingerprint。
+
+`parameters.venue_fill_lighting` 保留 transient `RectLight` 的兼容字段；当前所有 preset 均要求 `enabled=false` 且不得创建 transient Actor。实际场馆灯光使用 `parameters.venue_spot_lighting`：固定包含 `SpotLight`、`SpotLight2` 至 `SpotLight10` 十个关卡 Actor，`intensity_units="ev"`，强度见上表。事务只修改十灯的 intensity 和单位，必须读取、验证并恢复原 intensity；Actor transform、颜色、半径、锥角和阴影保持手动配置。apply/readback/restore 需记录十个 External Actor package 并恢复 package clean baseline。
+
+`parameters.directional_light.rotation_deg` 与 `parameters.sky_atmosphere.transform_rotation_deg` 都是 UE Rotator 的 `[pitch, yaw, roll]` 角度，不是“太阳高度角”。UE Directional Light 的 light vector 等于该旋转的 forward 向量，所以太阳位于地平线上方时必须写 `pitch <= 0`；`pitch > 0` 会让光朝上、场景几乎全黑。preset 中给出的太阳高度角（如 32°）必须编码为 `-32.0`。 post_process.white_balance_tint 对应 UE WhiteTint，有效范围是 [-1, 1]，超出会产生异常色偏；white_balance_temperature 必须落在 [2000, 20000] 开尔文。
+
+P2 的 `provenance/environment_application.json` schema 为 `futsalmot_environment_application` v1，至少记录 environment manifest/catalog/trajectory 指纹、preset、transaction ID、六类 Actor identity、十灯组的 label/intensity/EV 和 restore status、`state`、`render_result`、`restore_status`、errors 和 warnings。状态使用 `not_started`、`preflight_failed`、`applied`、`rendering`、`restored`、`restore_failed`。portable report 不包含机器绝对路径；本机 rollback snapshot 位于被忽略的 `.futsalmot/runtime/<task_id>/environment-rollback.json`，并单独保存手动十灯的强度 baseline。
+
+active environment 的 `render_summary.json` 可增加 `environment_policy`、`environment_manifest_fingerprint`、`environment_preset` 和 `environment_restore_ready`。这些字段只在 environment active 时出现；旧 v1 summary 保持兼容。Audit 只在 resolved policy 激活时检查 environment manifest/application report、trajectory/catalog/fingerprint、render metadata 和 restored 状态；cleanup 永远保留两个 canonical environment provenance 文件，并在 report 未 restored 或本机 rollback snapshot 存在时拒绝 `--apply`。
+
 ## Seeded Episode Appearance
 
 当 task 配置包含 `ue.appearance` 时，P1 在成功写出并验证 `meta.json` 与 `frames.jsonl` 后，原子生成 `<episode>/provenance/appearance.json`。未配置 `ue.appearance` 的旧 task 不要求该文件；`ue.appearance` 与非空 legacy `ue.player_visuals` 互斥。P1 只读写 episode JSON/JSONL，不加载 Unreal Python 或修改 Actor。

@@ -811,7 +811,10 @@ def _sync_render_state_from_audit(resolved, state, path):
 def _resume_action(resolved, state, step, action):
     """为 RUNNING 步骤提供保守的 artifact-based recovery decision。"""
     if step == "export" and action == "skip":
-        if (resolved.ue_profile or {}).get("appearance") is None:
+        ue_profile = resolved.ue_profile or {}
+        if ue_profile.get("appearance") is None and ue_profile.get(
+            "environment_profile"
+        ) is None:
             return "skip"
         return "skip" if _step_is_complete(resolved, step) == "complete" else "retry"
     if action != "unknown":
@@ -859,27 +862,48 @@ def _step_is_complete(resolved, step: str) -> str:
     if not meta_path.is_file() or not frames_path.is_file():
         return "retry"
     appearance_catalog = (resolved.ue_profile or {}).get("appearance")
-    if appearance_catalog is None:
+    environment_profile = (resolved.ue_profile or {}).get("environment_profile")
+    if appearance_catalog is None and environment_profile is None:
         return "complete"
     manifest_path = traj / "provenance" / "appearance.json"
+    environment_manifest_path = traj / "provenance" / "environment.json"
     try:
-        from .appearance import validate_appearance_manifest
-
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        if not isinstance(meta, dict) or not isinstance(manifest, dict):
+        if not isinstance(meta, dict):
             return "retry"
-        from .validator import validate_episode
-
         if validate_episode(traj) != 0:
             return "retry"
-        errors = validate_appearance_manifest(
-            manifest,
-            meta=meta,
-            frames_path=frames_path,
-            catalog=appearance_catalog,
-        )
-        return "retry" if errors else "complete"
+        if appearance_catalog is not None:
+            from .appearance import validate_appearance_manifest
+
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if not isinstance(manifest, dict):
+                return "retry"
+            errors = validate_appearance_manifest(
+                manifest,
+                meta=meta,
+                frames_path=frames_path,
+                catalog=appearance_catalog,
+            )
+            if errors:
+                return "retry"
+        if environment_profile is not None:
+            from .environment import validate_environment_manifest
+
+            environment_manifest = json.loads(
+                environment_manifest_path.read_text(encoding="utf-8")
+            )
+            if not isinstance(environment_manifest, dict):
+                return "retry"
+            errors = validate_environment_manifest(
+                environment_manifest,
+                meta=meta,
+                frames_path=frames_path,
+                profile=environment_profile,
+            )
+            if errors:
+                return "retry"
+        return "complete"
     except Exception:
         return "retry"
 
@@ -1102,10 +1126,12 @@ def task_audit(
                 "--mot-required", "true" if requirements.requires_mot else "false",
                 "--yolo-det-required", "true" if requirements.requires_yolo_det else "false",
                 "--yolo-seg-required", "true" if requirements.requires_yolo_seg else "false",
-                "--pose-required", "true" if requirements.requires_pose else "false",
+                 "--pose-required", "true" if requirements.requires_pose else "false",
+                 "--environment-required", "true" if requirements.requires_environment else "false",
             ],
-            appearance_catalog=(resolved.ue_profile or {}).get("appearance"),
-            episode_dir=Path(resolved.trajectory_output),
+             appearance_catalog=(resolved.ue_profile or {}).get("appearance"),
+             environment_profile=(resolved.ue_profile or {}).get("environment_profile"),
+             episode_dir=Path(resolved.trajectory_output),
         )
     except Exception as exc:
         _fail_pipeline_step(state, state_file, "audit", exc)

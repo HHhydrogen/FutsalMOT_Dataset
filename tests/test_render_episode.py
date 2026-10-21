@@ -822,3 +822,192 @@ def test_non_appearance_stencil_path_retains_assignment_and_save(tmp_path, monke
     render_episode._prepare_stencil_for_render(str(mapping_path), appearance_active=False)
 
     assert calls == ["enable", "stencil", "save"]
+
+
+def test_async_environment_callback_observes_summary_before_restore_handoff(tmp_path):
+    """异步终态 callback 只能在 summary 落盘和 restore readiness 计算后触发。"""
+    observations = []
+    pipeline = render_episode._AsyncRenderPipeline(
+        [],
+        "episode_environment",
+        tmp_path,
+        [],
+        on_complete=lambda result: observations.append(
+            (result["environment_restore_ready"], pipeline.summary_path().is_file())
+        ),
+        environment_active=True,
+        environment_policy="futsalmot_environment_v1_5",
+        environment_manifest_fingerprint="c" * 64,
+        environment_preset="indoor_default",
+        environment_preflight_verified=True,
+        environment_transaction_state="rendering",
+    )
+
+    pipeline._finalize(failed=False, status="success")
+
+    assert observations == [(True, True)]
+
+
+def test_active_environment_gate_fails_before_mrq_and_writes_summary(
+    tmp_path, monkeypatch
+):
+    """未确认 environment preflight 时必须在 MRQ 访问前写入失败终态。"""
+    monkeypatch.setattr(render_episode, "_ACTIVE_RENDER", None)
+    monkeypatch.setitem(sys.modules, "unreal", SimpleNamespace())
+    monkeypatch.setattr(
+        render_episode,
+        "load_episode",
+        lambda _path: (
+            {"episode_id": "episode_environment", "timing": {"source_step_seconds": 0.1}},
+            [{"step": 0}],
+        ),
+    )
+    monkeypatch.setattr(
+        render_episode,
+        "_mrq_subsystem",
+        lambda: pytest.fail("environment gate 失败时不得访问 MRQ"),
+    )
+    callbacks = []
+
+    result = render_episode.render_sequences(
+        [{"name": "LS_Cam_01", "camera_actor": "CineCam_01"}],
+        {"render_rgb": {"enabled": True}},
+        "/Game/FutsalMOT/Sequences",
+        tmp_path,
+        tmp_path / "output",
+        on_complete=callbacks.append,
+        environment_active=True,
+        environment_policy="futsalmot_environment_v1_5",
+        environment_manifest_fingerprint="a" * 64,
+        environment_preset="indoor_default",
+        environment_preflight_verified=False,
+        environment_transaction_state="applied",
+    )
+
+    terminal = result["terminal_result"]
+    summary = json.loads(
+        (tmp_path / "output" / "episode_environment" / "render_summary.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert terminal["status"] == "failed"
+    assert "MANUAL_REQUIRED" in terminal["reason"]
+    assert terminal["environment_restore_ready"] is False
+    assert summary["environment_restore_ready"] is False
+    assert callbacks == [terminal]
+
+
+@pytest.mark.parametrize(
+    ("fingerprint", "preset"),
+    [("", "indoor_default"), ("a" * 64, "")],
+)
+def test_active_environment_gate_rejects_missing_metadata_before_mrq(
+    tmp_path, monkeypatch, fingerprint, preset
+):
+    """environment 指纹或 preset 缺失时必须保持 fail-closed。"""
+    monkeypatch.setattr(render_episode, "_ACTIVE_RENDER", None)
+    monkeypatch.setitem(sys.modules, "unreal", SimpleNamespace())
+    monkeypatch.setattr(
+        render_episode,
+        "load_episode",
+        lambda _path: (
+            {"episode_id": "episode_environment", "timing": {"source_step_seconds": 0.1}},
+            [{"step": 0}],
+        ),
+    )
+    monkeypatch.setattr(
+        render_episode,
+        "_mrq_subsystem",
+        lambda: pytest.fail("invalid environment metadata must not access MRQ"),
+    )
+    callbacks = []
+
+    result = render_episode.render_sequences(
+        [{"name": "LS_Cam_01", "camera_actor": "CineCam_01"}],
+        {"render_rgb": {"enabled": True}},
+        "/Game/FutsalMOT/Sequences",
+        tmp_path,
+        tmp_path / "output",
+        on_complete=callbacks.append,
+        environment_active=True,
+        environment_policy="futsalmot_environment_v1_5",
+        environment_manifest_fingerprint=fingerprint,
+        environment_preset=preset,
+        environment_preflight_verified=True,
+        environment_transaction_state="rendering",
+    )
+
+    assert result["terminal_result"]["status"] == "failed"
+    assert "MANUAL_REQUIRED" in result["terminal_result"]["reason"]
+    assert callbacks == [result["terminal_result"]]
+
+
+def test_environment_active_render_never_saves_level_for_setup():
+    assert render_episode._should_save_level(False, False) is True
+    assert render_episode._should_save_level(True, False) is False
+    assert render_episode._should_save_level(False, True) is False
+    assert render_episode._should_save_level(True, True) is False
+
+
+def test_bake_first_frame_skips_level_save_during_environment(monkeypatch):
+    calls = []
+    monkeypatch.setattr(render_episode, "_save_current_level", lambda: calls.append("save"))
+    monkeypatch.setattr(render_episode, "load_mapping", lambda path: {"L0": "Player_L0"})
+    monkeypatch.setattr(render_episode, "find_all_actors", lambda mapping: {"L0": object()})
+    monkeypatch.setattr(render_episode, "gk_entity_ids_from_meta", lambda meta: [])
+    monkeypatch.setattr(render_episode, "apply_preview_frame", lambda *a, **k: None)
+
+    saved = render_episode._bake_first_frame_for_render(
+        {"gk_entity_ids": []},
+        [{"step": 0}],
+        "mapping.json",
+        environment_active=True,
+    )
+
+    assert saved is True
+    assert calls == []
+
+    render_episode._bake_first_frame_for_render(
+        {"gk_entity_ids": []},
+        [{"step": 0}],
+        "mapping.json",
+        appearance_active=False,
+        environment_active=False,
+    )
+    assert calls == ["save"]
+
+def test_active_environment_metadata_reaches_terminal_and_summary_after_finalize(tmp_path):
+    """active environment 的便携 metadata 必须在终态摘要和 job 中一致。"""
+    callbacks = []
+    pipeline = render_episode._AsyncRenderPipeline(
+        [{"name": "Seq_CamA", "cam_id": "CamA", "kind": "rgb"}],
+        "episode_environment",
+        tmp_path,
+        [0, 3],
+        on_complete=lambda result: callbacks.append(
+            (result, json.loads(pipeline.summary_path().read_text(encoding="utf-8")))
+        ),
+        environment_active=True,
+        environment_policy="futsalmot_environment_v1_5",
+        environment_manifest_fingerprint="b" * 64,
+        environment_preset="indoor_default",
+        environment_preflight_verified=True,
+        environment_transaction_state="rendering",
+    )
+
+    pipeline._finalize(
+        failed=False,
+        status="success",
+        per_camera={"CamA": {"ok": True, "expected_frames": 2, "img1_frames": 2}},
+    )
+
+    terminal, summary = callbacks[0]
+    for value in (terminal, summary, terminal["jobs"][0], summary["jobs"][0]):
+        assert value["environment_policy"] == "futsalmot_environment_v1_5"
+        assert value["environment_manifest_fingerprint"] == "b" * 64
+        assert value["environment_preset"] == "indoor_default"
+    assert terminal["environment_restore_ready"] is True
+    assert summary["environment_restore_ready"] is True
+    assert summary["cameras"]["CamA"]["environment_policy"] == (
+        "futsalmot_environment_v1_5"
+    )

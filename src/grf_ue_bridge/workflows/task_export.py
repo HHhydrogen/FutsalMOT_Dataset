@@ -52,9 +52,13 @@ def run_export(
     Path(resolved.dataset_root).mkdir(parents=True, exist_ok=True)
     traj = Path(resolved.trajectory_output)
     appearance_catalog = (resolved.ue_profile or {}).get("appearance")
+    environment_profile = (resolved.ue_profile or {}).get("environment_profile")
     appearance_manifest_path = traj / "provenance" / "appearance.json"
+    environment_manifest_path = traj / "provenance" / "environment.json"
     if appearance_catalog is not None:
         appearance_manifest_path.unlink(missing_ok=True)
+    if environment_profile is not None:
+        environment_manifest_path.unlink(missing_ok=True)
 
     grf_steps = compute_source_steps(export_cfg)
     print_fn(f"Export task: {resolved.task_id}  episode={resolved.episode_name}")
@@ -79,20 +83,39 @@ def run_export(
         )
         export_episode(export_cfg, result, traj)
         _write_provenance(resolved, traj)
+    except Exception:
         if appearance_catalog is not None:
+            appearance_manifest_path.unlink(missing_ok=True)
+        if environment_profile is not None:
+            environment_manifest_path.unlink(missing_ok=True)
+        raise
+
+    if appearance_catalog is not None or environment_profile is not None:
+        from grf_ue_bridge.validator import validate_episode
+
+        if validate_episode(traj) != 0:
+            if appearance_catalog is not None:
+                appearance_manifest_path.unlink(missing_ok=True)
+            if environment_profile is not None:
+                environment_manifest_path.unlink(missing_ok=True)
+            raise ValueError(f"episode inputs are invalid: {traj}")
+        meta_path = traj / "meta.json"
+        frames_path = traj / "frames.jsonl"
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+
+    if appearance_catalog is not None:
+        try:
             from grf_ue_bridge.appearance import (
                 build_appearance_manifest,
                 validate_appearance_manifest,
                 write_appearance_manifest,
             )
-            from grf_ue_bridge.validator import validate_episode
 
-            if validate_episode(traj) != 0:
-                raise ValueError(f"appearance episode inputs are invalid: {traj}")
-            meta_path = traj / "meta.json"
-            frames_path = traj / "frames.jsonl"
-            meta = json.loads(meta_path.read_text(encoding="utf-8"))
             manifest = build_appearance_manifest(meta, frames_path, appearance_catalog)
+            if manifest.get("policy") != appearance_catalog.get("policy"):
+                raise ValueError(
+                    "生成的 appearance manifest policy 与 catalog policy 不一致"
+                )
             write_appearance_manifest(traj, manifest)
             written_manifest = json.loads(
                 appearance_manifest_path.read_text(encoding="utf-8")
@@ -107,10 +130,36 @@ def run_export(
                 raise ValueError(
                     "生成的 appearance manifest 校验失败: " + "; ".join(errors)
                 )
-    except Exception:
-        if appearance_catalog is not None:
+        except Exception:
             appearance_manifest_path.unlink(missing_ok=True)
-        raise
+            raise
+
+    if environment_profile is not None:
+        try:
+            from grf_ue_bridge.environment import (
+                build_environment_manifest,
+                validate_environment_manifest,
+                write_environment_manifest,
+            )
+
+            manifest = build_environment_manifest(meta, frames_path, environment_profile)
+            write_environment_manifest(traj, manifest)
+            written_manifest = json.loads(
+                environment_manifest_path.read_text(encoding="utf-8")
+            )
+            errors = validate_environment_manifest(
+                written_manifest,
+                meta=meta,
+                frames_path=frames_path,
+                profile=environment_profile,
+            )
+            if errors:
+                raise ValueError(
+                    "生成的 environment manifest 校验失败: " + "; ".join(errors)
+                )
+        except Exception:
+            environment_manifest_path.unlink(missing_ok=True)
+            raise
 
     print_fn(f"Provenance written: {traj / 'provenance'}")
     return 0

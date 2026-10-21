@@ -396,6 +396,8 @@ class AppearanceKitCandidate(BaseModel):
         return self
 
 
+
+
 class AppearanceCatalog(BaseModel):
     """seeded episode 外观目录及其完整候选集合。"""
 
@@ -435,6 +437,29 @@ class AppearanceCatalog(BaseModel):
         return self
 
 
+
+class EnvironmentConfig(BaseModel):
+    """episode 环境 v1.5 的严格 task 配置。"""
+
+    mode: Literal["seeded"]
+    policy: Literal["futsalmot_environment_v1_5"]
+    catalog_id: Literal["futsalmot_indoor_environment_v1_5"]
+    environment_seed: Optional[StrictInt] = Field(None, ge=0)
+    preset: Literal[
+        "daylight_clear_v1",
+        "overcast_soft_v1",
+        "warm_evening_v1",
+        "cool_evening_v1",
+        "light_haze_v1",
+        "cloudy_variation_v1",
+        "dawn_cool_v1",
+        "night_floodlit_v1",
+        "auto",
+    ]
+
+    model_config = {"extra": "forbid"}
+
+
 class UeProfile(BaseModel):
     """UE 相机/Sequence/渲染参数（内联在 task 的 ue 块，非独立文件）。"""
 
@@ -446,6 +471,9 @@ class UeProfile(BaseModel):
     )
     appearance: Optional[AppearanceCatalog] = Field(
         None, description="seeded MPFB 外观目录（与 legacy player_visuals 互斥）"
+    )
+    environment: Optional[EnvironmentConfig] = Field(
+        None, description="seeded episode environment v1.5 配置"
     )
     replace_existing: bool = True
     ball_rolling: Dict = Field(default_factory=dict)

@@ -28,13 +28,16 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
+
 from grf_ue_bridge.validation_result import CheckStatus, ValidationResult
+from grf_ue_bridge.environment import validate_environment_manifest
 
 _UE_DIR = Path(__file__).resolve().parents[3] / "ue"
 if str(_UE_DIR) not in sys.path:
     sys.path.insert(0, str(_UE_DIR))
 from pose_bones import NUM_POSE_KEYPOINTS  # noqa: E402
 from episode_appearance import _validate_report as _validate_application_report  # noqa: E402
+from episode_environment import validate_environment_application_report  # noqa: E402
 
 # 实体 → track_id / mask_id 的稳定映射（与 annotation_utils 一致，本地复述避免依赖）
 TRACK_MAP = {f"L{i}": i + 1 for i in range(5)}
@@ -57,6 +60,8 @@ def _extend_unique(target: List[str], values: Sequence[str]) -> None:
     for value in values:
         if value not in target:
             target.append(value)
+
+
 
 
 def _frame_numbers(files: Sequence[Path]) -> List[int]:
@@ -634,6 +639,7 @@ def check_camera(
     return st
 
 
+
 def check_sync(
     cameras_meta: Dict[str, List[dict]],
     errors: List[str],
@@ -687,6 +693,7 @@ def check_sync(
     return st
 
 
+
 def check_track_mask_mapping(cameras_meta: Dict[str, List[dict]], errors: List[str],
                             mask_enabled: bool = True) -> dict:
     """校验每个实体的 track_id / mask_id 与稳定映射一致，且同帧不冲突。
@@ -733,6 +740,7 @@ def check_track_mask_mapping(cameras_meta: Dict[str, List[dict]], errors: List[s
                 else:
                     seen[eid] = key
     return st
+
 
 
 def check_camera_json(cam_dirs: List[Path], expected_frames: int, errors: List[str]) -> dict:
@@ -874,6 +882,120 @@ def check_render_summary(
         return {"ok": False, "status": status, "required": bool(required),
                 "skipped": not required, "cameras": per, "message": message}
     return {"ok": True, "status": status, "required": bool(required), "cameras": per}
+
+
+
+def check_environment(
+    episode_dir: Path,
+    dataset_dir: Path,
+    errors: List[str],
+    *,
+    environment_profile: Any = None,
+    render_required: bool = False,
+) -> dict:
+    """审计 resolved task 激活的 environment provenance 和恢复状态。"""
+    state = {"ok": True, "required": False, "enabled": False, "skipped": True}
+    if not isinstance(environment_profile, Mapping):
+        return state
+    state.update({"required": True, "enabled": True, "skipped": False})
+    start = len(errors)
+    episode_dir = Path(episode_dir)
+    dataset_dir = Path(dataset_dir)
+    provenance = episode_dir / "provenance"
+    manifest = None
+    report = None
+    try:
+        manifest = _load_json_object(provenance / "environment.json", "environment.json")
+    except (OSError, UnicodeError, ValueError, RecursionError) as exc:
+        errors.append(f"environment: 无法读取 environment.json: {exc}")
+    try:
+        report = _load_json_object(
+            provenance / "environment_application.json",
+            "environment_application.json",
+        )
+    except (OSError, UnicodeError, ValueError, RecursionError) as exc:
+        errors.append(f"environment: 无法读取 environment_application.json: {exc}")
+    try:
+        meta = _load_json_object(episode_dir / "meta.json", "meta.json")
+    except (OSError, UnicodeError, ValueError, RecursionError) as exc:
+        meta = None
+        errors.append(f"environment: 无法读取 meta.json: {exc}")
+    if isinstance(manifest, Mapping) and isinstance(meta, Mapping):
+        try:
+            manifest_errors = validate_environment_manifest(
+                manifest,
+                meta=meta,
+                frames_path=episode_dir / "frames.jsonl",
+                profile=environment_profile,
+            )
+        except (OSError, TypeError, ValueError, KeyError, OverflowError, RecursionError) as exc:
+            manifest_errors = [f"environment manifest 校验异常: {exc}"]
+        errors.extend(f"environment: {message}" for message in manifest_errors)
+    if isinstance(manifest, Mapping) and isinstance(report, Mapping):
+        try:
+            report_errors = validate_environment_application_report(report, manifest)
+        except (TypeError, ValueError, KeyError, OverflowError, RecursionError) as exc:
+            report_errors = [f"environment application report 校验异常: {exc}"]
+        errors.extend(f"environment: {message}" for message in report_errors)
+        if report.get("state") != "restored":
+            errors.append(
+                "environment: application report state actual={!r}, expected='restored'".format(
+                    report.get("state")
+                )
+            )
+        if report.get("restore_status") != "restored":
+            errors.append(
+                "environment: application report restore_status actual={!r}, expected='restored'".format(
+                    report.get("restore_status")
+                )
+            )
+    if render_required:
+        try:
+            summary = _load_json_object(dataset_dir / "render_summary.json", "render_summary.json")
+        except (OSError, UnicodeError, ValueError, RecursionError) as exc:
+            summary = None
+            errors.append(f"environment: 无法读取 render_summary.json: {exc}")
+        if isinstance(summary, Mapping):
+            expected = {
+                "environment_policy": environment_profile.get("policy"),
+                "environment_manifest_fingerprint": (
+                    manifest.get("fingerprint") if isinstance(manifest, Mapping) else None
+                ),
+                "environment_preset": environment_profile.get("preset"),
+            }
+            if summary.get("status") != "success":
+                errors.append(
+                    "environment: render_summary.status actual={!r}, expected='success'".format(
+                        summary.get("status")
+                    )
+                )
+            for key, value in expected.items():
+                if summary.get(key) != value:
+                    errors.append(
+                        "environment: render_summary {} actual={!r}, expected={!r}".format(
+                            key, summary.get(key), value
+                        )
+                    )
+            if summary.get("environment_restore_ready") is not True:
+                errors.append(
+                    "environment: render_summary.environment_restore_ready 必须为 true"
+                )
+    state["ok"] = len(errors) == start
+    if isinstance(manifest, Mapping):
+        state.update({
+            "manifest_fingerprint": manifest.get("fingerprint"),
+            "catalog_fingerprint": manifest.get("catalog_fingerprint"),
+            "preset": manifest.get("preset"),
+        })
+    return state
+
+
+
+
+
+
+
+
 
 
 def _load_json_object(path: Path, label: str) -> dict:
@@ -1157,6 +1279,7 @@ def check_appearance(
     return state
 
 
+
 def check_pose_coco17(
     dataset_dir: Path,
     expected_frames: int,
@@ -1384,6 +1507,7 @@ def check_cross_camera_identity(cam_dirs: List[Path], errors: List[str]) -> dict
     return st
 
 
+
 def write_reports(
     dataset_dir: Path,
     report: dict,
@@ -1478,44 +1602,24 @@ def write_reports(
     return jpath, mpath
 
 
-def main(
-    argv: Optional[Sequence[str]] = None,
-    *,
-    appearance_catalog: Any = None,
-    episode_dir: Optional[Path] = None,
-) -> int:
-    ap = argparse.ArgumentParser(description="soak episode 完整性审计")
-    ap.add_argument("--input", required=True, help="相机数据集根目录（含多个 camera 子目录）")
-    ap.add_argument("--expected-cameras", type=int, default=4)
-    ap.add_argument("--expected-frames-per-camera", type=int, default=300)
-    ap.add_argument("--episode", default=None, help="episode 目录（读 meta 时序，精确校验渲染帧覆盖）")
-    ap.add_argument("--render-fps", type=int, default=30, help="MRQ 渲染帧率（缺省 30）")
-    ap.add_argument("--validation-level", default="quick", choices=["quick", "full", "none"])
-    ap.add_argument("--mask-enabled", default="true", help="是否启用 instance_mask 校验（true/false，缺省 true）")
-    ap.add_argument("--pose-skip", default="false", help="是否跳过 pose 完整性校验（true/false，缺省 false）")
-    ap.add_argument(
-        "--render-required", default="true",
-        help="是否要求 render_summary.json 成功（true/false，缺省 true）",
-    )
-    ap.add_argument(
-        "--mot-required", default="false",
-        help="是否要求 MOT 的 gt/gt.txt 与 seqinfo.ini（true/false，缺省 false）",
-    )
-    ap.add_argument(
-        "--yolo-det-required", default="false",
-        help="是否要求 labels/det/*.txt（true/false，缺省 false）",
-    )
-    ap.add_argument(
-        "--yolo-seg-required", default="false",
-        help="是否要求 labels/seg/*.txt（true/false，缺省 false）",
-    )
-    ap.add_argument(
-        "--pose-required", default="false",
-        help="是否要求 Runtime Pose/raw 13 骨与 12 点最终 Pose（true/false，缺省 false）",
-    )
-    ap.add_argument("--output", default=None, help="报告输出目录（默认 <input>/audit）")
+def main(argv: Optional[Sequence[str]]=None, *, appearance_catalog: Any=None, environment_profile: Any=None, episode_dir: Optional[Path]=None) -> int:
+    ap = argparse.ArgumentParser(description='soak episode 完整性审计')
+    ap.add_argument('--input', required=True, help='相机数据集根目录（含多个 camera 子目录）')
+    ap.add_argument('--expected-cameras', type=int, default=4)
+    ap.add_argument('--expected-frames-per-camera', type=int, default=300)
+    ap.add_argument('--episode', default=None, help='episode 目录（读 meta 时序，精确校验渲染帧覆盖）')
+    ap.add_argument('--render-fps', type=int, default=30, help='MRQ 渲染帧率（缺省 30）')
+    ap.add_argument('--validation-level', default='quick', choices=['quick', 'full', 'none'])
+    ap.add_argument('--mask-enabled', default='true', help='是否启用 instance_mask 校验（true/false，缺省 true）')
+    ap.add_argument('--pose-skip', default='false', help='是否跳过 pose 完整性校验（true/false，缺省 false）')
+    ap.add_argument('--render-required', default='true', help='是否要求 render_summary.json 成功（true/false，缺省 true）')
+    ap.add_argument('--mot-required', default='false', help='是否要求 MOT 的 gt/gt.txt 与 seqinfo.ini（true/false，缺省 false）')
+    ap.add_argument('--yolo-det-required', default='false', help='是否要求 labels/det/*.txt（true/false，缺省 false）')
+    ap.add_argument('--yolo-seg-required', default='false', help='是否要求 labels/seg/*.txt（true/false，缺省 false）')
+    ap.add_argument('--pose-required', default='false', help='是否要求 Runtime Pose/raw 13 骨与 12 点最终 Pose（true/false，缺省 false）')
+    ap.add_argument('--environment-required', default='false', help='是否要求 v1.5 environment provenance/apply restore（true/false）')
+    ap.add_argument('--output', default=None, help='报告输出目录（默认 <input>/audit）')
     args = ap.parse_args(argv)
-
     mask_enabled = _as_bool(args.mask_enabled)
     pose_skip = _as_bool(args.pose_skip)
     render_required = _as_bool(args.render_required)
@@ -1523,341 +1627,146 @@ def main(
     yolo_det_required = _as_bool(args.yolo_det_required)
     yolo_seg_required = _as_bool(args.yolo_seg_required)
     pose_required = _as_bool(args.pose_required)
-
+    environment_required = _as_bool(args.environment_required)
     dataset_dir = Path(args.input)
     if not dataset_dir.is_dir():
-        print(f"ERROR: 输入目录不存在: {dataset_dir}", file=sys.stderr)
+        print(f'ERROR: 输入目录不存在: {dataset_dir}', file=sys.stderr)
         return 1
-
     errors: List[str] = []
     warns: List[str] = []
-    report: dict = {"input": str(dataset_dir), "expected": {
-        "cameras": args.expected_cameras,
-        "frames_per_camera": args.expected_frames_per_camera,
-    }, "requirements": {
-        "render": render_required,
-        "instance_mask": mask_enabled,
-        "mot": mot_required,
-        "yolo_det": yolo_det_required,
-        "yolo_seg": yolo_seg_required,
-        "pose": pose_required,
-    }}
-
-    # 相机发现
-    cam_dirs = sorted(p.parent for p in dataset_dir.rglob("camera.json"))
+    resolved_episode_dir = Path(episode_dir) if episode_dir is not None else Path(args.episode) if args.episode else dataset_dir
+    report: dict = {'input': str(dataset_dir), 'expected': {'cameras': args.expected_cameras, 'frames_per_camera': args.expected_frames_per_camera}, 'requirements': {'render': render_required, 'instance_mask': mask_enabled, 'mot': mot_required, 'yolo_det': yolo_det_required, 'yolo_seg': yolo_seg_required, 'pose': pose_required, 'environment': environment_required}}
+    dataset_manifest_path = resolved_episode_dir / 'dataset_manifest.json'
+    try:
+        dataset_manifest = _load_json_object(dataset_manifest_path, 'dataset_manifest.json')
+    except (OSError, UnicodeError, ValueError, RecursionError):
+        pass
+    cam_dirs = sorted((p.parent for p in dataset_dir.rglob('camera.json')))
     if len(cam_dirs) != args.expected_cameras:
-        errors.append(f"相机数量 {len(cam_dirs)} != 预期 {args.expected_cameras}")
-
-    # episode 时序 → keep_indices
-    resolved_episode_dir = (
-        Path(episode_dir)
-        if episode_dir is not None
-        else Path(args.episode) if args.episode else dataset_dir
-    )
-    meta = (
-        _load_episode_meta(resolved_episode_dir, errors)
-        if (args.episode or episode_dir is not None)
-        else None
-    )
+        errors.append(f'相机数量 {len(cam_dirs)} != 预期 {args.expected_cameras}')
+    meta = _load_episode_meta(resolved_episode_dir, errors) if args.episode or episode_dir is not None else None
     source_step_seconds = None
     keep_indices = list(range(args.expected_frames_per_camera))
     if meta:
-        timing = meta.get("timing") or {}
+        timing = meta.get('timing') or {}
         if isinstance(timing, dict):
             try:
-                num_steps = int(timing.get("num_steps", args.expected_frames_per_camera))
-                source_step_seconds = float(timing.get("source_step_seconds", 0.1))
-                fps = int(timing.get("playback_fps", args.render_fps))
-                if num_steps >= 0 and source_step_seconds > 0 and fps > 0:
+                num_steps = int(timing.get('num_steps', args.expected_frames_per_camera))
+                source_step_seconds = float(timing.get('source_step_seconds', 0.1))
+                fps = int(timing.get('playback_fps', args.render_fps))
+                if num_steps >= 0 and source_step_seconds > 0 and (fps > 0):
                     keep_indices = [int(round(i * source_step_seconds * fps)) for i in range(num_steps)]
-                    report["timing"] = {
-                        "source_step_seconds": source_step_seconds,
-                        "playback_fps": fps,
-                        "num_steps": num_steps,
-                        "max_keep_index": max(keep_indices) if keep_indices else 0,
-                    }
+                    report['timing'] = {'source_step_seconds': source_step_seconds, 'playback_fps': fps, 'num_steps': num_steps, 'max_keep_index': max(keep_indices) if keep_indices else 0}
             except (TypeError, ValueError, OverflowError):
-                errors.append("meta.json timing 字段非法，无法推导渲染帧覆盖")
-    else:
-        # 从第一个相机标注反推
-        if cam_dirs:
-            frames, _ = _read_frame_meta(cam_dirs[0])
-            if frames:
-                keep_indices = _derive_keep_indices(frames, args.render_fps, None)
-                if source_step_seconds is None and frames:
-                    for fr in frames:
-                        s = fr.get("source_step")
-                        t = fr.get("time_seconds")
-                        if (
-                            isinstance(s, (int, float))
-                            and not isinstance(s, bool)
-                            and s > 0
-                            and math.isfinite(s)
-                            and isinstance(t, (int, float))
-                            and not isinstance(t, bool)
-                            and math.isfinite(t)
-                        ):
-                            source_step_seconds = t / s
-                            break
-
-    # 每相机
+                errors.append('meta.json timing 字段非法，无法推导渲染帧覆盖')
+    elif cam_dirs:
+        (frames, _) = _read_frame_meta(cam_dirs[0])
+        if frames:
+            keep_indices = _derive_keep_indices(frames, args.render_fps, None)
+            if source_step_seconds is None and frames:
+                for fr in frames:
+                    s = fr.get('source_step')
+                    t = fr.get('time_seconds')
+                    if isinstance(s, (int, float)) and (not isinstance(s, bool)) and (s > 0) and math.isfinite(s) and isinstance(t, (int, float)) and (not isinstance(t, bool)) and math.isfinite(t):
+                        source_step_seconds = t / s
+                        break
     cameras: Dict[str, dict] = {}
     cameras_meta: Dict[str, List[dict]] = {}
     for cam in cam_dirs:
-        st = check_camera(
-            cam,
-            args.expected_frames_per_camera,
-            keep_indices,
-            errors,
-            warns,
-            mask_enabled=mask_enabled,
-            mot_required=mot_required,
-            yolo_det_required=yolo_det_required,
-            yolo_seg_required=yolo_seg_required,
-            enforce_mot_files=args.validation_level == "none",
-            render_required=render_required,
-        )
-        frames, _ = _read_frame_meta(cam)
+        st = check_camera(cam, args.expected_frames_per_camera, keep_indices, errors, warns, mask_enabled=mask_enabled, mot_required=mot_required, yolo_det_required=yolo_det_required, yolo_seg_required=yolo_seg_required, enforce_mot_files=args.validation_level == 'none', render_required=render_required)
+        (frames, _) = _read_frame_meta(cam)
         cameras_meta[cam.name] = frames or []
         cameras[cam.name] = st
-    report["cameras"] = cameras
-
-    # 跨相机同步 + 映射
+    report['cameras'] = cameras
     sync = check_sync(cameras_meta, errors)
     mapping = check_track_mask_mapping(cameras_meta, errors, mask_enabled)
     calib = check_camera_json(cam_dirs, args.expected_frames_per_camera, errors)
-    rsummary = check_render_summary(
-        dataset_dir,
-        errors,
-        warns,
-        required=render_required,
-        expected_camera_ids=[cam.name for cam in cam_dirs],
-    )
-    appearance = check_appearance(
-        resolved_episode_dir,
-        errors,
-        render_required=render_required,
-        appearance_catalog=appearance_catalog,
-        expected_camera_ids=[cam.name for cam in cam_dirs],
-        render_summary=rsummary,
-    )
-    pose_coco = check_pose_coco17(
-        dataset_dir,
-        args.expected_frames_per_camera,
-        errors,
-        skip=pose_skip,
-        required=pose_required,
-        expected_camera_ids=[cam.name for cam in cam_dirs],
-    )
+    rsummary = check_render_summary(dataset_dir, errors, warns, required=render_required, expected_camera_ids=[cam.name for cam in cam_dirs])
+    appearance = check_appearance(resolved_episode_dir, errors, render_required=render_required, appearance_catalog=appearance_catalog, expected_camera_ids=[cam.name for cam in cam_dirs], render_summary=rsummary)
+    environment = check_environment(resolved_episode_dir, dataset_dir, errors, environment_profile=environment_profile if environment_required else None, render_required=render_required)
+    pose_coco = check_pose_coco17(dataset_dir, args.expected_frames_per_camera, errors, skip=pose_skip, required=pose_required, expected_camera_ids=[cam.name for cam in cam_dirs])
     cross_identity = check_cross_camera_identity(cam_dirs, errors)
-    report["sync"] = sync
-    report["mapping"] = mapping
-    report["calibration"] = calib
-    report["render_summary"] = rsummary
-    report["appearance"] = appearance
-    report["pose_coco17"] = pose_coco
-    report["cross_camera_identity"] = cross_identity
+    report['sync'] = sync
+    report['mapping'] = mapping
+    report['calibration'] = calib
+    report['render_summary'] = rsummary
+    report['appearance'] = appearance
+    report['environment'] = environment
+    report['pose_coco17'] = pose_coco
+    report['cross_camera_identity'] = cross_identity
     try:
         from grf_ue_bridge.workflows.audit_metrics import calculate_metrics
-        report["metrics"] = calculate_metrics(dataset_dir)
+        report['metrics'] = calculate_metrics(dataset_dir)
     except Exception as exc:
-        report["metrics"] = {"errors": [f"failed to calculate audit metrics: {exc}"]}
-
-    # 可选进程内验证
+        report['metrics'] = {'errors': [f'failed to calculate audit metrics: {exc}']}
     validation = None
     annotation_result = None
-    if args.validation_level != "none":
+    if args.validation_level != 'none':
         from grf_ue_bridge.annotation_validator import validate_annotation_result
-
         try:
-            annotation_result = validate_annotation_result(
-                dataset_dir,
-                workers=0,
-                validation_level=args.validation_level,
-                require_mot=mot_required,
-                require_mask=mask_enabled,
-                require_yolo_det=yolo_det_required,
-                require_yolo_seg=yolo_seg_required,
-            )
+            annotation_result = validate_annotation_result(dataset_dir, workers=0, validation_level=args.validation_level, require_mot=mot_required, require_mask=mask_enabled, require_yolo_det=yolo_det_required, require_yolo_seg=yolo_seg_required)
         except Exception as exc:
-            message = (
-                f"validate-annotations({args.validation_level}) 执行异常: "
-                f"{type(exc).__name__}: {exc}；请检查 annotations.jsonl、mask/ 和标签文件"
-            )
+            message = f'validate-annotations({args.validation_level}) 执行异常: {type(exc).__name__}: {exc}；请检查 annotations.jsonl、mask/ 和标签文件'
             errors.append(message)
             annotation_result = ValidationResult(errors=[message])
-            annotation_result.add_check(
-                "annotation",
-                CheckStatus.FAILED,
-                required=True,
-                message=message,
-            )
+            annotation_result.add_check('annotation', CheckStatus.FAILED, required=True, message=message)
             annotation_result.finalize()
-        validation = {
-            "level": args.validation_level,
-            "exit_code": annotation_result.exit_code,
-            "passed": annotation_result.passed,
-            "errors": list(annotation_result.errors),
-            "warnings": list(annotation_result.warnings),
-            "checks": annotation_result.checks,
-        }
+        validation = {'level': args.validation_level, 'exit_code': annotation_result.exit_code, 'passed': annotation_result.passed, 'errors': list(annotation_result.errors), 'warnings': list(annotation_result.warnings), 'checks': annotation_result.checks}
         _extend_unique(errors, annotation_result.errors)
         _extend_unique(warns, annotation_result.warnings)
-    report["validation"] = validation
-
+    report['validation'] = validation
     result = ValidationResult(errors=list(errors), warnings=list(warns))
-    result.add_check(
-        "camera_count",
-        CheckStatus.PASSED if len(cam_dirs) == args.expected_cameras else CheckStatus.FAILED,
-        required=True,
-        message=errors[0] if len(cam_dirs) != args.expected_cameras else None,
-        actual=len(cam_dirs),
-        expected=args.expected_cameras,
-    )
-    result.add_check(
-        "camera_core",
-        CheckStatus.PASSED
-        if cameras and all(c.get("core_ok", False) for c in cameras.values())
-        else CheckStatus.FAILED,
-        required=True,
-        cameras={cid: c.get("core_ok", False) for cid, c in cameras.items()},
-    )
-    result.add_check(
-        "render",
-        CheckStatus.SKIPPED if not render_required else (
-            CheckStatus.PASSED if rsummary.get("ok") else CheckStatus.FAILED
-        ),
-        required=render_required,
-        message=rsummary.get("message") if render_required and not rsummary.get("ok") else None,
-        detail=rsummary,
-    )
-    result.add_check(
-        "appearance",
-        CheckStatus.SKIPPED if appearance.get("skipped") else (
-            CheckStatus.PASSED if appearance.get("ok") else CheckStatus.FAILED
-        ),
-        required=bool(appearance.get("required")),
-        message=appearance.get("message") if not appearance.get("ok") else None,
-        detail=appearance,
-    )
-    result.add_check(
-        "instance_mask",
-        CheckStatus.SKIPPED if not mask_enabled else (
-            CheckStatus.PASSED
-            if cameras and all(c.get("mask_ok", False) for c in cameras.values())
-            else CheckStatus.FAILED
-        ),
-        required=mask_enabled,
-        cameras={cid: c.get("mask_ok", False) for cid, c in cameras.items()},
-    )
+    result.add_check('camera_count', CheckStatus.PASSED if len(cam_dirs) == args.expected_cameras else CheckStatus.FAILED, required=True, message=errors[0] if len(cam_dirs) != args.expected_cameras else None, actual=len(cam_dirs), expected=args.expected_cameras)
+    result.add_check('camera_core', CheckStatus.PASSED if cameras and all((c.get('core_ok', False) for c in cameras.values())) else CheckStatus.FAILED, required=True, cameras={cid: c.get('core_ok', False) for (cid, c) in cameras.items()})
+    result.add_check('render', CheckStatus.SKIPPED if not render_required else CheckStatus.PASSED if rsummary.get('ok') else CheckStatus.FAILED, required=render_required, message=rsummary.get('message') if render_required and (not rsummary.get('ok')) else None, detail=rsummary)
+    result.add_check('appearance', CheckStatus.SKIPPED if appearance.get('skipped') else CheckStatus.PASSED if appearance.get('ok') else CheckStatus.FAILED, required=bool(appearance.get('required')), message=appearance.get('message') if not appearance.get('ok') else None, detail=appearance)
+    result.add_check('environment', CheckStatus.SKIPPED if environment.get('skipped') else CheckStatus.PASSED if environment.get('ok') else CheckStatus.FAILED, required=bool(environment.get('required')), detail=environment)
+    result.add_check('instance_mask', CheckStatus.SKIPPED if not mask_enabled else CheckStatus.PASSED if cameras and all((c.get('mask_ok', False) for c in cameras.values())) else CheckStatus.FAILED, required=mask_enabled, cameras={cid: c.get('mask_ok', False) for (cid, c) in cameras.items()})
     annotation_mot_status = None
     if annotation_result is not None:
-        annotation_mot_status = annotation_result.checks.get("mot_export", {}).get("status")
+        annotation_mot_status = annotation_result.checks.get('mot_export', {}).get('status')
     if annotation_mot_status == CheckStatus.FAILED.value:
         mot_status = CheckStatus.FAILED
     elif annotation_mot_status == CheckStatus.SKIPPED.value:
         mot_status = CheckStatus.SKIPPED
-    elif any(not c.get("mot_ok", True) for c in cameras.values()):
+    elif any((not c.get('mot_ok', True) for c in cameras.values())):
         mot_status = CheckStatus.FAILED
     elif mot_required:
-        mot_status = (
-            CheckStatus.PASSED
-            if cameras and all(c.get("mot_complete", False) and c.get("mot_ok", False) for c in cameras.values())
-            else CheckStatus.FAILED
-        )
-    elif not cameras or not all(c.get("mot_complete", False) for c in cameras.values()):
+        mot_status = CheckStatus.PASSED if cameras and all((c.get('mot_complete', False) and c.get('mot_ok', False) for c in cameras.values())) else CheckStatus.FAILED
+    elif not cameras or not all((c.get('mot_complete', False) for c in cameras.values())):
         mot_status = CheckStatus.SKIPPED
     else:
         mot_status = CheckStatus.PASSED
-    result.add_check(
-        "mot_export",
-        mot_status,
-        required=mot_required,
-        cameras={cid: {"present": c.get("mot_present"), "ok": c.get("mot_ok")} for cid, c in cameras.items()},
-    )
-    for name, required, detail_key in (
-        ("yolo_det", yolo_det_required, "det_ok"),
-        ("yolo_seg", yolo_seg_required, "seg_ok"),
-    ):
-        present = any(c.get("det_present" if name == "yolo_det" else "seg_present") for c in cameras.values())
-        valid = bool(cameras) and all(c.get(detail_key, False) for c in cameras.values())
-        status = CheckStatus.SKIPPED if not required else (
-            CheckStatus.PASSED if valid and present else CheckStatus.FAILED
-        )
-        result.add_check(
-            name,
-            status,
-            required=required,
-            cameras={cid: {"present": c.get("det_present" if name == "yolo_det" else "seg_present"), "ok": c.get(detail_key)} for cid, c in cameras.items()},
-        )
-    result.add_check(
-        "sync",
-        CheckStatus.PASSED if sync.get("ok") else CheckStatus.FAILED,
-        required=True,
-        detail=sync,
-    )
-    result.add_check(
-        "mapping",
-        CheckStatus.PASSED if mapping.get("ok") else CheckStatus.FAILED,
-        required=True,
-        detail=mapping,
-    )
-    result.add_check(
-        "calibration",
-        CheckStatus.PASSED if calib.get("ok") else CheckStatus.FAILED,
-        required=True,
-        detail=calib,
-    )
-    result.add_check(
-        "runtime_pose",
-        CheckStatus.SKIPPED if pose_coco.get("skipped") else (
-            CheckStatus.PASSED if pose_coco.get("ok") else CheckStatus.FAILED
-        ),
-        required=pose_required and not pose_coco.get("skipped"),
-        detail=pose_coco,
-    )
-    result.add_check(
-        "cross_camera_identity",
-        CheckStatus.PASSED if cross_identity.get("ok") else CheckStatus.FAILED,
-        required=True,
-        detail=cross_identity,
-    )
+    result.add_check('mot_export', mot_status, required=mot_required, cameras={cid: {'present': c.get('mot_present'), 'ok': c.get('mot_ok')} for (cid, c) in cameras.items()})
+    for (name, required, detail_key) in (('yolo_det', yolo_det_required, 'det_ok'), ('yolo_seg', yolo_seg_required, 'seg_ok')):
+        present = any((c.get('det_present' if name == 'yolo_det' else 'seg_present') for c in cameras.values()))
+        valid = bool(cameras) and all((c.get(detail_key, False) for c in cameras.values()))
+        status = CheckStatus.SKIPPED if not required else CheckStatus.PASSED if valid and present else CheckStatus.FAILED
+        result.add_check(name, status, required=required, cameras={cid: {'present': c.get('det_present' if name == 'yolo_det' else 'seg_present'), 'ok': c.get(detail_key)} for (cid, c) in cameras.items()})
+    result.add_check('sync', CheckStatus.PASSED if sync.get('ok') else CheckStatus.FAILED, required=True, detail=sync)
+    result.add_check('mapping', CheckStatus.PASSED if mapping.get('ok') else CheckStatus.FAILED, required=True, detail=mapping)
+    result.add_check('calibration', CheckStatus.PASSED if calib.get('ok') else CheckStatus.FAILED, required=True, detail=calib)
+    result.add_check('runtime_pose', CheckStatus.SKIPPED if pose_coco.get('skipped') else CheckStatus.PASSED if pose_coco.get('ok') else CheckStatus.FAILED, required=pose_required and (not pose_coco.get('skipped')), detail=pose_coco)
+    result.add_check('cross_camera_identity', CheckStatus.PASSED if cross_identity.get('ok') else CheckStatus.FAILED, required=True, detail=cross_identity)
     if annotation_result is None:
-        result.add_check(
-            "annotation_validation",
-            CheckStatus.SKIPPED,
-            required=False,
-            level="none",
-        )
+        result.add_check('annotation_validation', CheckStatus.SKIPPED, required=False, level='none')
     else:
-        annotation_check = annotation_result.checks.get("annotation", {})
-        result.add_check(
-            "annotation_validation",
-            annotation_check.get(
-                "status",
-                CheckStatus.PASSED if annotation_result.passed else CheckStatus.FAILED,
-            ),
-            required=True,
-            detail=validation,
-        )
-
+        annotation_check = annotation_result.checks.get('annotation', {})
+        result.add_check('annotation_validation', annotation_check.get('status', CheckStatus.PASSED if annotation_result.passed else CheckStatus.FAILED), required=True, detail=validation)
     result.finalize()
     report.update(result.to_dict())
-
-    out_dir = Path(args.output) if args.output else dataset_dir / "audit"
-    jpath, mpath = write_reports(dataset_dir, report, out_dir, args)
-
-    # 人类可读摘要
-    print(f"soak 审计完成: {'PASS' if report['passed'] else 'FAIL'}")
-    print(f"  相机: {len(cam_dirs)}/{args.expected_cameras}")
-    print(f"  失败项: {len(errors)}")
+    out_dir = Path(args.output) if args.output else dataset_dir / 'audit'
+    (jpath, mpath) = write_reports(dataset_dir, report, out_dir, args)
+    print(f"soak 审计完成: {('PASS' if report['passed'] else 'FAIL')}")
+    print(f'  相机: {len(cam_dirs)}/{args.expected_cameras}')
+    print(f'  失败项: {len(errors)}')
     for e in errors[:20]:
-        print(f"    FAIL  {e}")
+        print(f'    FAIL  {e}')
     for w in warns[:10]:
-        print(f"    WARN  {w}")
-    print(f"  报告: {jpath}")
-    print(f"        {mpath}")
-    return report["exit_code"]
+        print(f'    WARN  {w}')
+    print(f'  报告: {jpath}')
+    print(f'        {mpath}')
+    return report['exit_code']
 
 
 if __name__ == "__main__":

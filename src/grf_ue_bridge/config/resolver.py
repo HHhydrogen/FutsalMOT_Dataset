@@ -22,6 +22,11 @@ from grf_ue_bridge.config.paths import (
     PLACEHOLDER_UE_PROJECT_ROOT,
     sanitize_path,
 )
+from grf_ue_bridge.environment import (
+    derive_environment_seed,
+    environment_catalog_fingerprint,
+    resolve_environment_preset,
+)
 
 
 def _validate_camera_mapping(task: m.DatasetTaskConfig) -> None:
@@ -193,6 +198,21 @@ def resolve_task(
     ue_profile = task.ue.model_dump()
     if task.ue.appearance is None:
         ue_profile.pop("appearance", None)
+    if task.ue.environment is None:
+        ue_profile.pop("environment", None)
+        ue_profile.pop("environment_profile", None)
+    else:
+        environment = task.ue.environment
+        ue_profile.pop("environment", None)
+        environment_profile = environment.model_dump(exclude_none=True)
+        environment_profile["environment_seed"] = derive_environment_seed(
+            environment.environment_seed, task.export.seed
+        )
+        environment_profile["preset"] = resolve_environment_preset(
+            environment_profile["environment_seed"], environment.preset
+        )
+        environment_profile["catalog_fingerprint"] = environment_catalog_fingerprint()
+        ue_profile["environment_profile"] = environment_profile
     ann_export = ue_profile.get("annotation_export") or {}
     if "playback_fps" not in ann_export:
         ann_export["playback_fps"] = task.export.playback_fps

@@ -201,3 +201,75 @@ cleanup 必须先读取 canonical audit JSON：缺少 audit 报告直接 fail sa
 6. 在 P1 运行 `task postprocess`、`validate-annotations` 和 `validate-pose`。
 7. 运行 `task audit`，再根据需要运行 `task manifest` 和 `verify-manifest`。
 8. 只在确认门禁和保留策略符合需要后运行 `task cleanup --apply`。
+
+
+### Episode Environment v1.5 只读诊断
+
+`ue/diagnose_episode_environment.py` 的报告 schema 为 `futsalmot_episode_environment_diagnostic` v1，包含 `current_level`、`environment_policy`、六类环境 Actor 的 `actors` 记录、`package_dirty`、`errors` 和 `preflight_can_start`。正式地图必须精确为 `/Game/FutsalMOT/Maps/L_FutsalCourt`，policy 必须为 `futsalmot_environment_v1_5`；`DirectionalLight`、`SkyLight`、`SkyAtmosphere`、`VolumetricCloud`、`ExponentialHeightFog` 和 `PostProcessVolume` 必须按 label/class 唯一匹配。每个 Actor 记录 exact path、class、package path、match count、discovered properties、baseline readback 和 evidence source。
+
+UE property evidence 只接受当前 Editor 中真实 `get_editor_property`、`get_scalar_parameter_value` 或 `get_actor_rotation` 结果。每个目标字段至少包含 `readback` 和非占位 `evidence_source`；缺失、未知、dirty package、错误地图、policy 不匹配、重复或错误 class 均使 `preflight_can_start=false`。单个已确认属性最多读取两次；两次失败时记录 `MANUAL_REQUIRED` 并停止该 Actor 的 discovery。`VolumetricCloud.cloud_coverage` / `cloud_density` 读取组件的 `material` 后调用 `get_scalar_parameter_value("Cloud_GlobalCoverage"/"Cloud_GlobalDensity")`；`PostProcessVolume` 的 settings 字段同时记录对应 `override_*` 开关 baseline，供 restore 写回。未通过 discovery 的 UE 属性名称不得猜测，也不得据此开始 Task 4 apply/restore。
+
+Task 3 诊断只读当前 Editor，不创建 Actor、不进入 PIE、不写入属性、不保存地图或资产，也不使用文件系统 `.uasset` 编辑。没有 resolved v1.5 environment profile 时报告必须显式 `skipped/inactive`；磁盘中的 environment manifest 不能单独激活诊断。
+
+Task 4/5 的纯 Python contract tests 已覆盖 snapshot/report identity、manifest/trajectory drift、逐字段 readback、environment-before-appearance ordering、MRQ active gate、portable summary metadata、terminal callback ownership 和 restore isolation。环境 active 时，MRQ gate 必须在 `_mrq_subsystem()`、queue 和 job 创建之前通过；render summary 的 environment metadata 不复制完整参数 manifest。Task 6 的 audit/cleanup 只由 resolved environment policy 激活，残留文件不能改变 legacy task 的 requirement。
+
+P2 environment transport（`UEEnvironmentTransport`）只用已验证 API：`set_actor_rotation`、`get/set_editor_property`、`MaterialLibrary.create_dynamic_material_instance` + MID `set_scalar_parameter_value`、`SkyLightComponent.recapture_sky`、`EditorAssetSubsystem.set_dirty_flag`。UE 的 `Color` 位置参数顺序是 `(b, g, r, a)`，必须用关键字参数写入；manifest 的 0–1 float 与 8bit FColor 回读按半档 `1/255` 容差比较。VolumetricCloud 只临时挂接 transient MID，restore 通过 MID 的 `parent` 或进程内记录恢复原材质。apply 失败或 restore 结束后清除本次事务触碰的 External Actor package dirty flag，使 package clean baseline 可验证。
+
+早期 adapter 的 Editor evidence（2026-10-21，UE 5.8；不代表本文末尾的新 catalog 验收）：`preflight_can_start=true`；`package_dirty=[]`；`configs/player_environment_smoke_3frames_4cam.json` 经 P1 export 生成 `G:/FutsalMOT_Dataset/episode_player_environment_smoke_3f`。直接调用旧 adapter 的端到端结果为：环境 Actor apply/readback 通过；restore `ok=true`、`state=restored`；六类环境 Actor baseline 与 apply 前一致；cloud material class 回到 `MaterialInstanceConstant`；dirty map/content package 均为空。该证据不覆盖本次新增的十灯控制路径。
+
+`ue/run_task.py --mode full` smoke（同一 episode）结果：environment apply 在 sequence/annotations/MRQ 之前完成；MRQ 4 个 camera 全部 `success`，RGB `12` 帧、mask `12` 帧，`render_summary.json` 含 environment policy/fingerprint/preset 且 `environment_restore_ready=true`；MRQ 终态后自动 restore，`environment_application.json` 为 `state=restored`、`restore_status=restored`、无错误；本机 rollback/report 在公共 report 写入后自动删除。P1 `task postprocess`、`task audit --validation-level quick` 通过，audit 的 `environment` gate 为 `ok=true/required=true/enabled=true`；`task cleanup` dry-run 为 `gate_ok=true`、`gate_problems=[]`、计划删除 28 个中间文件，未执行 `--apply`。
+
+该 smoke 暴露并已修复一个真实缺陷：MRQ setup 中的 `_apply_cv_gt_camera_post_process` 和 `_bake_first_frame_for_render` 会在 environment 事务期间调用 `save_current_level`，把随机化环境写进 External Actor package（实测 DirectionalLight `.uasset` 出现 preset 值 `8.267379`）。现在这两个路径与 stencil 保存都用 `_should_save_level(appearance_active, environment_active)` 门禁，environment active 时只保留内存状态。修复前的磁盘污染已通过“恢复 baseline 后显式保存一次”修复，并验证 DirectionalLight package 重新只含基线 `3.0`、不再含 preset 值。`render_result` 写入 environment report 已实现并有单元测试；早期 report 由修复前代码生成，该字段为 `null`；本轮新 episode 使用修复后的代码，不能用早期 report 代替新证据。
+
+
+
+### Weather preset 可视化与已修复的 preset 数据缺陷
+
+做 preset 对比时发现两个 preset 数据缺陷，已修复并重新 export/resolve/render：
+
+1. `directional_light.rotation_deg` 的 pitch 写成正值（如 `+32`），UE 中光向上照射，MRQ RGB 几乎全黑。现在所有 preset 使用 `pitch <= 0`，并有 `test_every_preset_directional_light_points_downward` 回归测试。修复后 4 机位 `img1/000001.png` 平均 RGB 约 `[47.9, 71.3, 27.0]`，亮像素占比 > 0.97。
+2. `post_process.white_balance_tint` 使用 `2.0` / `-2.0`，超出 UE `WhiteTint` 的 `[-1, 1]` 范围，会产生极端色偏。现修正为 `0.15` / `-0.15`，并有 `test_preset_white_balance_stays_inside_ue_ranges` 回归测试。预览时每个 preset 应用前必须先把所有受管字段写回 baseline，否则会继承上一个 preset 的未指定字段。
+
+已验证的限制：在当前 Editor 会话中，`AutomationLibrary.take_high_res_screenshot` 在 MRQ 之后会延迟数分钟才执行，甚至写到错误目录，不能作为可靠的颜色验收手段。需要看不同天气时应修改 `ue.environment.preset`，重新 export/resolve 后跑 `run_task.py --mode full`，以 `img1/` 的正式 MRQ 输出为准。
+
+3. `exponential_height_fog.height_falloff` 与 `fog_height_falloff` 映射到同一个 UE 属性 `fog_height_falloff`。P1 之前允许两者取不同随机值（如 light_haze 的 `0.11` / `0.12`），P2 的 duplicate-target 检查会拒绝 apply。现在 `fog_height_falloff` 固定为 `height_falloff` 的别名，随机化后仍保持同值，并有 `test_fog_height_falloff_is_an_alias_of_height_falloff` 回归测试。
+
+原始环境版本曾将六个 preset 的 4 机位首帧渲染到 `G:/FutsalMOT_Dataset/env_presets/<preset>/CineCam_0X_f000001.png`（24 张）；这些图片不包含 matte 草地材质和当前场馆灯光设置，不能作为新版本 evening preset 的验收结果。当前工作树将补光切换到用户手动放置的 10 个 Spot Light：初始六档采用白天 5 EV、evening 10 EV；当前八档已按厚云亮度重新校准，详见末尾表格；仅修改手动灯的强度和单位。这是新十灯加入时的阶段记录；当前 catalog 校准和实际 MRQ 证据见本文末尾，不能继续据此判断当前路径未验证。
+
+本次已完成的真实 UE 资产修改是 `/Game/FutsalMOT/Materials/MI_Futsal_Field_Grass_Matte_v1`：它继承 `M_Futsal_Field_Grass`，把 `Grass_Specular/Param` 设为 `0.08`，并已保存到 `SM_FutsalCourt_Floor` 的 External Actor。最终 canonical `daylight_clear_v1` 已使用该 matte 材质重新渲染，4 个 camera 各有 3 个 RGB 和 3 个 mask 帧，postprocess、quick audit 和 environment restore 通过。
+
+transient `RectLight` 的既有 UE 5.8 限制仍作为历史证据保留。新十灯路径的只读诊断要求十个预期 label 各自唯一、Actor class 和 component class 正确、EV 单位一致、当前强度一致；apply/restore 只写 intensity/unit，并跟踪其 External Actor package。这是新路径加入时的验收门槛；本轮仍按 fresh diagnostic、apply/readback/restore、实际 MRQ 和 full audit 分别记录证据。
+
+### 当前八档天气验收（2026-10-21，catalog revision 2）
+
+本节覆盖前文早期 adapter/十灯初始接入记录。最终 catalog fingerprint 为 `48a095a31efd17443a82e255cc2175330d7df3321c09b1880821c2f8516285c2`。
+
+八档均在正式地图、matte 草地、seed 42、4 个 `CineCam_01..04`、每机位 3 帧、1920×1080、10 FPS 和 RGB/Object-ID 同 job 路径下完成。每档 P1 validate/export、UE 只读 environment/appearance 双诊断、环境 apply/readback、异步 MRQ、自动 restore、Cryptomatte 解码、annotation validator 和 full audit 均通过；共 96 RGB PNG、96 mask PNG。未启用 appearance/号码或 Pose，因此不作为这些功能的联合验收。
+
+| preset | 十灯 EV | 四机位场地平均亮度范围 | 球员暗像素最大占比 |
+| --- | ---: | ---: | ---: |
+| `daylight_clear_v1` | 5 | 49.9–83.7 | 9.46% |
+| `overcast_soft_v1` | 8 | 38.3–47.5 | 4.85% |
+| `warm_evening_v1` | 10 | 64.9–65.2 | 0.90% |
+| `cool_evening_v1` | 10 | 65.8–66.1 | 0.62% |
+| `light_haze_v1` | 5 | 41.6–73.5 | 12.76% |
+| `cloudy_variation_v1` | 8.5 | 51.6–55.6 | 3.61% |
+| `dawn_cool_v1` | 10 | 67.3–67.6 | 0.46% |
+| `night_floodlit_v1` | 10 | 66.4–66.8 | 0.83% |
+
+亮度是每个 camera 的 annotation frame 1（source step 0）统计：用相机标定将 40×20m 场地投影为 ROI，RGB 使用 `0.2126R+0.7152G+0.0722B`（0–255）；球员区域由 mask ID 1..10 决定，暗像素为亮度 <8。八档共 32 张首帧的球员区域均未出现 RGB 三通道同时 ≥250 的截白像素。首帧亮度统计只用于校准，不等于整段轨迹的视觉质量证明；所有 3 帧的结构和 mask 数据由 full audit 检查。
+
+最终只读诊断：正式 Level、PIE/MRQ inactive、dirty packages 为空；六类环境 Actor 的 baseline readback 与开始前一致；十灯强度恢复为 5 EV，单位、位置、旋转、scale、颜色、半径、内外锥角及阴影开关均与开始前一致；本轮所有 `weather_*` runtime rollback 均已按正式恢复流程退役。逐 Actor application report 的 restore 状态与整体 restored 状态一致。UE 诊断直接读取 P1 manifest 参数，不再依赖 P1 包的 import path 或旧 Editor 会话缓存。
+
+天气独立提交版本的默认单元测试：`1463 passed, 7 deselected`；另有 106 条既有路径兼容和 API warning。包含未提交号码开发内容的原工作树曾通过 1689 项测试，该数字不代表本次提交范围。原六个 portable-config 失败来自单元测试读取开发机 local config，已通过临时仓库/环境隔离修复，生产路径解析优先级未改变。新增 fresh-UE 回归测试先复现缺少 P1 包的失败，再验证磁盘契约修复。
+
+最终数据位于 `G:/FutsalMOT_Dataset/weather_validation_20261021_r3/`；可计入验收的八个 episode 由 `Saved/EnvironmentPreviews/weather_20261021_r3/index.json` 明确列出，其中 cool evening 使用 `_r3_retry2`。同目录的 `verification_summary.json`、`*_quality.json`、`final_baseline.json`、`weather_overview.png` 和 `weather_all_cameras.png` 是本机生成证据，不入库。测试 Sequence 保存在 `/Game/FutsalMOT/Tests/WeatherValidation/<preset>/LS_Cam_01..04`，未覆盖正式 Sequence。
+
+连续大量 MRQ 的已知风险：本轮旧 Editor 会话在冷暮光重渲染时发生 D3D12 `Out of video memory`；另有一次 P1 内存分配失败和一张不可解码 EXR。失败尝试保留，未计入上述八档成功结果。Editor 重启后先用双诊断检查基线，再通过正式 environment transaction restore 处理中断快照，发布失败渲染/已恢复报告后才继续。后续验收改为 MRQ 结束再以 1 worker 串行后处理，重渲染通过。`render_summary.status=success` 不能替代 EXR 解码和 audit；本轮未证明连续大批量渲染的显存稳定性。不要在既有恢复证据未解决时重跑或删除快照绕过门禁。
+
+可用入口为 `configs/weather_seeded_smoke_3frames_4cam.json`；auto seed 42 解析为 `cloudy_variation_v1`，seed 47 解析为 `night_floodlit_v1`。复现需要相同 catalog fingerprint、资产与地图基线及渲染设置；UE/GPU 的时序与浮点差异不保证 PNG 字节一致。新增 revision 后旧 manifest 会按 catalog drift 拒绝，不得手改指纹。900 帧生产批次仍需单独确认 seed/preset 清单，并先做多 seed 和长时显存稳定性验收，尚未启动。
+
+
+2026-10-21 提交前另以隔离后的天气代码完成四机位 × 三帧真实 UE MRQ 回归，12 张 RGB、12 张 mask 全部解码，full audit 通过，环境与十名球员基线完整恢复。该测试临时给十名球员分别绑定 Set_06–15 的新服装，用于资产渲染验收；没有修改正式 appearance v1 的 Set_01–05 候选契约，也不代表号码功能已实现。
+
+号码功能仍为后续待办：背部号码贴合与骨骼跟随、遮挡可见性、号码 mask 与 RGB 同步、实例唯一性及 apply/restore 生命周期尚未验收。本次不提交号码代码、资产或 v2 开关；正式默认配置继续使用 v1。

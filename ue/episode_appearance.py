@@ -7,6 +7,7 @@ import json
 import math
 import os
 import re
+import struct
 import tempfile
 from copy import deepcopy
 from pathlib import Path
@@ -809,11 +810,36 @@ def _validate_actor_snapshots(snapshots: Any) -> list:
 
 
 def _snapshot_matches_state(snapshot: Mapping[str, Any], current: Mapping[str, Any]) -> bool:
-    """比较原始组件状态；不会把有效材质误当成 override 数组。"""
-    return all(
-        field in current and current[field] == snapshot[field]
-        for field in _SNAPSHOT_FIELDS
-    )
+    """身份和材质严格相等；Transform 允许 UE 回读的微小数值舍入。"""
+    for field in _SNAPSHOT_FIELDS:
+        if field not in current or field not in snapshot:
+            return False
+        if field not in {"actor_transform", "relative_transform"}:
+            if current[field] != snapshot[field]:
+                return False
+            continue
+        before, after = snapshot[field], current[field]
+        if not isinstance(before, Mapping) or not isinstance(after, Mapping):
+            return False
+        if _transform_payload_errors(before, field) or _transform_payload_errors(after, field):
+            return False
+        for part in ("location", "rotation", "scale"):
+            for expected, observed in zip(before[part], after[part]):
+                # 不使用相对容差，避免远处位置放大容差；单位分别是 cm、deg、比例。
+                delta = float(observed) - float(expected)
+                if part == "rotation":
+                    delta = (delta + 180.0) % 360.0 - 180.0
+                if abs(delta) > 1e-6:
+                    # Blueprint 单精度位置与 UE 双精度回读可有微小差异；只接受
+                    # 同一 binary32 量化值，且绝对差不得达到 1e-3 cm。
+                    if part != "location" or abs(delta) >= 1e-3:
+                        return False
+                    try:
+                        if struct.pack("!f", float(expected)) != struct.pack("!f", float(observed)):
+                            return False
+                    except (OverflowError, struct.error):
+                        return False
+    return True
 
 
 def _transform_payload_errors(transform: Mapping[str, Any], field_name: str) -> list:

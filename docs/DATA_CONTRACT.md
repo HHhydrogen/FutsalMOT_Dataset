@@ -1,5 +1,7 @@
 # FutsalMOT 数据契约
 
+当前发布入口为G:/FutsalMOT_Dataset/v1_no_numbers_4k，8个seed、32相机序列、20116对4K RGB/mask。每seed单片段平铺在groups/seed_XXXXXXXX/cameras；group的clip引用为clip.json。结构与共享字段见[SEED_DATASET.md](SEED_DATASET.md)，生产准入等级见[PRODUCTION_V1.md](PRODUCTION_V1.md)。号码和Pose不在本轮输出中。
+
 本文档描述当前代码读写的 JSON/JSONL、图像和标签格式。字段名称以 `src/grf_ue_bridge/schema.py`、`ue/dataset_export.py`、`ue/annotation_exporter.py`、`ue/pose_annotator.py` 和相关验证器为准。
 
 ## 目录和阶段

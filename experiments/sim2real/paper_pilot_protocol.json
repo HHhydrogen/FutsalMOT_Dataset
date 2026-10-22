@@ -1,0 +1,167 @@
+{
+  "schema": "sim2real_selection_v1",
+  "protocol_id": "production_4k_eight_weather_20261022_v1",
+  "selection_basis": "用户本轮8组正式清单；不使用真实评测结果选组；八天气全部用于合成训练，真实验证与测试按比赛独立",
+  "groups": [
+    {
+      "root_seed": 1021,
+      "preset": "light_haze_v1",
+      "split": "train",
+      "frame_count": 902,
+      "source_frame_range": [
+        0,
+        902
+      ],
+      "cameras": [
+        "CineCam_01",
+        "CineCam_02",
+        "CineCam_03",
+        "CineCam_04"
+      ],
+      "resolution": [
+        3840,
+        2160
+      ]
+    },
+    {
+      "root_seed": 1025,
+      "preset": "daylight_clear_v1",
+      "split": "train",
+      "frame_count": 430,
+      "source_frame_range": [
+        0,
+        430
+      ],
+      "cameras": [
+        "CineCam_01",
+        "CineCam_02",
+        "CineCam_03",
+        "CineCam_04"
+      ],
+      "resolution": [
+        3840,
+        2160
+      ]
+    },
+    {
+      "root_seed": 1007,
+      "preset": "dawn_cool_v1",
+      "split": "train",
+      "frame_count": 433,
+      "source_frame_range": [
+        541,
+        974
+      ],
+      "cameras": [
+        "CineCam_01",
+        "CineCam_02",
+        "CineCam_03",
+        "CineCam_04"
+      ],
+      "resolution": [
+        3840,
+        2160
+      ]
+    },
+    {
+      "root_seed": 1042,
+      "preset": "overcast_soft_v1",
+      "split": "train",
+      "frame_count": 463,
+      "source_frame_range": [
+        0,
+        463
+      ],
+      "cameras": [
+        "CineCam_01",
+        "CineCam_02",
+        "CineCam_03",
+        "CineCam_04"
+      ],
+      "resolution": [
+        3840,
+        2160
+      ]
+    },
+    {
+      "root_seed": 1044,
+      "preset": "cool_evening_v1",
+      "split": "train",
+      "frame_count": 822,
+      "source_frame_range": [
+        207,
+        1029
+      ],
+      "cameras": [
+        "CineCam_01",
+        "CineCam_02",
+        "CineCam_03",
+        "CineCam_04"
+      ],
+      "resolution": [
+        3840,
+        2160
+      ]
+    },
+    {
+      "root_seed": 1048,
+      "preset": "night_floodlit_v1",
+      "split": "train",
+      "frame_count": 952,
+      "source_frame_range": [
+        0,
+        952
+      ],
+      "cameras": [
+        "CineCam_01",
+        "CineCam_02",
+        "CineCam_03",
+        "CineCam_04"
+      ],
+      "resolution": [
+        3840,
+        2160
+      ]
+    },
+    {
+      "root_seed": 1102,
+      "preset": "cloudy_variation_v1",
+      "split": "train",
+      "frame_count": 414,
+      "source_frame_range": [
+        0,
+        414
+      ],
+      "cameras": [
+        "CineCam_01",
+        "CineCam_02",
+        "CineCam_03",
+        "CineCam_04"
+      ],
+      "resolution": [
+        3840,
+        2160
+      ]
+    },
+    {
+      "root_seed": 1131,
+      "preset": "warm_evening_v1",
+      "split": "train",
+      "frame_count": 613,
+      "source_frame_range": [
+        257,
+        870
+      ],
+      "cameras": [
+        "CineCam_01",
+        "CineCam_02",
+        "CineCam_03",
+        "CineCam_04"
+      ],
+      "resolution": [
+        3840,
+        2160
+      ]
+    }
+  ]
+}

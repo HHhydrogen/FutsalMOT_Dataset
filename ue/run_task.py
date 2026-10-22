@@ -518,6 +518,7 @@ class _AppearanceTransaction:
         self.report_path = Path(report_path)
         self.public_report_path = Path(public_report_path)
         self.restore_result = None
+        self.render_deferred = False
         self.callback_ownership_transferred = False
 
     def _publish_report(self):

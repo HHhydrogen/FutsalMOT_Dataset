@@ -885,6 +885,16 @@ def check_render_summary(
 
 
 
+def _check_retained_scene(episode_dir, errors):
+    """只接受与真实渲染、应用报告和manifest逐字节绑定的场景保留收据。"""
+    from scene_retention import retained_completion
+    try:
+        return retained_completion(episode_dir) is not None
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        errors.append("scene retention: {}".format(exc))
+        return False
+
+
 def check_environment(
     episode_dir: Path,
     dataset_dir: Path,
@@ -901,6 +911,7 @@ def check_environment(
     start = len(errors)
     episode_dir = Path(episode_dir)
     dataset_dir = Path(dataset_dir)
+    retained = _check_retained_scene(episode_dir, errors)
     provenance = episode_dir / "provenance"
     manifest = None
     report = None
@@ -937,13 +948,13 @@ def check_environment(
         except (TypeError, ValueError, KeyError, OverflowError, RecursionError) as exc:
             report_errors = [f"environment application report 校验异常: {exc}"]
         errors.extend(f"environment: {message}" for message in report_errors)
-        if report.get("state") != "restored":
+        if report.get("state") != ("applied" if retained else "restored"):
             errors.append(
                 "environment: application report state actual={!r}, expected='restored'".format(
                     report.get("state")
                 )
             )
-        if report.get("restore_status") != "restored":
+        if report.get("restore_status") != ("not_started" if retained else "restored"):
             errors.append(
                 "environment: application report restore_status actual={!r}, expected='restored'".format(
                     report.get("restore_status")
@@ -1076,7 +1087,13 @@ def check_appearance(
     if not isinstance(application, Mapping):
         errors.append("appearance: appearance_application.json 顶层必须是对象")
         application = {}
+    retained = _check_retained_scene(episode_dir, errors)
     _validate_restored_application_report(application, errors)
+    if retained:
+        try:
+            _validate_application_report(application)
+        except (TypeError, ValueError, KeyError) as exc:
+            errors.append("appearance retained report: {}".format(exc))
     if application.get("schema") != "futsalmot_appearance_application":
         errors.append("appearance: application report schema 无效")
     if type(application.get("version")) is not int or application.get("version") != 1:
@@ -1092,8 +1109,9 @@ def check_appearance(
         current_trajectory_sha256 = None
     if application.get("trajectory_sha256") != current_trajectory_sha256:
         errors.append("appearance: application report trajectory_sha256 不匹配当前 frames.jsonl")
-    if application.get("state") != "restored":
-        errors.append("appearance: application report state 必须为 restored")
+    if application.get("state") != ("applied" if retained else "restored"):
+        errors.append("appearance: application report state={!r}, expected={!r}".format(
+            application.get("state"), "applied" if retained else "restored"))
     manifest_entities = {
         entity.get("entity_id"): entity
         for entity in manifest.get("entities", [])
@@ -1114,7 +1132,7 @@ def check_appearance(
                 errors.append(
                     f"appearance: {entity_id} apply_status 必须为 applied"
                 )
-            if actor.get("restore_status") != "restored":
+            if actor.get("restore_status") != ("not_started" if retained else "restored"):
                 errors.append(
                     f"appearance: {entity_id} restore_status 必须为 restored"
                 )

@@ -1,5 +1,14 @@
 # AGENTS.md
 
+## 当前规范布局与研究边界
+
+- 正式无号码批次8组、八天气、20116对RGB/mask已完成，位于`G:/FutsalMOT_Dataset/v1_no_numbers_4k`。
+- 每seed单片段采用`layout=seed_flat_v1`，相机直接位于seed目录；始终按manifest引用解析，不推断固定祖先层数。旧多片段布局继续兼容读取。
+- `verify_clip`的structure等级复用已发布媒体证据，不能称为full像素审计；迁移只改路径和文本SHA，不重新编码图像。
+- 研究的`--reference-images`通过Windows目录联接读取正式RGB，训练清单必须保留images词法路径以关联labels，不得resolve到G盘rgb目录。
+- 迁移实验固定真实标注预算和优化步数，比较仅真实与真实加合成的真实验证指标，报告正负结果。最终test不用于调参，UE/GPU严格串行。
+- 用户已明确要求的本轮提交/推送为授权；号码工作仍未完成，必须留在工作树、排除提交。生产数据、权重和本机收据不入Git。
+
 ## 仓库边界
 
 本目录是 `FutsalMOT_Dataset` 独立 Git 仓库，远程为 `git@github.com:HHhydrogen/FutsalMOT_Dataset.git`，当前分支为 `main`。外层 UE 仓库通过 submodule gitlink 引用本仓库；外层只记录本仓库 commit，不跟踪这里的 Python 文件内容。

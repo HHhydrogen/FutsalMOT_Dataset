@@ -20,8 +20,10 @@ UE 5.8 绑定会报 "incorrect number of arguments" 而失败。PIE 渲染窗口
 主线程持续 tick 才能推进，任何 time.sleep / Event.wait 同步阻塞都会卡死渲染。
 """
 
+import os
 import shutil
 import sys
+import tempfile
 import time
 import traceback
 from datetime import datetime
@@ -194,6 +196,30 @@ def find_object_id_files(render_dir: Path) -> Dict[int, Path]:
 
 
 
+def _link_or_copy_frame_atomic(source: Path, destination: Path) -> None:
+    """同卷优先硬链接，跨卷或不支持链接时复制；完整文件就绪后原子覆盖。
+
+    源文件由调用者按既有归档规则删除。失败时保留源和旧目标，清理临时文件。
+    帧在 MRQ 完成后视为只读，硬链接目标可在删除 scratch 源后独立保留。
+    中断后重入时，已完成的不同路径硬链接直接复用，不重复写入文件。
+    """
+    source, destination = Path(source), Path(destination)
+    if destination.exists() and os.path.samefile(source, destination):
+        if os.path.normcase(os.path.abspath(source)) == os.path.normcase(os.path.abspath(destination)):
+            raise shutil.SameFileError("{} 与 {} 是同一个文件".format(source, destination))
+        return
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(
+        prefix=".{}-".format(destination.name), dir=str(destination.parent)
+    ) as staging_dir:
+        staged = Path(staging_dir) / destination.name
+        try:
+            os.link(source, staged)
+        except OSError:
+            shutil.copy2(source, staged)
+        os.replace(staged, destination)
+
+
 def copy_object_id_frames(
     render_dir: Path,
     render_mask_dir: Path,
@@ -207,7 +233,7 @@ def copy_object_id_frames(
         source = rendered.get(frame)
         if source is None:
             continue
-        shutil.copy2(source, render_mask_dir / f"{frame:06d}.exr")
+        _link_or_copy_frame_atomic(source, render_mask_dir / f"{frame:06d}.exr")
         copied += 1
     return copied
 
@@ -249,7 +275,7 @@ def copy_rendered_frames(
     copied = 0
     for frame_index, num in mapping.items():
         dst = img1_dir / f"{frame_index:06d}.png"
-        shutil.copy2(rendered[num], dst)
+        _link_or_copy_frame_atomic(rendered[num], dst)
         copied += 1
     return copied
 
@@ -1558,6 +1584,8 @@ class _AsyncRenderPipeline:
         self.summary_invalidated = False
         self._watch_handle = None
         self._watch_state = None
+        self._restore_map_path = None
+        self._cancel_wait = None
 
     def summary_path(self) -> Path:
         """渲染完成标记（render_summary.json）的路径。"""
@@ -1574,6 +1602,7 @@ class _AsyncRenderPipeline:
 
     def _start(self, subsystem, queue, executor, map_path, image_width, image_height, frame_rate, file_name_format, zero_pad) -> bool:
         """执行队列构建与提交；提交成功返回 True。"""
+        self._restore_map_path = str(map_path).split(".")[0]
         _clear_queue(queue)
         prepared = []
         for info in self.jobs:
@@ -1630,6 +1659,59 @@ class _AsyncRenderPipeline:
             self._start_completion_watchdog()
         return True
 
+    def request_cancel(self) -> bool:
+        """先登记恢复等待，再请求原生取消；True 仅表示取消请求已调用。
+
+        UE 5.8 可在 cancel_all_jobs 调用栈内同步触发 finished(False)，且未必
+        暴露取消状态属性。外部调用者须使用本入口，不得直接调用 executor。
+        """
+        if self.finished or self._cancel_wait is not None:
+            return False
+        cancel = getattr(self.executor, "cancel_all_jobs", None)
+        if not callable(cancel):
+            raise RuntimeError("MRQ executor 未提供 cancel_all_jobs，未请求取消")
+        if not self._restore_map_path:
+            raise RuntimeError("MRQ 未登记提交地图，无法安全请求取消")
+        self._request_cancelled_completion()
+        try:
+            cancel()
+        except Exception as exc:
+            self._request_failed_completion(
+                "MRQ cancel_all_jobs 调用失败: {}: {}".format(type(exc).__name__, exc)
+            )
+            raise
+        return True
+
+    def _request_failed_completion(self, reason):
+        """没有明确取消证据的失败保持 failed，但同样等待 Editor World 安全。"""
+        self._request_deferred_completion(cancelled=False, reason=reason)
+
+    def _request_deferred_completion(self, cancelled, reason=None):
+        """等待恢复时机与终态原因分别记录，避免把真正失败误记为取消。"""
+        if self.finished:
+            return
+        if self._restore_map_path is None:
+            # 未提交过地图的同步/纯数据管线没有 Editor World 生命周期。
+            if cancelled:
+                self._copy_and_finalize(cancelled=True)
+            else:
+                self._finalize(failed=True, reason=reason)
+            return
+        if self._cancel_wait is None:
+            self._cancel_wait = {
+                "start": time.monotonic(), "ready_ticks": 0, "ready": False,
+                "status": "cancelled" if cancelled else "failed", "reason": reason,
+            }
+        elif not cancelled:
+            self._cancel_wait.update(status="failed", reason=reason)
+        if self._watch_handle is None and not self._start_completion_watchdog():
+            self._finalize(
+                failed=True, defer_callback=True,
+                reason="MANUAL_REQUIRED: 无法注册 MRQ 结束后 Editor World 恢复等待；保留快照，禁止恢复回调；原终态 {}: {}".format(
+                    self._cancel_wait.get("status"), self._cancel_wait.get("reason")
+                ),
+            )
+
     def _on_finished(self, executor, success):
         """MRQ 整批渲染结束。签名与 on_executor_finished_delegate 一致：(executor, success)。
 
@@ -1641,18 +1723,21 @@ class _AsyncRenderPipeline:
             return
         try:
             print(f'  [MRQ] on_executor_finished_delegate 回调触发（success={success}）')
+            if self._cancel_wait is not None:
+                self._request_cancelled_completion()
+                return
             if not success:
                 cancelled = self._executor_cancelled(executor)
                 if cancelled:
-                    self._copy_and_finalize(cancelled=True)
+                    self._request_cancelled_completion()
                     return
-                self._finalize(failed=True, reason='MRQ finished 委托报告 success=False')
+                self._request_failed_completion('MRQ finished 委托报告 success=False')
                 return
             self._copy_and_finalize()
         except Exception as e:
             print(f'  [MRQ 回调异常] _on_finished: {e}')
             traceback.print_exc()
-            self._finalize(failed=True, reason='MRQ finished 收尾异常: {}: {}'.format(type(e).__name__, e))
+            self._request_failed_completion('MRQ finished 收尾异常: {}: {}'.format(type(e).__name__, e))
 
     def _on_errored(self, executor, pipeline, is_fatal, errors):
         """MRQ 渲染出错（不中断最终收尾，成败由 finished 委托决定）。
@@ -1674,6 +1759,49 @@ class _AsyncRenderPipeline:
             print(f'  [MRQ 回调异常] _on_errored: {e}')
             traceback.print_exc()
 
+    def _request_cancelled_completion(self):
+        """取消回调可能发生在 PIE 拆卸栈内，只登记等待，不在该栈恢复资产。"""
+        self._request_deferred_completion(cancelled=True)
+
+    def _poll_cancelled_completion(self):
+        """只保留字符串/布尔证据；每次查询后释放临时 World 引用。"""
+        self._request_cancelled_completion()
+        if self.finished:
+            return
+        state = self._cancel_wait
+        try:
+            import unreal
+            from diagnose_episode_environment import _runtime_state
+            runtime, errors = _runtime_state(unreal)
+            level = _get_current_map_path()
+            ready = (
+                not errors
+                and bool(self._restore_map_path)
+                and level == self._restore_map_path
+                and runtime.get("play_session_active") is False
+                and runtime.get("mrq_state") == "inactive"
+                and self._executor_rendering() is False
+            )
+            state["last_evidence"] = {"level": level, "runtime": runtime, "errors": errors}
+        except Exception as exc:
+            ready = False
+            state["last_evidence"] = {"error": "{}: {}".format(type(exc).__name__, exc)}
+        state["ready_ticks"] = state["ready_ticks"] + 1 if ready else 0
+        if state["ready_ticks"] >= 2:
+            state["ready"] = True
+            if state.get("status", "cancelled") == "failed":
+                self._finalize(failed=True, reason=state["reason"])
+            else:
+                self._copy_and_finalize(cancelled=True)
+        elif time.monotonic() - state["start"] >= 120.0:
+            self._finalize(
+                failed=True, defer_callback=True,
+                reason="MANUAL_REQUIRED: MRQ 结束后等待正式 Editor World/PIE/MRQ 恢复超时；保留快照，禁止恢复回调；原终态 {}: {}；{}".format(
+                    state.get("status", "cancelled"), state.get("reason"), state.get("last_evidence")
+                ),
+            )
+
+
     def _start_completion_watchdog(self):
         """注册 slate post-tick 兜底：finished delegate 不触发时也能收尾。
 
@@ -1686,6 +1814,8 @@ class _AsyncRenderPipeline:
           3. 硬超时 30 分钟（按现有文件收尾）。
         与 delegate 幂等：_copy_and_finalize / _finalize 有 self.finished 守卫。
         """
+        if self._watch_handle is not None:
+            return True
         try:
             import unreal
         except Exception as exc:
@@ -1698,10 +1828,9 @@ class _AsyncRenderPipeline:
             if self.finished:
                 return False
             st = self._watch_state
-            if self._executor_cancelled(self.executor):
-                print('  [MRQ] watchdog：检测到 executor 已取消，开始收尾')
-                self._copy_and_finalize(cancelled=True)
-                return False
+            if self._cancel_wait is not None or self._executor_cancelled(self.executor):
+                self._poll_cancelled_completion()
+                return not self.finished
             rendering = self._executor_rendering()
             present = self._all_keep_frames_present()
             total = self._total_render_files()
@@ -1714,8 +1843,8 @@ class _AsyncRenderPipeline:
                 st['seen_rendering'] = True
             elapsed = time.monotonic() - st['start']
             if rendering is False and self.error_messages:
-                self._finalize(failed=True, reason='MRQ executor error: {}'.format(' | '.join(self.error_messages)))
-                return False
+                self._request_failed_completion('MRQ executor error: {}'.format(' | '.join(self.error_messages)))
+                return not self.finished
             if rendering is False and present:
                 print('  [MRQ] watchdog：executor 不再渲染且目标帧齐全，开始收尾')
                 self._copy_and_finalize()
@@ -1771,6 +1900,8 @@ class _AsyncRenderPipeline:
 
     def _all_keep_frames_present(self) -> bool:
         """所有 camera 的目标渲染帧（keep_indices）是否已输出到 render/（mask 用 find_mask_files）。"""
+        if self._executor_rendering() is True:
+            return False
         for info in self.jobs:
             if info.get('kind') == 'combined':
                 available_rgb = find_final_image_files(info['render_dir'])
@@ -1786,12 +1917,21 @@ class _AsyncRenderPipeline:
         return True
 
     def _total_render_files(self) -> int:
-        """所有 camera render/ 目录的 PNG + EXR 总数。"""
-        return sum((len(list(info['render_dir'].rglob('*.png'))) + len(list(info['render_dir'].rglob('*.exr'))) for info in self.jobs))
+        """渲染中最多每两秒统计一次；停止或状态未知时立即完整统计。"""
+        rendering = self._executor_rendering()
+        now = time.monotonic()
+        cached = getattr(self, "_render_file_count_cache", None)
+        if rendering is True and cached is not None and 0 <= now - cached[0] < 2.0:
+            return cached[1]
+        total = sum((len(list(info['render_dir'].rglob('*.png'))) + len(list(info['render_dir'].rglob('*.exr'))) for info in self.jobs))
+        self._render_file_count_cache = (now, total) if rendering is True else None
+        return total
 
     def _copy_and_finalize(self, cancelled=False):
         """finished 成功后：逐 camera 复制 RGB（img1/）与统计 Instance-ID Mask 对齐。"""
         if self.finished:
+            return
+        if self._cancel_wait is not None and not self._cancel_wait["ready"]:
             return
         per_camera = {}
         total_copied = 0
@@ -1885,10 +2025,12 @@ class _AsyncRenderPipeline:
         img_count = len(list(img1_dir.glob('*.png')))
         return ann_count if ann_count != img_count else None
 
-    def _finalize(self, failed, status=None, per_camera=None, total_copied=0, total_mask_frames=0, reason=None):
+    def _finalize(self, failed, status=None, per_camera=None, total_copied=0, total_mask_frames=0, reason=None, defer_callback=False):
         """写完成标记 render_summary.json，并释放模块级引用（只执行一次）。"""
         global _ACTIVE_RENDER
         if self.finished:
+            return
+        if self._cancel_wait is not None and not self._cancel_wait["ready"] and not defer_callback:
             return
         self.finished = True
         if _ACTIVE_RENDER is self:
@@ -1935,6 +2077,9 @@ class _AsyncRenderPipeline:
             job_result = {'camera_id': camera_id, 'job_name': job_name, 'status': job_status}
             job_results.append(job_result)
         self.terminal_result = {'episode_id': self.episode_id, 'status': status, 'reason': reason, 'cameras': camera_results, 'jobs': job_results, 'mrq_errors': self.error_messages or None, 'finished_at': summary['finished_at']}
+        if defer_callback:
+            self.terminal_result.update(restore_deferred=True, manual_required=True)
+            summary.update(restore_deferred=True, manual_required=True)
         if self.environment_active:
             for camera in camera_results.values():
                 camera.update(self.environment_metadata)
@@ -1979,7 +2124,7 @@ class _AsyncRenderPipeline:
         if failed:
             print(f'  原因: {reason}')
         print(f'  后续步骤（P1）：uv run grf-ue validate-annotations {self.output_dir}')
-        if callable(self.on_complete):
+        if callable(self.on_complete) and not defer_callback:
             try:
                 self.on_complete(self.terminal_result)
             except Exception as exc:
@@ -2181,7 +2326,7 @@ def _render_sequences_impl(sequences_cfg, annotation_cfg: dict, sequence_package
     _ACTIVE_RENDER = pipeline
     submitted = pipeline.start(subsystem, queue, executor, map_path, image_width, image_height, frame_rate, file_name_format, zero_pad)
     if callable(on_complete):
-        return {'callback_ownership_transferred': bool(submitted), 'terminal_result': pipeline.terminal_result}
+        return {'callback_ownership_transferred': bool(submitted or (pipeline.terminal_result or {}).get('restore_deferred')), 'terminal_result': pipeline.terminal_result}
     return None
 
 

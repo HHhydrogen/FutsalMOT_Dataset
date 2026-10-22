@@ -288,7 +288,11 @@ def _validate_camera(
         if require_mot:
             errors.append(f"{label} 缺少 gt/gt.txt（如需 MOT 导出）")
     else:
-        include_ball_mot = any(",100," in ln for ln in _read_lines(gt_path))
+        # 仅检查 track_id 列，不能把坐标或宽高为 100 误判为包含足球。
+        include_ball_mot = any(
+            len(parts) >= 2 and parts[1].strip() == "100"
+            for parts in (line.split(",") for line in _read_lines(gt_path))
+        )
         expected_mot = build_mot_gt(per_frame_objects, width, height, include_ball_mot)
         actual_mot = _read_lines(gt_path)
         if expected_mot != actual_mot:

@@ -13,7 +13,10 @@ UE 5.8 实测编码：
 
 性能说明：
   - EXR 用 PIZ 压缩（整帧解压）；openexr Python 绑定只提供整层 `pixels`（RGBA 4 通道），
-    无按通道选择性解码（`InputFile` 已废弃）。因此解码成本是固有的，靠多进程并行摊薄。
+    当前读取仍需整帧解压，不以降低分辨率或精度减少成本。
+  - 选择 ID 层用小型索引表加完整 uint32 比较统计精确命中，冲突多时回退二分查找，
+    避免 np.isin 为每个 4K 候选层排序数百万像素。仅在候选层的命中上限也不能
+    超过当前最优项时跳过统计，保持“最多命中、同分 RGBA 优先”的精确语义。
   - ID 匹配用 float32 位模式 → uint32 精确整数比较（`ids.view(np.uint32)`），
     比浮点比较更快且 bit-exact。
 
@@ -47,6 +50,33 @@ def hex_id_to_float(hex_id: str) -> float:
     return struct.unpack(">f", bytes.fromhex(hex_id))[0]
 
 
+def _count_manifest_hits(bits: np.ndarray, sorted_targets: np.ndarray) -> int:
+    """小表索引只缩小查找范围，最终始终比较完整的 uint32，绝不截断 ID。"""
+    hits = 0
+    low_bits = sorted_targets & np.uint32(65535)
+    table = np.zeros(65536, dtype=np.uint32)
+    present = np.zeros(65536, dtype=bool)
+    table[low_bits] = sorted_targets
+    present[low_bits] = True
+    # 同桶中未进入主表的键单独精确比较；过多冲突时使用有界二分查找。
+    collisions = sorted_targets[table[low_bits] != sorted_targets]
+    # 每块最多约 52 万像素，4K 时索引、目标值与比较临时数组合计约 7 MB。
+    rows = max(1, (512 * 1024) // max(1, bits.shape[1]))
+    for start in range(0, bits.shape[0], rows):
+        chunk = bits[start:start + rows]
+        if len(collisions) <= 4:
+            indices = chunk & np.uint32(65535)
+            hits += int(np.count_nonzero((table[indices] == chunk) & present[indices]))
+            for target in collisions:
+                hits += int(np.count_nonzero(chunk == target))
+        else:
+            indices = np.searchsorted(sorted_targets, chunk)
+            # 超过最大目标的索引截到末项，完整整数比较仍会排除它。
+            matched_targets = np.take(sorted_targets, indices, mode="clip")
+            hits += int(np.count_nonzero(matched_targets == chunk))
+    return hits
+
+
 def select_cryptomatte_id_channel(
     manifest: dict,
     layers: dict,
@@ -66,9 +96,10 @@ def select_cryptomatte_id_channel(
             continue
     if not targets:
         raise ValueError("Cryptomatte manifest 没有有效的十六进制 ID")
-    target_bits = np.asarray(targets, dtype=np.uint32)
+    target_bits = np.unique(np.asarray(targets, dtype=np.uint32))
 
     candidates = []
+    best = None
     for layer_name, channel in layers.items():
         pixels = getattr(channel, "pixels", channel)
         if pixels is None:
@@ -76,20 +107,27 @@ def select_cryptomatte_id_channel(
         array = np.asarray(pixels)
         if array.ndim != 3 or array.shape[2] < 1:
             continue
-        if array.dtype != np.float32:
-            array = np.asarray(array, dtype=np.float32)
+        name = str(layer_name)
+        preference = 1 if name.upper() == "RGBA" else 0
+        candidates.append(name)
+        maximum = (array.shape[0] * array.shape[1], preference)
+        if best is not None and array.dtype.kind in "fiu" and maximum <= best[0]:
+            # 命中数最多等于像素数；连上限也无法胜出时，统计结果不影响选择。
+            continue
+        # 仅 R 参与匹配；无需将半精度 FinalImage 的整张 RGBA 转为 float32。
         channel_r = np.ascontiguousarray(array[:, :, 0], dtype=np.float32)
         bits = channel_r.view(np.uint32)
-        hits = int(np.isin(bits, target_bits).sum())
-        candidates.append((hits, 1 if str(layer_name).upper() == "RGBA" else 0,
-                           str(layer_name), channel_r))
+        hits = _count_manifest_hits(bits, target_bits)
+        priority = (hits, preference)
+        # 严格大于才替换，保持旧稳定排序的同分顺序和 RGBA 优先级。
+        if best is None or priority > best[0]:
+            best = (priority, name, channel_r)
 
     if not candidates:
         raise ValueError("Cryptomatte EXR 没有可用的三维 float32 图层")
-    candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
-    hits, _, layer_name, selected = candidates[0]
-    if hits <= 0:
-        names = ", ".join(item[2] for item in candidates)
+    priority, layer_name, selected = best
+    if priority[0] <= 0:
+        names = ", ".join(candidates)
         raise ValueError(
             f"Cryptomatte manifest 未命中任何候选 ID 层（候选: {names}）"
         )

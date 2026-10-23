@@ -35,6 +35,7 @@ uv run pytest
 - [SEED_DATASET.md](docs/SEED_DATASET.md)：平铺发布结构和迁移。
 - [PRODUCTION_V1.md](docs/PRODUCTION_V1.md)：本轮规模、生产优化及来源。
 - [ACTIVE_TRAJECTORY_QC.md](docs/ACTIVE_TRAJECTORY_QC.md)：连续活跃窗口。
+- [FLOOR_DIVERSITY.md](docs/FLOOR_DIVERSITY.md)：独立seed地板因子与UE资产只读验收入口。
 - [实验协议](experiments/sim2real/README.md)：真实足球检测和追踪对照。
 
 基准full，其余quick/basic如实记录；全部生成mask/bbox不等于全部做像素审计。号码尚未验收，正式数据关闭号码和Pose。

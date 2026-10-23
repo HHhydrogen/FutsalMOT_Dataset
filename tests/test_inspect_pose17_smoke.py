@@ -488,8 +488,8 @@ def test_joint_three_frame_floor_plan_requires_exact_middle_review(tmp_path):
         with pytest.raises(ValueError):sampling_context(plan,receipt)
 
 
-@pytest.mark.parametrize('frame_count,missing_rgb',[(10,False),(3,False),(3,True)])
-def test_joint_toy_inspect_only_decodes_four_middle_frames(tmp_path,monkeypatch,frame_count,missing_rgb):
+@pytest.mark.parametrize('frame_count,missing_rgb,pixel_review',[(10,False,True),(3,False,True),(3,True,True),(10,False,False)])
+def test_joint_toy_inspect_only_decodes_four_middle_frames(tmp_path,monkeypatch,frame_count,missing_rgb,pixel_review):
     """tiny假媒体走实际normalizer与analyzer，禁止把它称为MRQ证据。"""
     from PIL import Image
     import OpenEXR
@@ -530,22 +530,23 @@ def test_joint_toy_inspect_only_decodes_four_middle_frames(tmp_path,monkeypatch,
         native=dict(receipt,schema='futsalmot_pose17_native_receipt_v1',records=records,setup_error='',record_limit_reached=False)
         (attempt/(name+'_native_pose_restore_receipt.json')).write_text(json.dumps(native),encoding='utf-8')
     output=tmp_path/'analysis'
-    report=inspect(attempt,output)
+    report=inspect(attempt,output,pixel_review=pixel_review)
     if missing_rgb:
         assert not report['structural_pairing_passed']
         assert any('帧集合' in error for error in report['errors'])
         return
     assert report['structural_pairing_passed'],report['errors']
-    assert len(opened)==4*frame_count and len(decoded)==4 and {p.stem for p in decoded}=={'%06d'%review}
-    assert len(list(output.rglob('*_all_players_overlay.png')))==4
-    assert len(list(output.rglob('*_mask.png')))==4
+    assert len(opened)==4*frame_count and len(decoded)==(4 if pixel_review else 0)
+    assert {p.stem for p in decoded}==({'%06d'%review} if pixel_review else set())
+    assert len(list(output.rglob('*_all_players_overlay.png')))==(4 if pixel_review else 0)
+    assert len(list(output.rglob('*_mask.png')))==(4 if pixel_review else 0)
     assert not list(output.rglob('*_crop.png'))
-    assert len(list(output.rglob('*.png')))==8
+    assert len(list(output.rglob('*.png')))==(8 if pixel_review else 0)
     rows=[r for c in report['cameras'].values() for r in c['frames']]
     assert len(rows)==40*frame_count
     for item in rows:
         assert item['source_frame']==100+item['output_frame']
-        if item['output_frame']!=review:
+        if not pixel_review or item['output_frame']!=review:
             assert item['pixel_evaluation_status']=='not_evaluated'
             assert item['visible_instance_area_pixels'] is item['visible_instance_bbox_xywh'] is None
             assert all(p['instance_mask_hit_at_nearest_pixel'] is None for p in item['keypoints'])

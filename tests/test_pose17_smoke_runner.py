@@ -22,6 +22,17 @@ def test_explicit_three_frame_two_camera_plan():
     validate_plan(plan())
 
 
+def test_old_cpu_render_is_refused_before_live_preflight_or_mrq(monkeypatch):
+    session = dict(plan=plan(),state=dict(status="prepared_not_submitted",ready_to_render=True))
+    monkeypatch.setitem(sys.modules,runner._SESSION,types.SimpleNamespace(prepared=session))
+    monkeypatch.setitem(sys.modules,"unreal",types.SimpleNamespace())
+    def unexpected():
+        raise AssertionError("不应进入UE场景门禁或MRQ")
+    monkeypatch.setattr(runner,"preflight",unexpected)
+    with pytest.raises(RuntimeError,match="Lumen"):
+        runner.submit()
+
+
 @pytest.mark.parametrize("field,value", [("attempt", "../v1"), ("frame_count", 2), ("frame_count", 100),
                                         ("targets", []), ("start_frame", 1.5)])
 def test_invalid_plan_rejected(field, value):

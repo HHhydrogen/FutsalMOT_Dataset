@@ -12,6 +12,7 @@ import sys
 import types
 from pathlib import Path
 from pose17_calibration_assets import ORIGINAL_VISUAL_MESH, JOINT_VISUAL_IDS, calibration_visual_mesh, production_visual_mesh
+from pose17_location_pilot_contract import validate_location_pilot_contract
 
 
 _PREPARED = None  # 持有 transient 队列；不会冒充已经执行的 MRQ。
@@ -27,7 +28,8 @@ def validate_plan(plan):
     if not isinstance(name, str) or not name or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-" for c in name):
         raise ValueError("attempt 必须为安全独立目录名")
     start, count = plan.get("start_frame"), plan.get("frame_count")
-    if type(start) is not int or type(count) is not int or not 3 <= count <= 30:
+    location_pilot = validate_location_pilot_contract(plan)
+    if type(start) is not int or type(count) is not int or not (count == 120 if location_pilot else 3 <= count <= 30):
         raise ValueError("需要明确起始帧与3..30个连续动态诊断帧")
     cameras = plan.get("cameras", [])
     if len(cameras) < 2 or len({item["camera_id"] for item in cameras}) != len(cameras):
@@ -541,6 +543,8 @@ def submit():
     session = getattr(sys.modules.get(_SESSION), "prepared", None)
     if session is None or session["state"]["status"] != "prepared_not_submitted" or not session["state"]["ready_to_render"]:
         raise RuntimeError("缺少当前会话已准备且未提交的独立队列")
+    if session["plan"].get("pose_sampling_path", "cpu_skin_cache") != "gpu_render_cpu_lbs":
+        raise RuntimeError("旧CPU渲染蒙皮路径已复现Lumen缓冲崩溃，禁止提交；请用已验证GPU渲染/CPU-LBS计划")
     gate = preflight()
     if gate["dirty_packages"] or gate["pie_worlds"] or gate["mrq_running"]:
         raise RuntimeError("submit前dirty/PIE/MRQ门禁未通过")

@@ -1,9 +1,12 @@
 """只将已验联合小样导出为独立诊断组；保留逐相机原始世界点，不生成训练准入。"""
 
 import argparse
+from collections import deque
+from concurrent.futures import ProcessPoolExecutor
 import hashlib
 import json
 import math
+import multiprocessing
 import os
 from pathlib import Path
 import shutil
@@ -22,6 +25,7 @@ if str(REPO / "ue") not in sys.path:
     sys.path.insert(0,str(REPO / "ue"))
 from pose17_native_receipt import normalize_native_receipt
 from pose17_override_receipt import validate_joint_bundle
+from pose17_location_pilot_contract import validate_location_pilot_contract
 
 
 def require(ok,message):
@@ -70,9 +74,55 @@ def mask_geometry(mask,mask_id):
     return (None,0) if len(xs)==0 else ([int(xs.min()),int(ys.min()),int(xs.max()-xs.min()+1),int(ys.max()-ys.min()+1)],int(len(xs)))
 
 
+def _export_mask_frame(job):
+    """独立进程一次解码/保存一帧，仅返回尺寸和十实体几何小结果。"""
+    frame,exr,rgb,destination,mapping = job
+    mask,counts = decode_mask(exr,mapping)
+    require(isinstance(mask,np.ndarray) and mask.ndim==2 and mask.dtype==np.uint8
+        and set(np.unique(mask)).issubset(set(range(11))),"需要0背景/非球员及1..10球员uint8 mask")
+    width,height = mask.shape[1],mask.shape[0]
+    with Image.open(rgb) as image:
+        require(image.size==(width,height),"RGB/mask尺寸不同")
+    geometry = {}
+    for entity in mapping:
+        track = int(entity[1])+(1 if entity[0]=="L" else 6)
+        bbox,area = mask_geometry(mask,track)
+        require(counts[entity]==area,"mask计数与bbox解码不同")
+        geometry[entity] = (bbox,area)
+    with Path(destination).open("xb") as handle:
+        Image.fromarray(mask).save(handle,format="PNG")
+    return frame,width,height,geometry
+
+
+def _mask_results(jobs,workers):
+    """Windows spawn；最多workers个在途帧，按输入顺序汇总，不传像素数组。"""
+    require(type(workers) is int and 1<=workers<=6,"CPU workers必须为1..6整数")
+    if workers==1:
+        for job in jobs:
+            yield _export_mask_frame(job)
+        return
+    jobs = iter(jobs)
+    pending = deque()
+    with ProcessPoolExecutor(max_workers=workers,mp_context=multiprocessing.get_context("spawn")) as pool:
+        try:
+            for _ in range(workers):
+                job = next(jobs,None)
+                if job is not None: pending.append(pool.submit(_export_mask_frame,job))
+            while pending:
+                result = pending.popleft().result()
+                job = next(jobs,None)
+                if job is not None: pending.append(pool.submit(_export_mask_frame,job))
+                yield result
+        finally:
+            for future in pending: future.cancel()
+
+
 def load_inputs(attempt,alignment,native_report):
     attempt,alignment,native_report = guard(attempt),guard(alignment),guard(native_report)
     plan,state = read_json(attempt/"plan.json"),read_json(attempt/"state.json")
+    pilot = validate_location_pilot_contract(plan)
+    require(type(plan.get("frame_count")) is int and plan["frame_count"]==(120 if pilot else 10)
+        and len(plan["cameras"])==4,"只接收四相机十帧联合诊断或显式冻结120帧位置试产")
     aligned,accepted = read_json(alignment),read_json(native_report)
     require(aligned.get("structural_pairing_passed") is True and not aligned.get("errors"),"结构配对报告未通过")
     require(accepted.get("acceptance_passed") is True and accepted.get("component_transaction_passed") is True
@@ -90,12 +140,11 @@ def load_inputs(attempt,alignment,native_report):
         receipts[camera_id] = normalize_native_receipt(read_json(attempt/(camera_id+"_native_pose_restore_receipt.json")))
     checked = validate_joint_bundle(plan,state,read_json(attempt/"preflight.json"),read_json(attempt/"editor_after.json"),manifests,hashes,receipts)
     require(checked["acceptance_passed"] and not checked["errors"],"原始native/manifest/恢复当前校验失败: "+repr(checked["errors"]))
-    require(plan["frame_count"]==10 and len(plan["cameras"])==4,"此工具只接收四相机十帧联合诊断")
     require(set(aligned["cameras"])=={c["camera_id"] for c in plan["cameras"]},"配对机位集合不同")
     for camera_id,receipt in receipts.items():
         paired_rows = aligned["cameras"][camera_id]["frames"]
         lookup = {(r["output_frame"],r["entity_id"]):r for r in paired_rows}
-        require(len(lookup)==len(paired_rows)==100,"已验报告的实体帧重复或缺失")
+        require(len(lookup)==len(paired_rows)==plan["frame_count"]*len(plan["targets"]),"已验报告的实体帧重复或缺失")
         for row in receipt["records"]:
             paired = lookup[(row["output_frame"],row["entity_id"])]
             require(paired["source_frame"]==row["sequence_source_frame"]
@@ -103,13 +152,15 @@ def load_inputs(attempt,alignment,native_report):
     return attempt,plan,receipts,aligned,hashes
 
 
-def export_attempt(attempt,alignment,native_report,output,copy_rgb=False):
+def export_attempt(attempt,alignment,native_report,output,copy_rgb=False,workers=1):
     """全新Saved诊断目录；实际世界点逐相机保留，不平均、不容差去重。"""
     output = guard(output)
+    require(type(workers) is int and 1<=workers<=6,"CPU workers必须为1..6整数")
     require(output.name.startswith("diagnostic_") and not output.exists(),"输出须为全新diagnostic_目录")
     attempt,plan,receipts,aligned,hashes = load_inputs(attempt,alignment,native_report)
     require(attempt not in output.parents,"输出不能写入源渲染attempt内部")
     source = plan["source_motion"]
+    frame_count = plan["frame_count"]
     seed,fps = source["root_seed"],source["fps"]
     require(type(seed) is int and seed>=0 and type(fps) in (float,int) and math.isfinite(fps) and fps>0,"真实GRF来源seed/FPS无效")
     require(source["sequence_frame_equals_source_step"] is True,"本适配器不猜测Sequence/source重映射")
@@ -120,10 +171,10 @@ def export_attempt(attempt,alignment,native_report,output,copy_rgb=False):
     for camera in plan["cameras"]:
         camera_id = camera["camera_id"]
         rgb,exr = media_index(attempt/camera_id,"rgb"),media_index(attempt/camera_id,"exr")
-        require(set(rgb)==set(exr)==set(range(10)),"实际RGB/EXR不是完整相对0..9")
+        require(set(rgb)==set(exr)==set(range(frame_count)),"实际RGB/EXR相对帧集合不完整或越界")
         for path in list(rgb.values())+list(exr.values()): guard(path)
         rows = aligned["cameras"][camera_id]["frames"]
-        require(len(rows)==100 and {(r["output_frame"],r["entity_id"]) for r in rows}=={(f,e) for f in range(10) for e in mapping},"配对报告帧/实体不完整")
+        require(len(rows)==frame_count*len(mapping) and {(r["output_frame"],r["entity_id"]) for r in rows}=={(f,e) for f in range(frame_count) for e in mapping},"配对报告帧/实体不完整")
         index[camera_id] = (rgb,exr,{(r["output_frame"],r["entity_id"]):r for r in rows})
     output.mkdir(parents=True)
     write_json(output/"export_started.json",{"status":"started","diagnostic_only":True,"not_training":True})
@@ -145,7 +196,7 @@ def export_attempt(attempt,alignment,native_report,output,copy_rgb=False):
     if source_ref:
         shutil.copyfile(guard(source_ref),provenance/"source_build_receipt.json")
     timeline = [{"frame_index":frame,"source_frame_index":plan["start_frame"]+frame,
-        "sequence_frame_index":plan["start_frame"]+frame,"source_time_seconds":(plan["start_frame"]+frame)/fps} for frame in range(10)]
+        "sequence_frame_index":plan["start_frame"]+frame,"source_time_seconds":(plan["start_frame"]+frame)/fps} for frame in range(frame_count)]
     write_jsonl(group/"timeline.jsonl",timeline)
     cameras = {}
     for camera_id,receipt in receipts.items():
@@ -156,14 +207,11 @@ def export_attempt(attempt,alignment,native_report,output,copy_rgb=False):
         shutil.copyfile(attempt/(camera_id+"_native_pose_restore_receipt.json"),group/native_ref)
         worlds,images = [],[]
         fixed_calibration = None
-        for frame in range(10):
-            mask,counts = decode_mask(exr[frame],mapping)
-            require(isinstance(mask,np.ndarray) and mask.ndim==2 and mask.dtype==np.uint8 and set(np.unique(mask)).issubset(set(range(11))),"需要0背景/非球员及1..10球员uint8 mask")
-            width,height = mask.shape[1],mask.shape[0]
-            with Image.open(rgb[frame]) as image: require(image.size==(width,height),"RGB/mask尺寸不同")
+        (camera_dir/"mask").mkdir()
+        jobs = ((frame,exr[frame],rgb[frame],camera_dir/("mask/%06d.png"%frame),mapping)
+                for frame in range(frame_count))
+        for frame,width,height,geometry in _mask_results(jobs,workers):
             mask_relative = "mask/%06d.png"%frame
-            (camera_dir/"mask").mkdir(exist_ok=True)
-            Image.fromarray(mask).save(camera_dir/mask_relative)
             rgb_relative = None
             if copy_rgb:
                 (camera_dir/"rgb").mkdir(exist_ok=True)
@@ -183,8 +231,7 @@ def export_attempt(attempt,alignment,native_report,output,copy_rgb=False):
                 if fixed_calibration is None: fixed_calibration = calibration
                 require(calibration==fixed_calibration,"此最小导出仅接收实际静态相机标定，不静默丢弃变化")
                 valid = [p.get("uv_px") is not None and p["visibility_state"]=="unknown" for p in points]
-                bbox,area = mask_geometry(mask,track)
-                require(counts[entity]==area,"mask计数与bbox解码不同")
+                bbox,area = geometry[entity]
                 world_objects.append(dict(entity_id=entity,track_id=track,world_m=row["world_m"],world_location_valid=[True]*17,
                     source_method=row["sampling_method"],mesh_identity=row["mesh_identity"],landmark_manifest_ref=landmark_refs[entity],
                     native_record_ref=native_ref+"#output_frame=%d,entity_id=%s"%(frame,entity),
@@ -208,13 +255,14 @@ def export_attempt(attempt,alignment,native_report,output,copy_rgb=False):
         world_storage="per_camera_native",cross_camera_world_shared=False,world_values_modified=False,
         timeline_ref="timeline.jsonl",timeline_time_base="GRF_source_frame_divided_by_source_fps",cameras=cameras,
         landmark_manifest_refs=landmark_refs,roster=[{k:t[k] for k in ("entity_id","calibration_player_id")} for t in plan["targets"]],
-        source_motion=source,rgb_mode="copy" if copy_rgb else "external_Saved_reference",
+        source_motion=source,location_pilot=plan.get("location_pilot"),rgb_mode="copy" if copy_rgb else "external_Saved_reference",
         mask_semantics="0_background_or_nonplayer_1_to_10_players",bbox_semantics="visible_mask_tight_half_open_xywh")
     write_json(group/"group.json",group_index)
+    image_count = frame_count*len(cameras)
     report = dict(schema="futsalmot_pose17_diagnostic_release_v1",status="diagnostic_export_complete_not_training",
         diagnostic_only=True,not_training=True,production_accepted=False,MRQ_sync_verified=False,world_storage="per_camera_native",
-        group_ref=group_rel+"/group.json",rgb_frames=40,mask_frames=40,native_pose_records=400,
-        exr_decode_count=40,rgb_files_copied=40 if copy_rgb else 0,visibility_upgrade_performed=False)
+        group_ref=group_rel+"/group.json",rgb_frames=image_count,mask_frames=image_count,native_pose_records=image_count*len(mapping),
+        exr_decode_count=image_count,rgb_files_copied=image_count if copy_rgb else 0,visibility_upgrade_performed=False)
     write_json(output/"dataset.json",report)
     return report
 
@@ -226,8 +274,9 @@ def main():
     parser.add_argument("native_acceptance_report",type=Path)
     parser.add_argument("output",type=Path)
     parser.add_argument("--copy-rgb",action="store_true")
+    parser.add_argument("--workers",type=int,choices=range(1,7),default=6,help="CPU EXR后处理进程数，默认6；最多6个在途帧")
     args = parser.parse_args()
-    print(json.dumps(export_attempt(args.attempt,args.alignment_report,args.native_acceptance_report,args.output,args.copy_rgb),ensure_ascii=False))
+    print(json.dumps(export_attempt(args.attempt,args.alignment_report,args.native_acceptance_report,args.output,args.copy_rgb,args.workers),ensure_ascii=False))
 
 
 if __name__=="__main__": main()

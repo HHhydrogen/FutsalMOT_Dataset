@@ -42,6 +42,8 @@ uv run pytest
 
 ## Pose研究开发
 
+四seed位置试产已进入实际采集，采用显式[120帧契约及独立源序列](docs/POSE17_LOCATION_PILOT_SOURCES.md)，后处理CPU默认6进程且不重复生成总览。已新增[真实40图位置损失接入](experiments/sim2real/POSE17_LOCATION_CPU_CHECK.md)、[严格矩阵SHA离线重建](docs/POSE17_OFFLINE_LBS_DIAGNOSTIC.md)及[十二关节表面支持候选](docs/POSE17_JOINT_SUPPORT_DIAGNOSTIC.md)。几何和候选证据不提升unknown可见性，也不等于训练收益。
+
 七模型十实体四机位联合短诊断已完成40张4K RGB/40份EXR/400条采样，完整[诊断导出](docs/POSE17_DIAGNOSTIC_RELEASE.md)包含实例mask、bbox、Pose2D与逐机位原始world17。见[联合入口](docs/POSE17_JOINT_DIAGNOSTIC.md)和[七角色校准快照](calibration/diagnostic/pose17_head_surface_v1/README.md)。472项针对CPU回归及真实MRQ证据通过；所有visibility仍unknown，输出不是正式训练数据，不能称已证明合成收益。
 
 新Pose17与v1分开，当前尚无正式Pose批次。已发布的研究工程入口包括[保留预训练容量的位置头](docs/POSE17_XY_HEAD_TRANSFER.md)、[独立缺点mask与JSONL图像CPU链](docs/POSE_LOCATION_JSONL_CPU_DATASET.md)及[未冻结对照候选](docs/POSE_REAL_SYNTHETIC_CONTROL_CANDIDATE.md)。unknown可见性与位置有效性分别存储，全缺点人物仍保留检测框；toy更新和续载只证明工程兼容，不能当作AP或关联提升。P1不安装Torch，研究依赖保持独立；GPU研究训练和UE渲染串行，最终test116/187封存。

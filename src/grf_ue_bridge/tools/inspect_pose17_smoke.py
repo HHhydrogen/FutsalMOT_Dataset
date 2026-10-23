@@ -191,12 +191,16 @@ def check_override_transaction(evidence, target, binding, context, expected_asse
 
 def check_joint_context(plan, receipt, context):
     """一次十实体联合诊断；没有新增native角色ID或逐角色像素门槛。"""
+    location_pilot = False
+    if "location_pilot_contract" in plan or "location_pilot" in plan:
+        from pose17_location_pilot_contract import validate_location_pilot_contract
+        location_pilot = validate_location_pilot_contract(plan)
     _require(plan.get("allow_joint_pose17_diagnostic") is True
              and plan.get("allow_pie_visual_mesh_override") is True
              and plan.get("allow_pie_driver_hide") is True
              and receipt.get("visual_mesh_override_requested") is True,
              "联合scope须显式joint/GPU/PIE opt-in并隐藏driver")
-    _require(type(plan.get("frame_count")) is int and plan["frame_count"] in (3, 10)
+    _require(type(plan.get("frame_count")) is int and plan["frame_count"] in ((120,) if location_pilot else (3, 10))
              and type(plan.get("start_frame")) is int and plan["start_frame"] >= 0,
              "联合scope仅允许显式3或10个连续输出帧")
     _require(plan.get("review_frame_indices") == [plan["frame_count"] // 2]
@@ -542,7 +546,7 @@ def _draw_joint_overview(rgb_path, rows, output):
     image.save(output)
 
 
-def inspect(attempt, output):
+def inspect(attempt, output, pixel_review=True):
     """仅消费完整落盘的诊断小样；缺少收据时拒绝生成伪Pose。"""
     import numpy as np
     import OpenEXR
@@ -569,9 +573,11 @@ def inspect(attempt, output):
               "source_scope": plan["source_scope"], "pose_sampling_path": plan.get("pose_sampling_path", "cpu_skin_cache"),
               "cameras": {}, "errors": []}
     joint = plan.get("diagnostic_scope") == GPU_LBS_JOINT_SCOPE
+    _require(pixel_review or joint, "跳过像素抽样仅适用于已复用联合GPU通路")
     if joint:
-        report["pixel_evaluation_scope"] = "仅review_frame_indices=" + str(plan["review_frame_indices"]) + "逐camera一张全员总览；其余header/metadata配对，未做全像素审计"
+        report["pixel_evaluation_scope"] = ("仅review_frame_indices=" + str(plan["review_frame_indices"]) + "逐camera一张全员总览；其余header/metadata配对，未做全像素审计") if pixel_review else "本次仅header/native配对，不生成重复预览；mask/bbox在数据生成阶段解码"
         report["review_frame_indices"] = list(plan["review_frame_indices"])
+        report["pixel_review_performed"] = pixel_review
     mapping = {s+str(i): "Player_"+s+str(i) for s in "LR" for i in range(5)}
     for name, receipt in receipts.items():
         camera_report = {"frames": [], "motion": {}, "errors": [], "expected_camera_plan_checks": []}
@@ -588,7 +594,7 @@ def inspect(attempt, output):
             camera_output.mkdir()
             for frame in sorted(expected):
                 header = OpenEXR.File(str(exr[frame]), header_only=True).header()
-                pixels_evaluated = not joint or frame in plan["review_frame_indices"]
+                pixels_evaluated = not joint or (pixel_review and frame in plan["review_frame_indices"])
                 mask = counts = None
                 if pixels_evaluated:
                     manifest, ids = load_cryptomatte(exr[frame])
@@ -667,8 +673,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("attempt", type=Path)
     parser.add_argument("output", type=Path)
+    parser.add_argument("--skip-review-pixels", action="store_true", help="复用已验联合通路，跳过重复抽样图；仍核对全部帧/身份/元数据")
     args = parser.parse_args()
-    report = inspect(args.attempt,args.output)
+    report = inspect(args.attempt,args.output,pixel_review=not args.skip_review_pixels)
     print(json.dumps({"structural_pairing_passed": report["structural_pairing_passed"], "MRQ_sync_verified": False,
                       "errors": report["errors"], "report": str(args.output/"report.json")},ensure_ascii=False))
     return 0 if report["structural_pairing_passed"] else 1

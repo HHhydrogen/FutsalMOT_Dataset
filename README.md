@@ -42,10 +42,14 @@ uv run pytest
 
 ## Pose研究开发
 
-四seed位置试产已进入实际采集，采用显式[120帧契约及独立源序列](docs/POSE17_LOCATION_PILOT_SOURCES.md)，后处理CPU默认6进程且不重复生成总览。已新增[真实40图位置损失接入](experiments/sim2real/POSE17_LOCATION_CPU_CHECK.md)、[严格矩阵SHA离线重建](docs/POSE17_OFFLINE_LBS_DIAGNOSTIC.md)及[十二关节表面支持候选](docs/POSE17_JOINT_SUPPORT_DIAGNOSTIC.md)。几何和候选证据不提升unknown可见性，也不等于训练收益。
+四seed位置试产已完成并独立发布至G:/FutsalMOT_Dataset/v2_pose17_location_pilot_a01：1920对4K RGB/mask、19200逐视角人物Pose，480个源时间样本；采用显式[120帧契约及独立源序列](docs/POSE17_LOCATION_PILOT_SOURCES.md)。unknown保留，限定位置研究准入不等于正式遮挡标签。已有[真实40图位置损失接入](experiments/sim2real/POSE17_LOCATION_CPU_CHECK.md)、[严格矩阵SHA离线重建](docs/POSE17_OFFLINE_LBS_DIAGNOSTIC.md)及[十二关节表面支持候选](docs/POSE17_JOINT_SUPPORT_DIAGNOSTIC.md)，不再重复小样或媒体审计。
 
 七模型十实体四机位联合短诊断已完成40张4K RGB/40份EXR/400条采样，完整[诊断导出](docs/POSE17_DIAGNOSTIC_RELEASE.md)包含实例mask、bbox、Pose2D与逐机位原始world17。见[联合入口](docs/POSE17_JOINT_DIAGNOSTIC.md)和[七角色校准快照](calibration/diagnostic/pose17_head_surface_v1/README.md)。472项针对CPU回归及真实MRQ证据通过；所有visibility仍unknown，输出不是正式训练数据，不能称已证明合成收益。
 
-新Pose17与v1分开，当前尚无正式Pose批次。已发布的研究工程入口包括[保留预训练容量的位置头](docs/POSE17_XY_HEAD_TRANSFER.md)、[独立缺点mask与JSONL图像CPU链](docs/POSE_LOCATION_JSONL_CPU_DATASET.md)及[未冻结对照候选](docs/POSE_REAL_SYNTHETIC_CONTROL_CANDIDATE.md)。unknown可见性与位置有效性分别存储，全缺点人物仍保留检测框；toy更新和续载只证明工程兼容，不能当作AP或关联提升。P1不安装Torch，研究依赖保持独立；GPU研究训练和UE渲染串行，最终test116/187封存。
+新Pose17与v1分开，当前尚无正式遮挡Pose批次。原位置对照六臂完整保留；独立[Pose-only v3训练](experiments/sim2real/POSE_LOCATION_POSEONLY_V3.md)修正COCO sigma、固定共享检测与BN，并由[独立评价器](docs/POSE_COCO_DEV_EVALUATION_V3.md)复用相同官方COCO数值。新实验需新冻结协议，不能混改原结果或把优化更新自动重放。
+
+[真实固定检测入口](experiments/sim2real/POSE_ASSOCIATION_DEV_CANDIDATE.md)、[Pose附件](docs/POSE_FIXED_DETECTION_ATTACHMENT.md)、[ByteTrack接入](docs/POSE_BYTETRACK_CANDIDATE.md)及[完整TrackEval结果](docs/POSE_ASSOCIATION_TRACKEVAL.md)已接通。预训练Pose在同game9开发片段相对bbox的有限关联收益不等于合成训练收益，下降片段保留；官方det.txt是GT框副本，未作检测器使用。[交互窗口工具](docs/INTERACTION_WINDOW_CANDIDATE.md)只用GT元数据生成候选，不读媒体或依据模型成败筛选。
+
+unknown可见性与位置有效性分开，全缺点人物仍保留框。P1不安装Torch，研究依赖独立；GPU研究训练与UE渲染串行，最终test116/187封存。
 
 内层提交和push成功后外层才可更新gitlink。用户已明确要求提交时无需重复确认；无授权不提交。未完成号码开发保留在工作树但排除提交。数据、权重、.venv、.external、.futsalmot和Saved等本机产物不入Git。

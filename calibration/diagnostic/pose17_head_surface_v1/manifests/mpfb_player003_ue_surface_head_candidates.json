@@ -1,0 +1,362 @@
+{
+  "source_blend": "D:\\projects\\FutsalMOT_blender\\characters\\Player_003\\MPFB_Player_003.blend",
+  "ue_identity": {
+    "asset_path": "/Game/FutsalMOT/Characters/MPFB/Players/Player_003/MPFB_Player_003.MPFB_Player_003",
+    "signature_scheme": "ue_lod_le_u32_f32_v1",
+    "lod": "0",
+    "vertex_count": "17813",
+    "topology_sha256": "ceb55fcec08f3f08b52eb4a3e341dbdaee3ca3f4483fc6c7024cdbc56cd9d8ca",
+    "geometry_sha256": "e33f2e6bc75a6258632fecfd4d3b7c3619e028af77c263f6fd691b7db0279703"
+  },
+  "anchors": {
+    "nose": {
+      "method": "source_surface_triangle_geometry_matched",
+      "triangle_vertices": [
+        11917,
+        11881,
+        11876
+      ],
+      "barycentric": [
+        0.01238402646472314,
+        0.6105020172163463,
+        0.37711395631893047
+      ],
+      "source_original_triangle_vertices": [
+        5054,
+        7063,
+        11670
+      ],
+      "source_barycentric": [
+        0.6105020172163463,
+        0.37711395631893047,
+        0.01238402646472314
+      ],
+      "source_world_m": [
+        0.0009983504766635785,
+        -0.17575353424469614,
+        1.5989005141818426
+      ],
+      "ue_component_cm": [
+        0.09983504832265323,
+        17.57532683185564,
+        159.89003567324502
+      ],
+      "source_to_ue_recalibration_distance_mm": 0.0003090421055462952,
+      "status": "candidate_unreviewed"
+    },
+    "left_ear": {
+      "method": "recalibrated_on_ue_retriangulated_polygon",
+      "triangle_vertices": [
+        8434,
+        8438,
+        8439
+      ],
+      "barycentric": [
+        0.09152376609238755,
+        0.18236834016740747,
+        0.726107893740205
+      ],
+      "source_original_triangle_vertices": [
+        12276,
+        12274,
+        12272
+      ],
+      "source_barycentric": [
+        0.08994379934002295,
+        0.11489547596334636,
+        0.7951607246966307
+      ],
+      "source_world_m": [
+        0.06921886906667352,
+        -0.05027489586449303,
+        1.6196338797020113
+      ],
+      "ue_component_cm": [
+        6.917391443352358,
+        5.02673964041357,
+        161.96390873299327
+      ],
+      "source_to_ue_recalibration_distance_mm": 0.04587243546906411,
+      "status": "candidate_unreviewed"
+    },
+    "right_ear": {
+      "method": "recalibrated_on_ue_retriangulated_polygon",
+      "triangle_vertices": [
+        11083,
+        11086,
+        11087
+      ],
+      "barycentric": [
+        0.1823683401675361,
+        0.09152376609230099,
+        0.7261078937401629
+      ],
+      "source_original_triangle_vertices": [
+        5679,
+        5675,
+        5677
+      ],
+      "source_barycentric": [
+        0.08994379934002296,
+        0.7951607246966307,
+        0.11489547596334636
+      ],
+      "source_world_m": [
+        -0.06921886906667352,
+        -0.05027489586449303,
+        1.6196338797020116
+      ],
+      "ue_component_cm": [
+        -6.917391443352353,
+        5.02673964041357,
+        161.96390873299322
+      ],
+      "source_to_ue_recalibration_distance_mm": 0.04587243546902929,
+      "status": "candidate_unreviewed"
+    },
+    "left_eye": {
+      "method": "source_surface_triangle_geometry_matched",
+      "triangle_vertices": [
+        16011,
+        16016,
+        16010
+      ],
+      "barycentric": [
+        0.3791542006519188,
+        0.5566969258212348,
+        0.0641488735268464
+      ],
+      "source_original_triangle_vertices": [
+        47,
+        5,
+        23
+      ],
+      "source_barycentric": [
+        0.0641488735268464,
+        0.3791542006519188,
+        0.5566969258212348
+      ],
+      "source_world_m": [
+        0.03174107514520773,
+        -0.14570942978067766,
+        1.636693958398946
+      ],
+      "ue_component_cm": [
+        3.1741075741254177,
+        14.570915950740764,
+        163.66938073404836
+      ],
+      "source_to_ue_recalibration_distance_mm": 0.0003096234080619779,
+      "status": "candidate_unreviewed"
+    },
+    "right_eye": {
+      "method": "source_surface_triangle_geometry_matched",
+      "triangle_vertices": [
+        16060,
+        16069,
+        16065
+      ],
+      "barycentric": [
+        0.06414806224478936,
+        0.6175721016454198,
+        0.3182798361097909
+      ],
+      "source_original_triangle_vertices": [
+        95,
+        71,
+        53
+      ],
+      "source_barycentric": [
+        0.06414806224478936,
+        0.6175721016454198,
+        0.3182798361097909
+      ],
+      "source_world_m": [
+        -0.03208727579917278,
+        -0.14566120662202447,
+        1.636693956589748
+      ],
+      "ue_component_cm": [
+        -3.208727639521923,
+        14.566093638503885,
+        163.66938055312664
+      ],
+      "source_to_ue_recalibration_distance_mm": 0.0003095917448883432,
+      "status": "candidate_unreviewed"
+    }
+  },
+  "views": {
+    "front": {
+      "camera_matrix_world": [
+        [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          -1.6292068494294654E-07,
+          -1.0,
+          -1.0399999618530273
+        ],
+        [
+          0.0,
+          1.0,
+          -1.6292068494294654E-07,
+          1.5582938194274902
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "resolution": [
+        1000,
+        1000
+      ],
+      "projection": "ORTHO",
+      "ortho_scale_m": 0.3499999940395355
+    },
+    "left": {
+      "camera_matrix_world": [
+        [
+          -4.371138828673793E-08,
+          4.371138828673793E-08,
+          1.0,
+          1.0
+        ],
+        [
+          1.0,
+          1.910685676922942E-15,
+          4.371138828673793E-08,
+          -0.03999999910593033
+        ],
+        [
+          0.0,
+          1.0,
+          -4.371138828673793E-08,
+          1.5582938194274902
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "resolution": [
+        1000,
+        1000
+      ],
+      "projection": "ORTHO",
+      "ortho_scale_m": 0.3499999940395355
+    },
+    "right": {
+      "camera_matrix_world": [
+        [
+          -4.371138828673793E-08,
+          -4.371138828673793E-08,
+          -1.0,
+          -1.0
+        ],
+        [
+          -1.0,
+          1.910685676922942E-15,
+          4.371138828673793E-08,
+          -0.03999999910593033
+        ],
+        [
+          0.0,
+          1.0,
+          -4.371138828673793E-08,
+          1.5582938194274902
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "resolution": [
+        1000,
+        1000
+      ],
+      "projection": "ORTHO",
+      "ortho_scale_m": 0.3499999940395355
+    },
+    "threequarter": {
+      "camera_matrix_world": [
+        [
+          0.7071068286895752,
+          3.374861279326069E-09,
+          0.7071067690849304,
+          0.699999988079071
+        ],
+        [
+          0.7071067690849304,
+          -5.844237804808472E-08,
+          -0.7071068286895752,
+          -0.7400000095367432
+        ],
+        [
+          3.8938612334504796E-08,
+          1.0,
+          -4.371138828673793E-08,
+          1.5582938194274902
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "resolution": [
+        1000,
+        1000
+      ],
+      "projection": "ORTHO",
+      "ortho_scale_m": 0.3499999940395355
+    }
+  },
+  "source_to_ue_matrix": [
+    [
+      100,
+      0,
+      0,
+      0
+    ],
+    [
+      0,
+      -100,
+      0,
+      0
+    ],
+    [
+      0,
+      0,
+      100,
+      0
+    ],
+    [
+      0,
+      0,
+      0,
+      1
+    ]
+  ],
+  "static_semantic_review_scope": "Root agent inspected front/left/right source-render images and accepted static nose tip, eye centres and both ear centres for Player003 only. Ear points are independently recalibrated on UE retriangulated polygons, not identical strict source anchor correspondences.",
+  "not_animated": true,
+  "not_MRQ_verified": true,
+  "precision_not_measured": true,
+  "status": "candidate_static_semantic_reviewed_only",
+  "reviewed_images_sha256": {
+    "mpfb_player003_mapped_front.png": "1647268ae580500ea68fc00f5f5d441fa0e5dfaf41fa01ea52600fc2d634d9da",
+    "mpfb_player003_mapped_right.png": "a757bd8d30ded16bc78a6dfb8af1ce369b0274cfd6fb636234a586ac33170c15",
+    "mpfb_player003_mapped_left.png": "020668cd3e60edcbb4c81fe554fd023dae45b4c48d9569374da86fa769480444"
+  }
+}

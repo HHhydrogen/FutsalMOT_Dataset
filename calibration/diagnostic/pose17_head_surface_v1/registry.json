@@ -1,0 +1,451 @@
+{
+  "schema": "futsalmot_head_diagnostic_calibration_package_v1",
+  "production_ready": false,
+  "path_base": "registry.json所在目录",
+  "status_policy": "原manifest字节和静态候选标志不变；本包不升级验收",
+  "source_registry_snapshot": {
+    "path": "evidence/source_registry_snapshot.json",
+    "sha256": "12f6157ca31b394345c01025a031c2556f012753cae39c1b980fc38d2b01dbfa"
+  },
+  "entries": [
+    {
+      "player_id": 3,
+      "candidate_sha256": "7264fbaf474a589456dd45358d2932441c302f1a6969c1532e6ba4f2f35e1ec4",
+      "ue_identity": {
+        "asset_path": "/Game/FutsalMOT/Characters/MPFB/Players/Player_003/MPFB_Player_003.MPFB_Player_003",
+        "signature_scheme": "ue_lod_le_u32_f32_v1",
+        "lod": "0",
+        "vertex_count": "17813",
+        "topology_sha256": "ceb55fcec08f3f08b52eb4a3e341dbdaee3ca3f4483fc6c7024cdbc56cd9d8ca",
+        "geometry_sha256": "e33f2e6bc75a6258632fecfd4d3b7c3619e028af77c263f6fd691b7db0279703"
+      },
+      "status": "candidate_static_semantic_reviewed_only",
+      "candidate_path": "manifests/mpfb_player003_ue_surface_head_candidates.json",
+      "original_candidate_path": "D:\\projects\\FutsalMOT_UEDataset\\Saved\\ResearchDiagnostics\\mpfb_player003_ue_surface_head_candidates.json",
+      "bundled_evidence": [
+        {
+          "path": "evidence/mpfb_player003_source_fbx_ue_correspondence.json",
+          "sha256": "a8e0637c23ae7b0411f446ae89d397c657fcd32b7a8566aa2d2555184248768e",
+          "role": "严格源锚点匹配收据，保留双耳严格匹配失败，不替代UE表面重标定候选"
+        }
+      ],
+      "external_dependencies": [
+        {
+          "field": "source_blend",
+          "reference": "D:\\projects\\FutsalMOT_blender\\characters\\Player_003\\MPFB_Player_003.blend",
+          "kind": "外部Blender源资产，重建依赖；不在包内",
+          "exists_at_packaging": true
+        },
+        {
+          "field": "bundled_evidence.fbx_path",
+          "reference": "D:\\projects\\FutsalMOT_blender\\characters\\Player_003\\export\\MPFB_Player_003_SOP.fbx",
+          "expected_sha256": "b9b1930cef005cccd62c103d4086a6a01067b706a62e9e72f3ffdb1157957291",
+          "kind": "外部FBX重建依赖；SHA来自历史收据，本次仅查存在性，不重读FBX",
+          "exists_at_packaging": true
+        },
+        {
+          "field": "reviewed_images_sha256.mpfb_player003_mapped_front.png",
+          "reference": "mpfb_player003_mapped_front.png",
+          "expected_sha256": "1647268ae580500ea68fc00f5f5d441fa0e5dfaf41fa01ea52600fc2d634d9da",
+          "kind": "历史静态目视证据，未打包；本次不读像素/不重算SHA",
+          "lookup_base": "原Saved/ResearchDiagnostics",
+          "exists_at_packaging": true
+        },
+        {
+          "field": "reviewed_images_sha256.mpfb_player003_mapped_right.png",
+          "reference": "mpfb_player003_mapped_right.png",
+          "expected_sha256": "a757bd8d30ded16bc78a6dfb8af1ce369b0274cfd6fb636234a586ac33170c15",
+          "kind": "历史静态目视证据，未打包；本次不读像素/不重算SHA",
+          "lookup_base": "原Saved/ResearchDiagnostics",
+          "exists_at_packaging": true
+        },
+        {
+          "field": "reviewed_images_sha256.mpfb_player003_mapped_left.png",
+          "reference": "mpfb_player003_mapped_left.png",
+          "expected_sha256": "020668cd3e60edcbb4c81fe554fd023dae45b4c48d9569374da86fa769480444",
+          "kind": "历史静态目视证据，未打包；本次不读像素/不重算SHA",
+          "lookup_base": "原Saved/ResearchDiagnostics",
+          "exists_at_packaging": true
+        }
+      ]
+    },
+    {
+      "player_id": 4,
+      "candidate_sha256": "0bdb0e688cc3fbf830ee1d1e904d3166ad489536515221b9b043915e289bff0a",
+      "ue_identity": {
+        "asset_path": "/Game/FutsalMOT/Characters/MPFB/Players/Player_004/Mesh/MPFB_Player_004.MPFB_Player_004",
+        "signature_scheme": "ue_lod_le_u32_f32_v1",
+        "lod": "0",
+        "vertex_count": "18623",
+        "topology_sha256": "fac7d29e419458a42307fe319fe26a2c448c191a7e36a1522025ea43c1670753",
+        "geometry_sha256": "50090961af74ec363fe5d6c4e5cc33a5648e762ffa30907c860aa0d9f46afcdc"
+      },
+      "status": "candidate_static_semantic_reviewed_only",
+      "candidate_path": "manifests/mpfb_player004_ue_surface_head_candidates.json",
+      "original_candidate_path": "D:\\projects\\FutsalMOT_UEDataset\\Saved\\ResearchDiagnostics\\mpfb_player004_ue_surface_head_candidates.json",
+      "bundled_evidence": [
+        {
+          "path": "evidence/mpfb_player004_source_fbx_ue_correspondence.json",
+          "sha256": "2fa5179fe558cc874b5d45e2e5893f99c733451ad1d4a5be6118e194191029f7",
+          "role": "严格源锚点匹配收据，保留双耳严格匹配失败，不替代UE表面重标定候选",
+          "manifest_reference_field": "strict_correspondence_receipt",
+          "original_reference": "D:\\projects\\FutsalMOT_UEDataset\\Saved\\ResearchDiagnostics\\mpfb_player004_source_fbx_ue_correspondence.json"
+        }
+      ],
+      "external_dependencies": [
+        {
+          "field": "source_blend",
+          "reference": "D:\\projects\\FutsalMOT_blender\\characters\\Player_004\\MPFB_Player_004.blend",
+          "kind": "外部Blender源资产，重建依赖；不在包内",
+          "exists_at_packaging": true
+        },
+        {
+          "field": "bundled_evidence.fbx_path",
+          "reference": "D:\\projects\\FutsalMOT_blender\\characters\\Player_004\\export\\MPFB_Player_004_SOP.fbx",
+          "expected_sha256": "1a566c6982ce2799c52958d2392f4e55e94b6d2e40f4a1383f7b1c7d6517cfaf",
+          "kind": "外部FBX重建依赖；SHA来自历史收据，本次仅查存在性，不重读FBX",
+          "exists_at_packaging": true
+        },
+        {
+          "field": "reviewed_images_sha256.mpfb_player004_source_front.png",
+          "reference": "mpfb_player004_source_front.png",
+          "expected_sha256": "522eb11ec977bea88ec1ff16e7f3666f9e0f199da828946db986caf72d93121b",
+          "kind": "历史静态目视证据，未打包；本次不读像素/不重算SHA",
+          "lookup_base": "原Saved/ResearchDiagnostics",
+          "exists_at_packaging": true
+        },
+        {
+          "field": "reviewed_images_sha256.mpfb_player004_source_left.png",
+          "reference": "mpfb_player004_source_left.png",
+          "expected_sha256": "c2ce695c315d3af878b6f85ae362ac3d057afe0dadee9d285a21cd35a1623d7a",
+          "kind": "历史静态目视证据，未打包；本次不读像素/不重算SHA",
+          "lookup_base": "原Saved/ResearchDiagnostics",
+          "exists_at_packaging": true
+        },
+        {
+          "field": "reviewed_images_sha256.mpfb_player004_source_right.png",
+          "reference": "mpfb_player004_source_right.png",
+          "expected_sha256": "f498d6120618150805fb5771350a162f96ad65e869c6fba6c8413a6cf2c5db2c",
+          "kind": "历史静态目视证据，未打包；本次不读像素/不重算SHA",
+          "lookup_base": "原Saved/ResearchDiagnostics",
+          "exists_at_packaging": true
+        }
+      ]
+    },
+    {
+      "player_id": 5,
+      "candidate_sha256": "c890e9eb1b0749d6de36fe794ef1d1d640639a2865ba80cd5068732c72d9e44b",
+      "ue_identity": {
+        "asset_path": "/Game/FutsalMOT/Characters/MPFB/Players/Player_005/Mesh/MPFB_Player_005.MPFB_Player_005",
+        "signature_scheme": "ue_lod_le_u32_f32_v1",
+        "lod": "0",
+        "vertex_count": "17367",
+        "topology_sha256": "a578b9f3313f371480611e2aac95fc3094954901eb83681b8abdd9e5fe97250c",
+        "geometry_sha256": "d57acb46d8ef706eb18d078e01223e080461133e0dc437a0b5652f4fc2d2f1af"
+      },
+      "status": "candidate_static_semantic_reviewed_only",
+      "candidate_path": "manifests/mpfb_player005_ue_surface_head_candidates.json",
+      "original_candidate_path": "D:\\projects\\FutsalMOT_UEDataset\\Saved\\ResearchDiagnostics\\mpfb_player005_ue_surface_head_candidates.json",
+      "bundled_evidence": [
+        {
+          "path": "evidence/mpfb_player005_source_fbx_ue_correspondence.json",
+          "sha256": "852c2d9992ff1614d65358d3bbe19a91ac10fc32cb8847afa81f6becfcf1a53c",
+          "role": "严格源锚点匹配收据，保留双耳严格匹配失败，不替代UE表面重标定候选",
+          "manifest_reference_field": "strict_correspondence_receipt",
+          "original_reference": "D:\\projects\\FutsalMOT_UEDataset\\Saved\\ResearchDiagnostics\\mpfb_player005_source_fbx_ue_correspondence.json"
+        }
+      ],
+      "external_dependencies": [
+        {
+          "field": "source_blend",
+          "reference": "D:\\projects\\FutsalMOT_blender\\characters\\Player_005\\MPFB_Player_005.blend",
+          "kind": "外部Blender源资产，重建依赖；不在包内",
+          "exists_at_packaging": true
+        },
+        {
+          "field": "bundled_evidence.fbx_path",
+          "reference": "D:\\projects\\FutsalMOT_blender\\characters\\player_005\\export\\MPFB_Player_005_SOP.fbx",
+          "expected_sha256": "9b4837933e61a839765573933795d4ceade44980c2ef08f35ffad352103afe6c",
+          "kind": "外部FBX重建依赖；SHA来自历史收据，本次仅查存在性，不重读FBX",
+          "exists_at_packaging": true
+        },
+        {
+          "field": "reviewed_images_sha256.mpfb_player005_source_front.png",
+          "reference": "mpfb_player005_source_front.png",
+          "expected_sha256": "9d2b7ab3806dd9b0395e05ff872114d85a8eb5acad7b24865aed9891597839b6",
+          "kind": "历史静态目视证据，未打包；本次不读像素/不重算SHA",
+          "lookup_base": "原Saved/ResearchDiagnostics",
+          "exists_at_packaging": true
+        },
+        {
+          "field": "reviewed_images_sha256.mpfb_player005_source_left.png",
+          "reference": "mpfb_player005_source_left.png",
+          "expected_sha256": "bff05c4babf32080bfa1dd64273710db9e6528281715a0457158cbbe6233aed5",
+          "kind": "历史静态目视证据，未打包；本次不读像素/不重算SHA",
+          "lookup_base": "原Saved/ResearchDiagnostics",
+          "exists_at_packaging": true
+        },
+        {
+          "field": "reviewed_images_sha256.mpfb_player005_source_right.png",
+          "reference": "mpfb_player005_source_right.png",
+          "expected_sha256": "69cf627948a5f5674ecd48e89a0d8b6ab56b80377d8538f4b18bad33884bae0f",
+          "kind": "历史静态目视证据，未打包；本次不读像素/不重算SHA",
+          "lookup_base": "原Saved/ResearchDiagnostics",
+          "exists_at_packaging": true
+        }
+      ]
+    },
+    {
+      "player_id": 6,
+      "candidate_sha256": "e9978583d822657191584ec61f8435a4629c00df63a600d81db14bb6c08a7554",
+      "ue_identity": {
+        "asset_path": "/Game/FutsalMOT/Characters/MPFB/Players/Player_006/Mesh/MPFB_Player_006.MPFB_Player_006",
+        "signature_scheme": "ue_lod_le_u32_f32_v1",
+        "lod": "0",
+        "vertex_count": "16607",
+        "topology_sha256": "b1eb6c64d9e8dcec803eae8d61beb5b3d763e3e07aadef05563b669ca311e22f",
+        "geometry_sha256": "71a6a8810a8f0030ff323f31aefb8d85febe623420bc701d583563d894f5bcf2"
+      },
+      "status": "candidate_static_semantic_reviewed_only",
+      "candidate_path": "manifests/mpfb_player006_ue_surface_head_candidates.json",
+      "original_candidate_path": "D:\\projects\\FutsalMOT_UEDataset\\Saved\\ResearchDiagnostics\\mpfb_player006_ue_surface_head_candidates.json",
+      "bundled_evidence": [
+        {
+          "path": "evidence/mpfb_player006_source_fbx_ue_correspondence.json",
+          "sha256": "2a4574e5d8164bea18352ba865eb17f6ecae7f6169cb95955d137fa63dbb8b07",
+          "role": "严格源锚点匹配收据，保留双耳严格匹配失败，不替代UE表面重标定候选",
+          "manifest_reference_field": "strict_correspondence_receipt",
+          "original_reference": "D:\\projects\\FutsalMOT_UEDataset\\Saved\\ResearchDiagnostics\\mpfb_player006_source_fbx_ue_correspondence.json"
+        }
+      ],
+      "external_dependencies": [
+        {
+          "field": "source_blend",
+          "reference": "D:\\projects\\FutsalMOT_blender\\characters\\Player_006\\MPFB_Player_006.blend",
+          "kind": "外部Blender源资产，重建依赖；不在包内",
+          "exists_at_packaging": true
+        },
+        {
+          "field": "bundled_evidence.fbx_path",
+          "reference": "D:\\projects\\FutsalMOT_blender\\characters\\Player_006\\export\\MPFB_Player_006_SOP.fbx",
+          "expected_sha256": "cdec4fa8264ce3bde99cdd592da06f3adac6a11da72440dd8bc1c906c6f005c9",
+          "kind": "外部FBX重建依赖；SHA来自历史收据，本次仅查存在性，不重读FBX",
+          "exists_at_packaging": true
+        },
+        {
+          "field": "reviewed_images_sha256.mpfb_player006_source_front.png",
+          "reference": "mpfb_player006_source_front.png",
+          "expected_sha256": "110c4a156fae97e77ded8fb1c73fc4c56617ac0330834b0e69d1ce09d29ee4e4",
+          "kind": "历史静态目视证据，未打包；本次不读像素/不重算SHA",
+          "lookup_base": "原Saved/ResearchDiagnostics",
+          "exists_at_packaging": true
+        },
+        {
+          "field": "reviewed_images_sha256.mpfb_player006_source_left.png",
+          "reference": "mpfb_player006_source_left.png",
+          "expected_sha256": "0f450f0434cba75a8a4ec4f6e76f0f66770bc102d0eee5256f3cddf3dad0ec9a",
+          "kind": "历史静态目视证据，未打包；本次不读像素/不重算SHA",
+          "lookup_base": "原Saved/ResearchDiagnostics",
+          "exists_at_packaging": true
+        },
+        {
+          "field": "reviewed_images_sha256.mpfb_player006_source_right.png",
+          "reference": "mpfb_player006_source_right.png",
+          "expected_sha256": "43bc939f1099e98fa0772dbb78584a83cd841f2476c5b6f9ebbc7e102dbd7537",
+          "kind": "历史静态目视证据，未打包；本次不读像素/不重算SHA",
+          "lookup_base": "原Saved/ResearchDiagnostics",
+          "exists_at_packaging": true
+        }
+      ]
+    },
+    {
+      "player_id": 7,
+      "candidate_sha256": "2b35df1a91320156edfe5c3c9757559c5ff2a9f7b15cebc4fb11dc5abb316bbe",
+      "ue_identity": {
+        "asset_path": "/Game/FutsalMOT/Characters/MPFB/Players/Player_007/Mesh/MPFB_Player_007.MPFB_Player_007",
+        "signature_scheme": "ue_lod_le_u32_f32_v1",
+        "lod": "0",
+        "vertex_count": "16560",
+        "topology_sha256": "5142c514874ca2235324fed5ffce87d7d87d6972fab4cb4d6f56ecf29d69b6d3",
+        "geometry_sha256": "f6bd5ad1d6b3b10c1dbd08f360bef5512b8f3a44a0da9a5254ce95dd53e97a0e"
+      },
+      "status": "candidate_static_semantic_reviewed_only",
+      "candidate_path": "manifests/mpfb_player007_ue_surface_head_candidates.json",
+      "original_candidate_path": "D:\\projects\\FutsalMOT_UEDataset\\Saved\\ResearchDiagnostics\\mpfb_player007_ue_surface_head_candidates.json",
+      "bundled_evidence": [
+        {
+          "path": "evidence/mpfb_player007_source_fbx_ue_correspondence.json",
+          "sha256": "c4f0451fba9210b588a2890b8583fbed86f8addb57162ae29c943799363d12cd",
+          "role": "严格源锚点匹配收据，保留双耳严格匹配失败，不替代UE表面重标定候选",
+          "manifest_reference_field": "strict_correspondence_receipt",
+          "original_reference": "D:\\projects\\FutsalMOT_UEDataset\\Saved\\ResearchDiagnostics\\mpfb_player007_source_fbx_ue_correspondence.json"
+        }
+      ],
+      "external_dependencies": [
+        {
+          "field": "source_blend",
+          "reference": "D:\\projects\\FutsalMOT_blender\\characters\\Player_007\\MPFB_Player_007.blend",
+          "kind": "外部Blender源资产，重建依赖；不在包内",
+          "exists_at_packaging": true
+        },
+        {
+          "field": "bundled_evidence.fbx_path",
+          "reference": "D:\\projects\\FutsalMOT_blender\\characters\\Player_007\\export\\MPFB_Player_007_SOP.fbx",
+          "expected_sha256": "3eadcab8edc0b88abf8984ff9dd222de710d3c75c48d9a496bb09f60fb278817",
+          "kind": "外部FBX重建依赖；SHA来自历史收据，本次仅查存在性，不重读FBX",
+          "exists_at_packaging": true
+        },
+        {
+          "field": "reviewed_images_sha256.mpfb_player007_source_front.png",
+          "reference": "mpfb_player007_source_front.png",
+          "expected_sha256": "5bc92db232aa7a55e31025097c4f846603d985ad4b3c5ebc8bf936e7439875d4",
+          "kind": "历史静态目视证据，未打包；本次不读像素/不重算SHA",
+          "lookup_base": "原Saved/ResearchDiagnostics",
+          "exists_at_packaging": true
+        },
+        {
+          "field": "reviewed_images_sha256.mpfb_player007_source_left.png",
+          "reference": "mpfb_player007_source_left.png",
+          "expected_sha256": "865401c86e5bfeabc2336299085a59a0c6070f5a597cc32ef03cced8f6f1c046",
+          "kind": "历史静态目视证据，未打包；本次不读像素/不重算SHA",
+          "lookup_base": "原Saved/ResearchDiagnostics",
+          "exists_at_packaging": true
+        },
+        {
+          "field": "reviewed_images_sha256.mpfb_player007_source_right.png",
+          "reference": "mpfb_player007_source_right.png",
+          "expected_sha256": "1d63328a2d563cc1cba51a06a0d569cdf9c09d47b5ce490ad2c95a42398e100f",
+          "kind": "历史静态目视证据，未打包；本次不读像素/不重算SHA",
+          "lookup_base": "原Saved/ResearchDiagnostics",
+          "exists_at_packaging": true
+        }
+      ]
+    },
+    {
+      "player_id": 8,
+      "candidate_sha256": "80f04a6c9d546c71fa525a0ab958df9744377e25bca22d9bd991b8bb9f6454ce",
+      "ue_identity": {
+        "asset_path": "/Game/FutsalMOT/Characters/MPFB/Players/Player_008/Mesh/MPFB_Player_008.MPFB_Player_008",
+        "signature_scheme": "ue_lod_le_u32_f32_v1",
+        "lod": "0",
+        "vertex_count": "17483",
+        "topology_sha256": "bedb58c6caa731aac8ec8b672bb2bd0abf0787f464330086e395c1064e215b29",
+        "geometry_sha256": "94254edea7cafdf3d48a2f99b90e2a3b717fe646bb28bebbd2bec60c6feb1a00"
+      },
+      "status": "candidate_static_semantic_reviewed_only",
+      "candidate_path": "manifests/mpfb_player008_ue_surface_head_candidates.json",
+      "original_candidate_path": "D:\\projects\\FutsalMOT_UEDataset\\Saved\\ResearchDiagnostics\\mpfb_player008_ue_surface_head_candidates.json",
+      "bundled_evidence": [
+        {
+          "path": "evidence/mpfb_player008_source_fbx_ue_correspondence.json",
+          "sha256": "65bcbd8a19a3697f2657edf8d6a733d90dbcdf742cdfbfd59b5b9488232acec7",
+          "role": "严格源锚点匹配收据，保留双耳严格匹配失败，不替代UE表面重标定候选",
+          "manifest_reference_field": "strict_correspondence_receipt",
+          "original_reference": "D:\\projects\\FutsalMOT_UEDataset\\Saved\\ResearchDiagnostics\\mpfb_player008_source_fbx_ue_correspondence.json"
+        }
+      ],
+      "external_dependencies": [
+        {
+          "field": "source_blend",
+          "reference": "D:\\projects\\FutsalMOT_blender\\characters\\Player_008\\MPFB_Player_008.blend",
+          "kind": "外部Blender源资产，重建依赖；不在包内",
+          "exists_at_packaging": true
+        },
+        {
+          "field": "bundled_evidence.fbx_path",
+          "reference": "D:\\projects\\FutsalMOT_blender\\characters\\Player_008\\export\\MPFB_Player_008_SOP.fbx",
+          "expected_sha256": "76b8d7846f2795614a94ee3e482b53c9dc7ef77e887a1b8e4c7402f9523dc0f3",
+          "kind": "外部FBX重建依赖；SHA来自历史收据，本次仅查存在性，不重读FBX",
+          "exists_at_packaging": true
+        },
+        {
+          "field": "reviewed_images_sha256.mpfb_player008_source_front.png",
+          "reference": "mpfb_player008_source_front.png",
+          "expected_sha256": "5e96bb23fd0f0a00431da08ab64c6dbb3f92fe89f6b71dc22c8cfaeb2000b63a",
+          "kind": "历史静态目视证据，未打包；本次不读像素/不重算SHA",
+          "lookup_base": "原Saved/ResearchDiagnostics",
+          "exists_at_packaging": true
+        },
+        {
+          "field": "reviewed_images_sha256.mpfb_player008_source_left.png",
+          "reference": "mpfb_player008_source_left.png",
+          "expected_sha256": "70bb24c227e97f854444b6b3eb47f2743b1aadccaf002ae92ac1754f55f448b9",
+          "kind": "历史静态目视证据，未打包；本次不读像素/不重算SHA",
+          "lookup_base": "原Saved/ResearchDiagnostics",
+          "exists_at_packaging": true
+        },
+        {
+          "field": "reviewed_images_sha256.mpfb_player008_source_right.png",
+          "reference": "mpfb_player008_source_right.png",
+          "expected_sha256": "7077db69374f895a6bd5af6ea96091f1c1bd00e10db255d6a1383e344a0eb6ff",
+          "kind": "历史静态目视证据，未打包；本次不读像素/不重算SHA",
+          "lookup_base": "原Saved/ResearchDiagnostics",
+          "exists_at_packaging": true
+        }
+      ]
+    },
+    {
+      "player_id": 9,
+      "candidate_sha256": "e15f62f28e9883e63f1f0c688176120fde96c8721eccf1896c2303cac4771d02",
+      "ue_identity": {
+        "asset_path": "/Game/FutsalMOT/Characters/MPFB/Players/Player_009/Mesh/MPFB_Player_009.MPFB_Player_009",
+        "signature_scheme": "ue_lod_le_u32_f32_v1",
+        "lod": "0",
+        "vertex_count": "16406",
+        "topology_sha256": "122d5b9f1db181a013529e824339bf613fed87728c6f6be06660ff75ad8a7e09",
+        "geometry_sha256": "18c35f91b17711a6490361e7d5210d18ecd4ea56ad4d19f5f77542ac27020024"
+      },
+      "status": "candidate_static_semantic_reviewed_only",
+      "candidate_path": "manifests/mpfb_player009_ue_surface_head_candidates.json",
+      "original_candidate_path": "D:\\projects\\FutsalMOT_UEDataset\\Saved\\ResearchDiagnostics\\mpfb_player009_ue_surface_head_candidates.json",
+      "bundled_evidence": [
+        {
+          "path": "evidence/mpfb_player009_source_fbx_ue_correspondence.json",
+          "sha256": "5d989c87d061383b7534f4888c53ff05b8aac0bbcd5b42c972290dcb1e6b3df9",
+          "role": "严格源锚点匹配收据，保留双耳严格匹配失败，不替代UE表面重标定候选",
+          "manifest_reference_field": "strict_correspondence_receipt",
+          "original_reference": "D:\\projects\\FutsalMOT_UEDataset\\Saved\\ResearchDiagnostics\\mpfb_player009_source_fbx_ue_correspondence.json"
+        }
+      ],
+      "external_dependencies": [
+        {
+          "field": "source_blend",
+          "reference": "D:\\projects\\FutsalMOT_blender\\characters\\Player_009\\MPFB_Player_009.blend",
+          "kind": "外部Blender源资产，重建依赖；不在包内",
+          "exists_at_packaging": true
+        },
+        {
+          "field": "bundled_evidence.fbx_path",
+          "reference": "D:\\projects\\FutsalMOT_blender\\characters\\Player_009\\export\\MPFB_Player_009_SOP.fbx",
+          "expected_sha256": "b2f1261734b1ef55c6e33c8a90e22be749824a4c6b8d916914dd06ad90a2c590",
+          "kind": "外部FBX重建依赖；SHA来自历史收据，本次仅查存在性，不重读FBX",
+          "exists_at_packaging": true
+        },
+        {
+          "field": "reviewed_images_sha256.mpfb_player009_source_front.png",
+          "reference": "mpfb_player009_source_front.png",
+          "expected_sha256": "41791195746702176d9ac4da7388f13d448fca7f01e281d775c0bdfaadaca110",
+          "kind": "历史静态目视证据，未打包；本次不读像素/不重算SHA",
+          "lookup_base": "原Saved/ResearchDiagnostics",
+          "exists_at_packaging": true
+        },
+        {
+          "field": "reviewed_images_sha256.mpfb_player009_source_left.png",
+          "reference": "mpfb_player009_source_left.png",
+          "expected_sha256": "0fd7437cc0b18b4711d92b6d11e9aa50f19ccf66f9c484539167fa1af57eb2e2",
+          "kind": "历史静态目视证据，未打包；本次不读像素/不重算SHA",
+          "lookup_base": "原Saved/ResearchDiagnostics",
+          "exists_at_packaging": true
+        },
+        {
+          "field": "reviewed_images_sha256.mpfb_player009_source_right.png",
+          "reference": "mpfb_player009_source_right.png",
+          "expected_sha256": "0ebfb86223f1c22d5e9525f169ee78a43885b91ee4e51e3ad641b57cae54f895",
+          "kind": "历史静态目视证据，未打包；本次不读像素/不重算SHA",
+          "lookup_base": "原Saved/ResearchDiagnostics",
+          "exists_at_packaging": true
+        }
+      ]
+    }
+  ]
+}

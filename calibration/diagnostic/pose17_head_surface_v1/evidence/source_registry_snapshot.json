@@ -1,0 +1,106 @@
+{
+  "schema": "futsalmot_head_diagnostic_registry",
+  "version": 1,
+  "production_ready": false,
+  "scope": "formal8 actual model set only; no animation/MRQ/independent precision validation",
+  "entries": [
+    {
+      "player_id": 3,
+      "candidate_path": "D:\\projects\\FutsalMOT_UEDataset\\Saved\\ResearchDiagnostics\\mpfb_player003_ue_surface_head_candidates.json",
+      "candidate_sha256": "7264fbaf474a589456dd45358d2932441c302f1a6969c1532e6ba4f2f35e1ec4",
+      "ue_identity": {
+        "asset_path": "/Game/FutsalMOT/Characters/MPFB/Players/Player_003/MPFB_Player_003.MPFB_Player_003",
+        "signature_scheme": "ue_lod_le_u32_f32_v1",
+        "lod": "0",
+        "vertex_count": "17813",
+        "topology_sha256": "ceb55fcec08f3f08b52eb4a3e341dbdaee3ca3f4483fc6c7024cdbc56cd9d8ca",
+        "geometry_sha256": "e33f2e6bc75a6258632fecfd4d3b7c3619e028af77c263f6fd691b7db0279703"
+      },
+      "status": "candidate_static_semantic_reviewed_only"
+    },
+    {
+      "player_id": 4,
+      "candidate_path": "D:\\projects\\FutsalMOT_UEDataset\\Saved\\ResearchDiagnostics\\mpfb_player004_ue_surface_head_candidates.json",
+      "candidate_sha256": "0bdb0e688cc3fbf830ee1d1e904d3166ad489536515221b9b043915e289bff0a",
+      "ue_identity": {
+        "asset_path": "/Game/FutsalMOT/Characters/MPFB/Players/Player_004/Mesh/MPFB_Player_004.MPFB_Player_004",
+        "signature_scheme": "ue_lod_le_u32_f32_v1",
+        "lod": "0",
+        "vertex_count": "18623",
+        "topology_sha256": "fac7d29e419458a42307fe319fe26a2c448c191a7e36a1522025ea43c1670753",
+        "geometry_sha256": "50090961af74ec363fe5d6c4e5cc33a5648e762ffa30907c860aa0d9f46afcdc"
+      },
+      "status": "candidate_static_semantic_reviewed_only"
+    },
+    {
+      "player_id": 5,
+      "candidate_path": "D:\\projects\\FutsalMOT_UEDataset\\Saved\\ResearchDiagnostics\\mpfb_player005_ue_surface_head_candidates.json",
+      "candidate_sha256": "c890e9eb1b0749d6de36fe794ef1d1d640639a2865ba80cd5068732c72d9e44b",
+      "ue_identity": {
+        "asset_path": "/Game/FutsalMOT/Characters/MPFB/Players/Player_005/Mesh/MPFB_Player_005.MPFB_Player_005",
+        "signature_scheme": "ue_lod_le_u32_f32_v1",
+        "lod": "0",
+        "vertex_count": "17367",
+        "topology_sha256": "a578b9f3313f371480611e2aac95fc3094954901eb83681b8abdd9e5fe97250c",
+        "geometry_sha256": "d57acb46d8ef706eb18d078e01223e080461133e0dc437a0b5652f4fc2d2f1af"
+      },
+      "status": "candidate_static_semantic_reviewed_only"
+    },
+    {
+      "player_id": 6,
+      "candidate_path": "D:\\projects\\FutsalMOT_UEDataset\\Saved\\ResearchDiagnostics\\mpfb_player006_ue_surface_head_candidates.json",
+      "candidate_sha256": "e9978583d822657191584ec61f8435a4629c00df63a600d81db14bb6c08a7554",
+      "ue_identity": {
+        "asset_path": "/Game/FutsalMOT/Characters/MPFB/Players/Player_006/Mesh/MPFB_Player_006.MPFB_Player_006",
+        "signature_scheme": "ue_lod_le_u32_f32_v1",
+        "lod": "0",
+        "vertex_count": "16607",
+        "topology_sha256": "b1eb6c64d9e8dcec803eae8d61beb5b3d763e3e07aadef05563b669ca311e22f",
+        "geometry_sha256": "71a6a8810a8f0030ff323f31aefb8d85febe623420bc701d583563d894f5bcf2"
+      },
+      "status": "candidate_static_semantic_reviewed_only"
+    },
+    {
+      "player_id": 7,
+      "candidate_path": "D:\\projects\\FutsalMOT_UEDataset\\Saved\\ResearchDiagnostics\\mpfb_player007_ue_surface_head_candidates.json",
+      "candidate_sha256": "2b35df1a91320156edfe5c3c9757559c5ff2a9f7b15cebc4fb11dc5abb316bbe",
+      "ue_identity": {
+        "asset_path": "/Game/FutsalMOT/Characters/MPFB/Players/Player_007/Mesh/MPFB_Player_007.MPFB_Player_007",
+        "signature_scheme": "ue_lod_le_u32_f32_v1",
+        "lod": "0",
+        "vertex_count": "16560",
+        "topology_sha256": "5142c514874ca2235324fed5ffce87d7d87d6972fab4cb4d6f56ecf29d69b6d3",
+        "geometry_sha256": "f6bd5ad1d6b3b10c1dbd08f360bef5512b8f3a44a0da9a5254ce95dd53e97a0e"
+      },
+      "status": "candidate_static_semantic_reviewed_only"
+    },
+    {
+      "player_id": 8,
+      "candidate_path": "D:\\projects\\FutsalMOT_UEDataset\\Saved\\ResearchDiagnostics\\mpfb_player008_ue_surface_head_candidates.json",
+      "candidate_sha256": "80f04a6c9d546c71fa525a0ab958df9744377e25bca22d9bd991b8bb9f6454ce",
+      "ue_identity": {
+        "asset_path": "/Game/FutsalMOT/Characters/MPFB/Players/Player_008/Mesh/MPFB_Player_008.MPFB_Player_008",
+        "signature_scheme": "ue_lod_le_u32_f32_v1",
+        "lod": "0",
+        "vertex_count": "17483",
+        "topology_sha256": "bedb58c6caa731aac8ec8b672bb2bd0abf0787f464330086e395c1064e215b29",
+        "geometry_sha256": "94254edea7cafdf3d48a2f99b90e2a3b717fe646bb28bebbd2bec60c6feb1a00"
+      },
+      "status": "candidate_static_semantic_reviewed_only"
+    },
+    {
+      "player_id": 9,
+      "candidate_path": "D:\\projects\\FutsalMOT_UEDataset\\Saved\\ResearchDiagnostics\\mpfb_player009_ue_surface_head_candidates.json",
+      "candidate_sha256": "e15f62f28e9883e63f1f0c688176120fde96c8721eccf1896c2303cac4771d02",
+      "ue_identity": {
+        "asset_path": "/Game/FutsalMOT/Characters/MPFB/Players/Player_009/Mesh/MPFB_Player_009.MPFB_Player_009",
+        "signature_scheme": "ue_lod_le_u32_f32_v1",
+        "lod": "0",
+        "vertex_count": "16406",
+        "topology_sha256": "122d5b9f1db181a013529e824339bf613fed87728c6f6be06660ff75ad8a7e09",
+        "geometry_sha256": "18c35f91b17711a6490361e7d5210d18ecd4ea56ad4d19f5f77542ac27020024"
+      },
+      "status": "candidate_static_semantic_reviewed_only"
+    }
+  ]
+}

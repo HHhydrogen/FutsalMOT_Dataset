@@ -586,11 +586,14 @@ def _get_or_create_sequence_asset(
 
 def create_sequence(meta: dict, frames: list, mapping: dict, replace_existing: bool = False,
                     package_path: str = None, sequences_cfg: list = None,
-                    ball_rolling_cfg: dict = None):
+                    ball_rolling_cfg: dict = None, *, open_after_create: bool = True,
+                    run_api_smoke: bool = True):
     """创建带关键帧变换的 Level Sequence 资产。
 
     如果提供了 sequences_cfg，则为每个条目创建一个 Sequence，
     每个都包含相同的球员/球数据并绑定摄像机。
+    独立诊断可显式关闭打开Sequencer及临时API小测，避免编辑器求值和临时资产；
+    默认值保留既有生产入口行为，轨迹关键帧算法不变。
     """
     import unreal
 
@@ -614,8 +617,9 @@ def create_sequence(meta: dict, frames: list, mapping: dict, replace_existing: b
         unreal.EditorAssetLibrary.make_directory(pkg_path)
 
     # 冒烟测试一次
-    temp_seq, _ = _smoke_test_sequencer_api(actors, total_output_frames, pkg_path)
-    unreal.EditorAssetLibrary.delete_asset(f"{pkg_path}/_TEMP_SMOKE")
+    if run_api_smoke:
+        temp_seq, _ = _smoke_test_sequencer_api(actors, total_output_frames, pkg_path)
+        unreal.EditorAssetLibrary.delete_asset(f"{pkg_path}/_TEMP_SMOKE")
 
     # 决定要创建哪些 Sequence
     if sequences_cfg:
@@ -753,11 +757,12 @@ def create_sequence(meta: dict, frames: list, mapping: dict, replace_existing: b
             raise RuntimeError(f"Failed to save: {sequence_asset_path}")
         print(f"  Saved: {sequence_asset_path}")
 
-        try:
-            unreal.LevelSequenceEditorBlueprintLibrary.open_level_sequence(seq)
-            print("  Opened in Sequencer.")
-        except Exception as exc:
-            unreal.log(f"Warning: could not open in Sequencer: {exc}")
+        if open_after_create:
+            try:
+                unreal.LevelSequenceEditorBlueprintLibrary.open_level_sequence(seq)
+                print("  Opened in Sequencer.")
+            except Exception as exc:
+                unreal.log(f"Warning: could not open in Sequencer: {exc}")
 
     # ── 汇总 ─────────────────────────────────────────────────────────
     player_count = sum(1 for eid in actors if eid != "BALL")

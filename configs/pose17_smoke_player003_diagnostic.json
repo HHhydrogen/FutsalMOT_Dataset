@@ -1,0 +1,31 @@
+{
+  "schema": "futsalmot_pose17_smoke_plan_v1",
+  "attempt": "player003_mrq_a02",
+  "start_frame": 0,
+  "frame_count": 3,
+  "allow_unaccepted_landmarks_for_diagnostic": true,
+  "allow_pie_cpu_preparation": true,
+  "allow_pie_driver_hide": true,
+  "source_scope": "canonical_short_diagnostic_sequences_not_formal_GRF_provenance",
+  "cameras": [
+    {
+      "camera_id": "CineCam_01",
+      "source_sequence": "/Game/FutsalMOT/Sequences/LS_Cam_01",
+      "camera_actor_object_name": "CineCameraActor_UAID_44A3BB9598B7AFEC02_1646179601"
+    },
+    {
+      "camera_id": "CineCam_02",
+      "source_sequence": "/Game/FutsalMOT/Sequences/LS_Cam_02",
+      "camera_actor_object_name": "CineCameraActor_UAID_44A3BB9598B7B0EC02_1882079778"
+    }
+  ],
+  "targets": [
+    {
+      "entity_id": "L0",
+      "sequence_binding_name": "Player_L0",
+      "actor_object_name": "BP_FutsalPlayerBase_C_UAID_44A3BB9598B7230503_1114910274",
+      "component_object_name": "MPFBVisual",
+      "landmark_manifest": "D:/projects/FutsalMOT_UEDataset/Saved/ResearchDiagnostics/mpfb_player003_ue_surface_head_candidates.json"
+    }
+  ]
+}

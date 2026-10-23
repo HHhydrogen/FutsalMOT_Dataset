@@ -1,0 +1,269 @@
+{
+  "status": "candidate_unreviewed_not_animated",
+  "source_blend": "D:\\projects\\FutsalMOT_blender\\characters\\Player_004\\MPFB_Player_004.blend",
+  "fbx_path": "D:\\projects\\FutsalMOT_blender\\characters\\Player_004\\export\\MPFB_Player_004_SOP.fbx",
+  "fbx_sha256": "1a566c6982ce2799c52958d2392f4e55e94b6d2e40f4a1383f7b1c7d6517cfaf",
+  "ue_identity": {
+    "asset_path": "/Game/FutsalMOT/Characters/MPFB/Players/Player_004/Mesh/MPFB_Player_004.MPFB_Player_004",
+    "signature_scheme": "ue_lod_le_u32_f32_v1",
+    "lod": "0",
+    "vertex_count": "18623",
+    "topology_sha256": "fac7d29e419458a42307fe319fe26a2c448c191a7e36a1522025ea43c1670753",
+    "geometry_sha256": "50090961af74ec363fe5d6c4e5cc33a5648e762ffa30907c860aa0d9f46afcdc"
+  },
+  "tolerance_cm": 0.001,
+  "bounds_tolerance_cm": 0.01,
+  "transforms": [
+    {
+      "matrix": [
+        [
+          -100,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          -100,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          100,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          1
+        ]
+      ],
+      "bounds_max_error_cm": 7.62939453125e-06,
+      "source_coverage": 0.7766456783056669,
+      "ue_coverage": 0.7820437093916125,
+      "max_error_cm": 0.000994755839242815
+    },
+    {
+      "matrix": [
+        [
+          100,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          -100,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          100,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          1
+        ]
+      ],
+      "bounds_max_error_cm": 7.62939453125e-06,
+      "source_coverage": 1.0,
+      "ue_coverage": 1.0,
+      "max_error_cm": 1.9604039250060766e-05
+    }
+  ],
+  "source_anchors": {
+    "nose": {
+      "triangle_index": 11399,
+      "triangle_vertices": [
+        4868,
+        5940,
+        10361
+      ],
+      "barycentric": [
+        0.6105020172163463,
+        0.37711395631893047,
+        0.01238402646472314
+      ],
+      "source_object": "Human",
+      "fbx_object": "Human.001",
+      "original_triangle_vertices": [
+        5054,
+        7063,
+        11670
+      ]
+    },
+    "left_ear": {
+      "triangle_index": 21478,
+      "triangle_vertices": [
+        10967,
+        10965,
+        10963
+      ],
+      "barycentric": [
+        0.08994379934002295,
+        0.11489547596334636,
+        0.7951607246966307
+      ],
+      "source_object": "Human",
+      "fbx_object": "Human.001",
+      "original_triangle_vertices": [
+        12276,
+        12274,
+        12272
+      ]
+    },
+    "right_ear": {
+      "triangle_index": 10297,
+      "triangle_vertices": [
+        5493,
+        5489,
+        5491
+      ],
+      "barycentric": [
+        0.08994379934002296,
+        0.7951607246966307,
+        0.11489547596334636
+      ],
+      "source_object": "Human",
+      "fbx_object": "Human.001",
+      "original_triangle_vertices": [
+        5679,
+        5675,
+        5677
+      ]
+    },
+    "left_eye": {
+      "triangle_index": 82,
+      "triangle_vertices": [
+        47,
+        5,
+        23
+      ],
+      "barycentric": [
+        0.0641488735268464,
+        0.3791542006519188,
+        0.5566969258212348
+      ],
+      "source_object": "Human.low-poly",
+      "fbx_object": "Human.low-poly.001",
+      "original_triangle_vertices": [
+        47,
+        5,
+        23
+      ]
+    },
+    "right_eye": {
+      "triangle_index": 169,
+      "triangle_vertices": [
+        95,
+        71,
+        53
+      ],
+      "barycentric": [
+        0.06414806224478936,
+        0.6175721016454198,
+        0.3182798361097909
+      ],
+      "source_object": "Human.low-poly",
+      "fbx_object": "Human.low-poly.001",
+      "original_triangle_vertices": [
+        95,
+        71,
+        53
+      ]
+    }
+  },
+  "anchors": {
+    "0": {
+      "nose": {
+        "triangle_index": 22164,
+        "triangle_vertices": [
+          11917,
+          11881,
+          11876
+        ],
+        "barycentric": [
+          0.01238402646472314,
+          0.6105020172163463,
+          0.37711395631893047
+        ],
+        "status": "unique_triangle_matched"
+      },
+      "left_ear": {
+        "status": "REJECTED",
+        "reason": "\u951a\u70b9\u672a\u627e\u5230\u552f\u4e00\u76ee\u6807\u4e09\u89d2\uff0c\u5019\u9009\u9762\u6570=0",
+        "retriangulation_reason": "\u540c\u539f\u59cb\u9762\u91cd\u4e09\u89d2\u5316\u6620\u5c04\u4e0d\u552f\u4e00/\u8d85\u5bb9\u5dee\uff0c\u5019\u9009\u9762\u6570=0",
+        "diagnostic_projection_NOT_ACCEPTED": {
+          "triangle_index": 15415,
+          "triangle_vertices": [
+            8434,
+            8438,
+            8439
+          ],
+          "barycentric": [
+            0.09152376609238755,
+            0.18236834016740747,
+            0.726107893740205
+          ],
+          "projection_error_target_units": 0.004587243546905362
+        }
+      },
+      "right_ear": {
+        "status": "REJECTED",
+        "reason": "\u951a\u70b9\u672a\u627e\u5230\u552f\u4e00\u76ee\u6807\u4e09\u89d2\uff0c\u5019\u9009\u9762\u6570=0",
+        "retriangulation_reason": "\u540c\u539f\u59cb\u9762\u91cd\u4e09\u89d2\u5316\u6620\u5c04\u4e0d\u552f\u4e00/\u8d85\u5bb9\u5dee\uff0c\u5019\u9009\u9762\u6570=0",
+        "diagnostic_projection_NOT_ACCEPTED": {
+          "triangle_index": 20521,
+          "triangle_vertices": [
+            11083,
+            11086,
+            11087
+          ],
+          "barycentric": [
+            0.1823683401675361,
+            0.09152376609230099,
+            0.7261078937401629
+          ],
+          "projection_error_target_units": 0.0045872435469064875
+        }
+      },
+      "left_eye": {
+        "triangle_index": 25358,
+        "triangle_vertices": [
+          13771,
+          13776,
+          13770
+        ],
+        "barycentric": [
+          0.3791542006519188,
+          0.5566969258212348,
+          0.0641488735268464
+        ],
+        "status": "unique_triangle_matched"
+      },
+      "right_eye": {
+        "triangle_index": 25459,
+        "triangle_vertices": [
+          13820,
+          13829,
+          13825
+        ],
+        "barycentric": [
+          0.06414806224478936,
+          0.6175721016454198,
+          0.3182798361097909
+        ],
+        "status": "unique_triangle_matched"
+      }
+    }
+  },
+  "complete_transform_count": 1
+}

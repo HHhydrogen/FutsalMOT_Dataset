@@ -1,0 +1,3 @@
+# 原字节SHA是诊断身份，不允许Git按平台转换JSON换行。
+manifests/*.json -text whitespace=cr-at-eol
+evidence/*.json -text whitespace=cr-at-eol

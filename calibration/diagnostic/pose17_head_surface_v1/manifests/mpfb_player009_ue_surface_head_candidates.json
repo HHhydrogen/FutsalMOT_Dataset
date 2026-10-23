@@ -1,0 +1,254 @@
+{
+  "status": "candidate_static_semantic_reviewed_only",
+  "source_blend": "D:\\projects\\FutsalMOT_blender\\characters\\Player_009\\MPFB_Player_009.blend",
+  "ue_identity": {
+    "asset_path": "/Game/FutsalMOT/Characters/MPFB/Players/Player_009/Mesh/MPFB_Player_009.MPFB_Player_009",
+    "signature_scheme": "ue_lod_le_u32_f32_v1",
+    "lod": "0",
+    "vertex_count": "16406",
+    "topology_sha256": "122d5b9f1db181a013529e824339bf613fed87728c6f6be06660ff75ad8a7e09",
+    "geometry_sha256": "18c35f91b17711a6490361e7d5210d18ecd4ea56ad4d19f5f77542ac27020024"
+  },
+  "anchors": {
+    "nose": {
+      "method": "source_surface_triangle_geometry_matched",
+      "triangle_vertices": [
+        11917,
+        11881,
+        11876
+      ],
+      "barycentric": [
+        0.01238402646472314,
+        0.6105020172163463,
+        0.37711395631893047
+      ],
+      "ue_component_cm": [
+        0.09983504832265323,
+        17.57532683185564,
+        159.89003567324502
+      ],
+      "source_world_m": [
+        0.0009983504766635785,
+        -0.17575353424469617,
+        1.5989005141818426
+      ],
+      "source_to_ue_recalibration_distance_mm": 0.00030904210557017845,
+      "status": "candidate_static_semantic_reviewed_only"
+    },
+    "left_ear": {
+      "method": "recalibrated_on_ue_retriangulated_polygon",
+      "triangle_vertices": [
+        8434,
+        8438,
+        8439
+      ],
+      "barycentric": [
+        0.09152376609238755,
+        0.18236834016740747,
+        0.726107893740205
+      ],
+      "ue_component_cm": [
+        6.917391443352358,
+        5.02673964041357,
+        161.96390873299327
+      ],
+      "source_world_m": [
+        0.06921886906667352,
+        -0.05027489586449303,
+        1.6196338797020116
+      ],
+      "source_to_ue_recalibration_distance_mm": 0.04587243546903891,
+      "status": "candidate_static_semantic_reviewed_only"
+    },
+    "right_ear": {
+      "method": "recalibrated_on_ue_retriangulated_polygon",
+      "triangle_vertices": [
+        11083,
+        11086,
+        11087
+      ],
+      "barycentric": [
+        0.1823683401675361,
+        0.09152376609230099,
+        0.7261078937401629
+      ],
+      "ue_component_cm": [
+        -6.917391443352353,
+        5.02673964041357,
+        161.96390873299322
+      ],
+      "source_world_m": [
+        -0.06921886906667352,
+        -0.05027489586449303,
+        1.6196338797020113
+      ],
+      "source_to_ue_recalibration_distance_mm": 0.0458724354690545,
+      "status": "candidate_static_semantic_reviewed_only"
+    },
+    "left_eye": {
+      "method": "source_surface_triangle_geometry_matched",
+      "triangle_vertices": [
+        14603,
+        14608,
+        14602
+      ],
+      "barycentric": [
+        0.3791542006519188,
+        0.5566969258212348,
+        0.0641488735268464
+      ],
+      "ue_component_cm": [
+        3.1741075741254177,
+        14.570915950740764,
+        163.66938073404836
+      ],
+      "source_world_m": [
+        0.03174107514520773,
+        -0.1457094297806777,
+        1.636693958398946
+      ],
+      "source_to_ue_recalibration_distance_mm": 0.00030962340808620597,
+      "status": "candidate_static_semantic_reviewed_only"
+    },
+    "right_eye": {
+      "method": "source_surface_triangle_geometry_matched",
+      "triangle_vertices": [
+        14652,
+        14661,
+        14657
+      ],
+      "barycentric": [
+        0.06414806224478936,
+        0.6175721016454198,
+        0.3182798361097909
+      ],
+      "ue_component_cm": [
+        -3.208727639521923,
+        14.566093638503887,
+        163.66938055312664
+      ],
+      "source_world_m": [
+        -0.03208727579917278,
+        -0.14566120662202447,
+        1.636693956589748
+      ],
+      "source_to_ue_recalibration_distance_mm": 0.0003095917448883432,
+      "status": "candidate_static_semantic_reviewed_only"
+    }
+  },
+  "not_animated": true,
+  "not_MRQ_verified": true,
+  "precision_not_measured": true,
+  "static_semantic_review_scope": "Root agent inspected front, left and right source-render images for this character and accepted static nose tip, eye centres and both ear centres. This does not validate UE mapping, animation, occlusion or independently measured precision. Root agent additionally authorized the independent UE ear-surface recalibration under the same method as Player003, with strict matching failure preserved.",
+  "reviewed_images_sha256": {
+    "mpfb_player009_source_front.png": "41791195746702176d9ac4da7388f13d448fca7f01e281d775c0bdfaadaca110",
+    "mpfb_player009_source_left.png": "0fd7437cc0b18b4711d92b6d11e9aa50f19ccf66f9c484539167fa1af57eb2e2",
+    "mpfb_player009_source_right.png": "0ebfb86223f1c22d5e9525f169ee78a43885b91ee4e51e3ad641b57cae54f895"
+  },
+  "views": {
+    "front": {
+      "camera_matrix_world": [
+        [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          -1.6292068494294654e-07,
+          -1.0,
+          -1.0399999618530273
+        ],
+        [
+          0.0,
+          1.0,
+          -1.6292068494294654e-07,
+          1.5582939386367798
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "resolution": [
+        1000,
+        1000
+      ],
+      "projection": "ORTHO",
+      "ortho_scale_m": 0.3499999940395355
+    },
+    "left": {
+      "camera_matrix_world": [
+        [
+          -4.371138828673793e-08,
+          4.371138828673793e-08,
+          1.0,
+          1.0
+        ],
+        [
+          1.0,
+          1.910685676922942e-15,
+          4.371138828673793e-08,
+          -0.03999999910593033
+        ],
+        [
+          0.0,
+          1.0,
+          -4.371138828673793e-08,
+          1.5582939386367798
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "resolution": [
+        1000,
+        1000
+      ],
+      "projection": "ORTHO",
+      "ortho_scale_m": 0.3499999940395355
+    },
+    "right": {
+      "camera_matrix_world": [
+        [
+          -4.371138828673793e-08,
+          -4.371138828673793e-08,
+          -1.0,
+          -1.0
+        ],
+        [
+          -1.0,
+          1.910685676922942e-15,
+          4.371138828673793e-08,
+          -0.03999999910593033
+        ],
+        [
+          0.0,
+          1.0,
+          -4.371138828673793e-08,
+          1.5582939386367798
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "resolution": [
+        1000,
+        1000
+      ],
+      "projection": "ORTHO",
+      "ortho_scale_m": 0.3499999940395355
+    }
+  },
+  "strict_correspondence_receipt": "D:\\projects\\FutsalMOT_UEDataset\\Saved\\ResearchDiagnostics\\mpfb_player009_source_fbx_ue_correspondence.json",
+  "strict_correspondence_sha256": "5d989c87d061383b7534f4888c53ff05b8aac0bbcd5b42c972290dcb1e6b3df9"
+}

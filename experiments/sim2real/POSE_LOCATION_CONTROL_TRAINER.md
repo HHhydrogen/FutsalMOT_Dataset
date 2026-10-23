@@ -61,6 +61,10 @@ R及其余两个训练seed分别运行，禁止自动选择GPU或DDP。默认总
 
 新运行必须为新输出目录。每次完成更新以临时文件加os.replace保存完整FP32`last.pt`，包含model、EMA、SGD动量、RNG、实际完成更新索引、初始权重state SHA及协议/数据/代码绑定。记录checkpoint耗时以便后续判断I/O开销。
 
+Windows第二seed曾在完整`last.pt.tmp`写入后发生`os.replace` WinError5。独立`run_pose_location_control_windows.py`只对指定输出目录的三个自有临时文件重试WinError5/32，间隔为.05/.1/.2/.4/.8秒；不删除目标、不绕过权限、不修改原Trainer数值代码或source SHA，重试仍失败就保留现场退出。调用方式是在原参数前使用该入口替代`train_pose_location_control.py`，其余参数及`--resume`不变。包装器SHA另记入驱动收据。
+
+只有已完整保存的临时检查点、真实优化/EMA计数、全部有限状态、源绑定及最后曝光链逐项一致，主agent才可显式提升临时文件并补齐其原始曝光，然后从已完成索引继续；不能据一个文件名就重放未知更新。本次实际恢复第265步、优化重放0次，原last已备份。冻结v2 loss仍保持原样；17×2导致uniform sigma的差异及独立COCO sigma/pose-only候选见`docs/POSE_LOCATION_V3_CANDIDATE.md`，不把候选修正混进正在运行的v2对照。
+
 Ctrl+C会延后到当前更新保存完成后安全暂停，或可用`--stop-after N`在累计N步暂停；二者不改变总1000预算。继续同命令加`--resume`，禁止重建优化器或从新epoch重置预算。代码、SHA、arm/seed、曝光日志链及EMA计数必须一致。
 
 `update_transaction.json`在优化更新前写started，checkpoint和曝光日志持久化后写committed。若硬崩溃留下尚未提交的更新，无法知道优化是否部分执行，程序拒绝自动重放并伪称严格预算，现场交root处理；若checkpoint已提交而日志仅差最后一行，可从checkpoint最后原始曝光恢复这一行。只有completed_updates=1000时run_receipt.complete才为true。

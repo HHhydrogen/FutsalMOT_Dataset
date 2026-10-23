@@ -1,0 +1,31 @@
+# 四seed位置试产到研究采样候选
+
+`prepare_pose_location_pilot.py`只进行CPU文本证据适配及确定性采样，不调用UE、GPU或Trainer。输入权威清单是外层`Saved/Pose17Development/location_pilot_driver_a01.json`；必须是四组全部capture/export完成、无错误、未启动训练的终态。
+
+它只接受1042/1044/1048/1102四个已知a01 attempt及各自独立导出，精确120源帧、四原机位、十实体、原生4K。前三组train共1440图，1102 synthetic_dev共480图；旧40图、任意source改名、其他窗口或伪造正式边界均拒绝。输入文件保持原样，不搬移或发布到G盘。
+
+一次消费各组dataset/group/provenance的plan/state、native事务及alignment报告、冻结landmark、timeline、逐相机world/pose2d/view文本并记录SHA。核对真实终态、已释放会话、原生身份/事务、每帧十实体、世界点和源帧、相机及投影的精确一致，不以epsilon改写世界点。导出此前已实际解码全部实例mask，本工具只确认RGB/mask引用存在；不打开媒体，不重算媒体SHA，不再次扫描像素。
+
+```powershell
+.venv/Scripts/python.exe -B experiments/sim2real/prepare_pose_location_pilot.py
+```
+
+默认只新建Research/pose/location_pilot_4seed_a01，已有输出拒绝覆盖。产生：
+
+- train_all.location.jsonl：完整1440训练图，顺序seed→camera→相对帧；synthetic_dev.location.jsonl：完整480图。
+- selection_manifest.json：在训练1440图中选1000S，先按seed、再camera平衡配额，余数归属和cell内源帧选择均用独立固定salt SHA排序；不看指标，不改窗口、不取dev。
+- schedules/seed_20261024.jsonl、20261025、20261026：每个1000行，同一seed两臂共用一表。
+- schedule_manifest.json：绑定R/S JSONL、1000S indices/keys、selection及六个arm/seed引用。
+- candidate_receipt.json：一次文本证据摘要、真实来源及范围、R/S框/位置分布和待root限定签准入信息。
+
+采样行是`futsalmot_pose_location_paired_schedule_row_v1`，包含update_index、shared_real_indices三个槽、extra_real_index和synthetic_index。真实索引指1000图COCO训练JSONL；synthetic_index指完整1440图JSONL，而非1000元素列表的位置。每个真实ID在shared槽恰好3次，额外R槽恰好1次；1000个选定S各曝光1次。R按shared三槽加额外真实槽得到4000真实曝光，RS25按同样三槽加一S得到3000真实加1000合成。每表1000更新、batch4，不把曝光差异写成同真实曝光。
+
+source记录继续diagnostic_only=true、not_training=true、MRQ_sync_verified=false；工具不能写正式准入。研究JSONL的visibility与location_valid独立，unknown不变成visible或COCO v1。可见bbox存在而17点都无效的人保留bbox；mask area0的人不捏造检测框，仍完整存在于source world/native，每帧用nonvisible_entities_retained_in_world引用。
+
+S没有既有媒体SHA且本任务禁止媒体重扫，因此image_sha256=null。只有root限定位置准入明确允许`media_policy=export_mask_decode_and_text_evidence_no_media_rehash`后，研究Trainer才可仅对这份S JSONL使用verify_image_sha256=False；真实COCO仍校验已存SHA。不能借此对任意路径或旧diagnostic关闭校验。
+
+schedule_manifest.schema为futsalmot_pose_location_paired_schedule_manifest_v1；real_jsonl、synthetic_jsonl、synthetic_dev_jsonl各为path/sha256/images。selected_synthetic_indices和selected_synthetic_frame_keys一一对应；schedules含seed、arm、path、sha256、updates、batch。同一seed的R/RS25指向同一张表。候选protocol_sha256=null，另记录原candidate_protocol_sha256；root最终准入同时绑定独立frozen_protocol SHA及schedule_manifest SHA，避免协议与采样表互相包含哈希形成循环。
+
+root限定收据目标为Saved/Pose17Development/location_training_admission_a01.json，冻结协议目标为Research/pose/coco2017_location_a01/frozen_protocol_a01.json。工具只写candidate_receipt，不冒充root批准，不提升visibility监督、正式GT发布或MRQ同步等级。正式Trainer仍需自身单独CPU/GPU门槛，训练只在UE批次结束并安全退出后启动。
+
+适配摘要给出两域相同640 LetterBox几何下bbox高/宽/面积、有效点数分位数、全缺点比例、S area0比例、画内有效位置距图像边界分布及点落可见框外比例。它们只用于解释标注/尺度/监督密度差异，不用于训练前后重新筛图或悄悄改变协议。COCO实例框与合成可见像素tight框的语义差异保留，不通过扩框伪造一致。
